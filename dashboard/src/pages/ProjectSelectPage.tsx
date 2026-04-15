@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { FolderPlus, FolderOpen, Loader2 } from "lucide-react";
+import { useProject } from "../context/ProjectContext";
 
 interface Project {
   name: string;
@@ -13,6 +15,8 @@ export function ProjectSelectPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
+  const { selectProject } = useProject();
 
   const fetchProjects = async () => {
     try {
@@ -92,9 +96,13 @@ export function ProjectSelectPage() {
       {!loading && !error && projects.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((proj) => (
-            <div
+            <button
               key={proj.name}
-              className="rounded-lg border bg-card p-4 transition-shadow hover:shadow-sm"
+              onClick={async () => {
+                await selectProject(proj.name);
+                navigate(`/projects/${encodeURIComponent(proj.name)}`);
+              }}
+              className="rounded-lg border bg-card p-4 text-left transition-shadow hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary">
@@ -105,7 +113,7 @@ export function ProjectSelectPage() {
                   <p className="truncate text-xs text-muted-foreground">{proj.path}</p>
                 </div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       )}

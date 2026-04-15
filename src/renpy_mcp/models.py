@@ -37,6 +37,13 @@ class BuildResult(BaseModel):
     error: Optional[str] = None
 
 
+class CurrentProjectPayload(BaseModel):
+    """Payload representing the currently selected project."""
+
+    name: str
+    path: Path
+
+
 class ImageGenerationResult(BaseModel):
     """Metadata about generated image files."""
 

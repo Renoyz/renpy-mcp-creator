@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppShell } from "./AppShell";
 import { ProjectSelectPage } from "./pages/ProjectSelectPage";
+import { ProjectHomePage } from "./pages/ProjectHomePage";
 import { LegacyIframePage } from "./pages/LegacyIframePage";
 
 function App() {
@@ -10,6 +11,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={<ProjectSelectPage />} />
+          <Route path="/projects/:name" element={<ProjectHomePage />} />
           <Route
             path="/story-map"
             element={<LegacyIframePage path="/story-map" title="Story Map" />}

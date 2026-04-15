@@ -70,6 +70,38 @@ class TestFastApiLabels:
         assert "start" in data["labels"]
 
 
+class TestCurrentProject:
+    """Tests for current project selection."""
+
+    def test_current_project_selection(self, client: TestClient):
+        # Ensure a clean config state for this test
+        from renpy_mcp.web.fastapi_app import set_config
+        from renpy_mcp.config import RenPyConfig
+        set_config(RenPyConfig())
+
+        project_name = "fastapi_select_test"
+        # Create project via API so it lands in the default workspace
+        r = client.post("/api/projects", json={"name": project_name})
+        assert r.status_code == 200
+
+        # Before selection, current_project should be None
+        r = client.get("/api/projects/current")
+        assert r.status_code == 200
+        assert r.json()["current_project"] is None
+
+        # Select the project
+        r = client.post("/api/projects/select", json={"name": project_name})
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["success"] is True
+        assert payload["current_project"]["name"] == project_name
+
+        # Verify current project is persisted
+        r = client.get("/api/projects/current")
+        assert r.status_code == 200
+        assert r.json()["current_project"]["name"] == project_name
+
+
 class TestFastApiScript:
     """Tests for script editor API."""
 

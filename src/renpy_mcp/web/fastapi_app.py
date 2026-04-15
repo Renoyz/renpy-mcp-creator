@@ -131,6 +131,38 @@ def create_app() -> FastAPI:
             "template": template_name,
         }
 
+    @app.get("/api/projects/current")
+    async def api_projects_current(config: RenPyConfig = Depends(get_config)):
+        if not config.project_path:
+            return {"current_project": None}
+        return {
+            "current_project": {
+                "name": config.project_path.name,
+                "path": str(config.project_path),
+            }
+        }
+
+    @app.post("/api/projects/select")
+    async def api_projects_select(request: Request, config: RenPyConfig = Depends(get_config)):
+        body = await request.json()
+        name = body.get("name", "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Project name is required")
+
+        settings = get_settings()
+        project_dir = settings.workspace / name
+        if not (project_dir / "game").exists():
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        config.project_path = project_dir
+        return {
+            "success": True,
+            "current_project": {
+                "name": project_dir.name,
+                "path": str(project_dir),
+            },
+        }
+
     @app.get("/api/graph")
     async def api_graph(config: RenPyConfig = Depends(get_config)):
         if not config.project_path:
