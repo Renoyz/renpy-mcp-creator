@@ -40,6 +40,7 @@ def client(temp_project: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     (dashboard_dir / "assets").mkdir()
     (dashboard_dir / "assets" / "test.js").write_text("console.log('test');", encoding="utf-8")
     monkeypatch.setattr(fa, "DASHBOARD_DIR", dashboard_dir)
+    monkeypatch.setattr(fa, "_last_build_results", {})
 
     config = RenPyConfig(sdk_path=Path("."), project_path=temp_project)
     set_config(config)
@@ -194,3 +195,211 @@ class TestFastApiScript:
             if b["type"] in ("dialogue", "narration")
         ]
         assert any("Updated line" in t for t in texts)
+
+
+class TestBuildAndPreview:
+    """Tests for build and preview endpoints."""
+
+    def test_build_project_success(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        project_name = "build_success_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["project_name"] == project_name
+
+    def test_build_project_no_sdk(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.services import build_manager as bm
+
+        monkeypatch.setattr(bm.BuildManager, "_resolve_toolchain", lambda self: None)
+
+        project_name = "build_no_sdk_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "No usable Ren'Py SDK found" in data["error"]
+
+    def test_preview_project_success(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+        from renpy_mcp.services import preview_manager as pm
+        from renpy_mcp.services.preview_manager import PreviewServer
+
+        workspace = get_settings().workspace
+
+        async def _mock_build(self, request):
+            output_path = workspace / f"{request.project_name}-dists" / f"{request.project_name}-web"
+            output_path.mkdir(parents=True, exist_ok=True)
+            (output_path / "index.html").write_text("<html></html>", encoding="utf-8")
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=output_path,
+            )
+
+        async def _mock_start(self, project_name, directory):
+            return PreviewServer(
+                project_name=project_name,
+                directory=directory,
+                port=55555,
+                process=None,  # type: ignore[arg-type]
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        monkeypatch.setattr(pm.PreviewManager, "start", _mock_start)
+
+        project_name = "preview_success_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        # Build first to record the output_path for preview
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+        r = client.post("/api/projects/preview", json={})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "127.0.0.1:55555" in data["url"]
+        assert data["port"] == 55555
+
+    def test_preview_project_no_build(self, client: TestClient):
+        project_name = "preview_no_build_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/preview", json={})
+        assert r.status_code == 404
+        assert "No successful build available" in r.json()["detail"]
+
+    def test_build_uses_current_project_context(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        seen = {}
+
+        async def _mock_build(self, request):
+            seen["project_name"] = request.project_name
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path(f"/fake/{request.project_name}-web"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        client.post("/api/projects", json={"name": "project_a"})
+        client.post("/api/projects", json={"name": "project_b"})
+        client.post("/api/projects/select", json={"name": "project_a"})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert seen["project_name"] == "project_a"
+
+    def test_build_rejects_project_name_mismatch(self, client: TestClient):
+        client.post("/api/projects", json={"name": "project_a"})
+        client.post("/api/projects", json={"name": "project_b"})
+        client.post("/api/projects/select", json={"name": "project_a"})
+
+        r = client.post("/api/projects/build", json={"name": "project_b", "target": "web"})
+        assert r.status_code == 400
+        assert "current project" in r.json()["detail"].lower()
+
+    def test_failed_build_clears_previous_preview_result(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        workspace = get_settings().workspace
+        call_count = {"value": 0}
+
+        async def _mock_build(self, request):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                output_path = workspace / f"{request.project_name}-dists" / f"{request.project_name}-web"
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "index.html").write_text("<html></html>", encoding="utf-8")
+                return BuildResult(
+                    project_name=request.project_name,
+                    target=request.target,
+                    success=True,
+                    output_path=output_path,
+                )
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=False,
+                error="mock build failed",
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        project_name = "stale_preview_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        first = client.post("/api/projects/build", json={"target": "web"})
+        assert first.status_code == 200
+        assert first.json()["success"] is True
+
+        second = client.post("/api/projects/build", json={"target": "web"})
+        assert second.status_code == 200
+        assert second.json()["success"] is False
+
+        preview = client.post("/api/projects/preview", json={})
+        assert preview.status_code == 404
+        assert "No successful build available" in preview.json()["detail"]
+
+    def test_non_previewable_build_result_is_not_reused_for_preview(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output.zip"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        project_name = "non_previewable_build_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        build = client.post("/api/projects/build", json={"target": "web"})
+        assert build.status_code == 200
+        assert build.json()["success"] is True
+
+        preview = client.post("/api/projects/preview", json={})
+        assert preview.status_code == 404
+        assert "No successful build available" in preview.json()["detail"]

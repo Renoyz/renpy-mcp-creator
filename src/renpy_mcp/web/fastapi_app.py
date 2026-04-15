@@ -17,11 +17,17 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..config import RenPyConfig, _current_project_path, get_settings, resolve_project_dir
+from ..models import BuildRequest, BuildResult
+from ..services.build_manager import BuildManager
+from ..services.preview_manager import PreviewManager
 from ..services.project_manager import ProjectManager
 from .server import _parse_script_blocks
 
 STATIC_DIR = Path(__file__).parent / "static"
 DASHBOARD_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
+
+_preview_manager = PreviewManager()
+_last_build_results: dict[str, Path] = {}
 
 # Injected config (set during bootstrap)
 _app_config: RenPyConfig | None = None
@@ -83,6 +89,44 @@ def _send_bridge_command(config: RenPyConfig, cmd: dict, timeout: float = 5.0) -
                     pass
             time.sleep(0.2)
         return {"success": False, "error": "Timeout waiting for game response"}
+
+
+def _resolve_current_project_name(request: Request, body: dict | None = None) -> str:
+    """Resolve the current session project and reject mismatched explicit names."""
+    body = body or {}
+    requested_name = (body.get("name") or "").strip()
+    session_name = (request.session.get("current_project_name") or "").strip()
+
+    if not session_name:
+        raise HTTPException(status_code=400, detail="No current project selected")
+
+    if requested_name and requested_name != session_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Requested project does not match the current project",
+        )
+
+    return session_name
+
+
+def _previewable_output_path(path: Path | None) -> Path | None:
+    """Return a previewable web directory if the build output can be served."""
+    if path is None:
+        return None
+
+    candidate = Path(path)
+    if candidate.is_dir() and (candidate / "index.html").exists():
+        return candidate
+    return None
+
+
+def _store_previewable_build_result(project_name: str, output_path: Path | None) -> None:
+    """Persist only previewable build outputs and clear stale entries otherwise."""
+    preview_path = _previewable_output_path(output_path)
+    if preview_path is not None:
+        _last_build_results[project_name] = preview_path
+    else:
+        _last_build_results.pop(project_name, None)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +259,59 @@ def create_app() -> FastAPI:
                 "path": str(project_dir),
             },
         }
+
+    @app.post("/api/projects/build")
+    async def api_build_project(request: Request):
+        body = await request.json()
+        name = _resolve_current_project_name(request, body)
+        target = body.get("target", "web")
+        project_dir = resolve_project_dir(name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        # Test-only mock path: create a fake build result directly
+        if os.environ.get("RENPY_MCP_MOCK_BUILD"):
+            build_dir = project_dir.parent / f"{name}-dists" / f"{name}-web"
+            build_dir.mkdir(parents=True, exist_ok=True)
+            (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
+            _store_previewable_build_result(name, build_dir)
+            return BuildResult(
+                project_name=name,
+                target=target,
+                success=True,
+                output_path=build_dir,
+            ).model_dump(mode="json")
+
+        manager = BuildManager(get_settings())
+        result = await manager.build(BuildRequest(project_name=name, target=target))
+        if result.success:
+            _store_previewable_build_result(name, result.output_path)
+        else:
+            _last_build_results.pop(name, None)
+        return result.model_dump(mode="json")
+
+    @app.post("/api/projects/preview")
+    async def api_preview_project(request: Request):
+        body = await request.json()
+        name = _resolve_current_project_name(request, body)
+        project_dir = resolve_project_dir(name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        build_dir = _last_build_results.get(name)
+        if build_dir is None:
+            raise HTTPException(status_code=404, detail="No successful build available. Run build first.")
+        build_dir = Path(build_dir)
+        if not build_dir.exists() or not (build_dir / "index.html").exists():
+            raise HTTPException(status_code=404, detail="No web build found. Run build first.")
+        server = await _preview_manager.start(name, build_dir)
+        return {"success": True, "url": server.url, "port": server.port}
+
+    @app.post("/api/projects/preview/stop")
+    async def api_stop_preview(request: Request):
+        body = await request.json()
+        name = _resolve_current_project_name(request, body)
+        stopped = await _preview_manager.stop(name)
+        return {"success": stopped, "project": name}
 
     @app.get("/api/graph")
     async def api_graph(config: RenPyConfig = Depends(get_config)):

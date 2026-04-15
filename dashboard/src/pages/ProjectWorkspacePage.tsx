@@ -3,11 +3,19 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { CurrentProject, useProject } from "../context/ProjectContext";
 import { Loader2, Play, Hammer, Map, FileCode, Images } from "lucide-react";
 
+type Status = "idle" | "running" | "success" | "failed";
+
 export function ProjectWorkspacePage() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const { currentProject, loading, selectProject } = useProject();
   const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
+  const [buildStatus, setBuildStatus] = useState<Status>("idle");
+  const [buildMessage, setBuildMessage] = useState<string>("");
+  const [previewStatus, setPreviewStatus] = useState<Status>("idle");
+  const [previewMessage, setPreviewMessage] = useState<string>("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   useEffect(() => {
     if (!name) return;
@@ -33,6 +41,60 @@ export function ProjectWorkspacePage() {
       ? resolvedProject
       : null;
 
+  const handleBuild = async () => {
+    if (!activeProject) return;
+    setBuildStatus("running");
+    setBuildMessage("");
+    setPreviewUrl(null);
+    try {
+      const resp = await fetch("/api/projects/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "web" }),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        setBuildStatus("success");
+        setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
+      } else {
+        setBuildStatus("failed");
+        setBuildMessage(data.error || "Build failed");
+      }
+    } catch (e) {
+      setBuildStatus("failed");
+      setBuildMessage(e instanceof Error ? e.message : "Build request failed");
+    }
+  };
+
+  const handlePreview = async () => {
+    if (!activeProject) return;
+    setPreviewLoading(true);
+    setPreviewStatus("running");
+    setPreviewMessage("");
+    try {
+      const resp = await fetch("/api/projects/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        setPreviewUrl(data.url);
+        setPreviewStatus("success");
+      } else {
+        setPreviewUrl(null);
+        setPreviewStatus("failed");
+        setPreviewMessage(data.detail || "Preview failed");
+      }
+    } catch (e) {
+      setPreviewUrl(null);
+      setPreviewStatus("failed");
+      setPreviewMessage(e instanceof Error ? e.message : "Preview request failed");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   if (!name) {
     return null;
   }
@@ -54,22 +116,82 @@ export function ProjectWorkspacePage() {
 
       <div className="flex flex-wrap gap-3">
         <button
-          disabled
-          title="Build 功能即将上线"
-          className="inline-flex items-center gap-2 rounded-md bg-primary/60 px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed"
+          onClick={handleBuild}
+          disabled={buildStatus === "running"}
+          className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed ${
+            buildStatus === "failed"
+              ? "bg-destructive"
+              : buildStatus === "success"
+              ? "bg-green-600"
+              : "bg-primary"
+          }`}
         >
-          <Hammer className="h-4 w-4" />
-          Build（未实现）
+          {buildStatus === "running" ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Hammer className="h-4 w-4" />
+          )}
+          {buildStatus === "running"
+            ? "Building..."
+            : buildStatus === "success"
+            ? "Build Success"
+            : buildStatus === "failed"
+            ? "Build Failed"
+            : "Build"}
         </button>
         <button
-          disabled
-          title="Preview 功能即将上线"
-          className="inline-flex items-center gap-2 rounded-md border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground disabled:cursor-not-allowed"
+          onClick={handlePreview}
+          disabled={previewLoading}
+          className="inline-flex items-center gap-2 rounded-md border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent disabled:cursor-not-allowed"
         >
-          <Play className="h-4 w-4" />
-          Preview（未实现）
+          {previewLoading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Play className="h-4 w-4" />
+          )}
+          {previewLoading ? "Starting..." : "Preview"}
         </button>
       </div>
+
+      {buildMessage && (
+        <div
+          className={`rounded-md p-3 text-sm ${
+            buildStatus === "failed"
+              ? "bg-destructive/10 text-destructive"
+              : buildStatus === "success"
+              ? "bg-green-50 text-green-700"
+              : "bg-muted text-muted-foreground"
+          }`}
+        >
+          {buildMessage}
+        </div>
+      )}
+
+      {previewMessage && (
+        <div
+          className={`rounded-md p-3 text-sm ${
+            previewStatus === "failed"
+              ? "bg-destructive/10 text-destructive"
+              : "bg-muted text-muted-foreground"
+          }`}
+        >
+          {previewMessage}
+        </div>
+      )}
+
+      {previewUrl && (
+        <div className="rounded-md border bg-card p-3 text-sm">
+          <span className="text-muted-foreground">Preview URL: </span>
+          <a
+            href={previewUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-primary underline"
+          >
+            {previewUrl}
+          </a>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Link
