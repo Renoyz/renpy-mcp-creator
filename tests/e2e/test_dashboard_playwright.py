@@ -20,6 +20,31 @@ def wait_for_server(url: str, timeout: float = 30.0) -> bool:
     return False
 
 
+def test_project_workspace(page: Page, server_url: str) -> None:
+    """End-to-end test: create a project and open its workspace."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_workspace_{int(time.time())}"
+
+    page.goto(f"{server_url}/dashboard")
+    expect(page.locator("text=项目列表")).to_be_visible(timeout=10000)
+
+    page.locator("button:has-text('新建项目')").click()
+    page.locator("div:has-text('项目名称') >> input").fill(project_name)
+    page.locator("button:has-text('创建')").click()
+    expect(page.locator(f"h4:has-text('{project_name}')")).to_be_visible(timeout=10000)
+
+    page.locator(f"h4:has-text('{project_name}')").click()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=10000)
+    expect(page.locator("button:has-text('Build（未实现）')")).to_be_visible()
+    expect(page.locator("button:has-text('Preview（未实现）')")).to_be_visible()
+
+    # Verify shortcut card navigation works
+    page.locator("h4:has-text('Story Map')").first.click()
+    expect(page.locator("span:has-text('Story Map')")).to_be_visible(timeout=10000)
+    assert "/story-map" in page.url
+
+
 def test_dashboard_chat_generate_build(page: Page, server_url: str) -> None:
     """End-to-end test through Dashboard UI."""
     assert wait_for_server(server_url), "Server not ready"

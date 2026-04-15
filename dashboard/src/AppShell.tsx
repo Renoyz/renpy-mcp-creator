@@ -3,6 +3,7 @@ import { Menu, X, Layers, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ChatDrawer } from "./components/ChatDrawer";
+import { useProject } from "./context/ProjectContext";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -19,6 +20,7 @@ const navItems = [
 export function AppShell({ children, className }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const { currentProject } = useProject();
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
@@ -77,7 +79,13 @@ export function AppShell({ children, className }: AppShellProps) {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <div className="flex-1" />
+          <div className="flex-1">
+            {currentProject && (
+              <span className="text-sm font-medium text-foreground">
+                {currentProject.name}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setChatOpen(true)}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useProject } from "../context/ProjectContext";
 
 interface LegacyIframePageProps {
   path: string;
@@ -9,6 +10,7 @@ interface LegacyIframePageProps {
 export function LegacyIframePage({ path, title }: LegacyIframePageProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [loading, setLoading] = useState(true);
+  const { currentProject } = useProject();
 
   useEffect(() => {
     setLoading(true);
@@ -16,8 +18,13 @@ export function LegacyIframePage({ path, title }: LegacyIframePageProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 items-center border-b bg-card px-4">
+      <div className="flex h-10 items-center justify-between border-b bg-card px-4">
         <span className="text-sm font-medium text-muted-foreground">{title}</span>
+        {currentProject && (
+          <span className="text-xs text-muted-foreground">
+            {currentProject.name}
+          </span>
+        )}
       </div>
       <div className="relative flex-1">
         {loading && (
