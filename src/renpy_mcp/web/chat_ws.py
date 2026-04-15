@@ -12,6 +12,33 @@ from ..server import mcp
 
 router = APIRouter()
 
+# General chat queries that do not require an active project.
+# Intentionally conservative: only greetings and help/introduction intents.
+_NO_PROJECT_WHITELIST = frozenset(
+    [
+        "hello",
+        "hi",
+        "hey",
+        "help",
+        "what can you do",
+        "who are you",
+        "你好",
+        "您好",
+        "在吗",
+        "帮助",
+        "你能做什么",
+        "你是谁",
+    ]
+)
+
+
+def _allowed_without_project(content: str) -> bool:
+    stripped = content.strip().lower()
+    for phrase in _NO_PROJECT_WHITELIST:
+        if stripped.startswith(phrase):
+            return True
+    return False
+
 
 def _get_provider():
     """Resolve LLM provider from settings/environment."""
@@ -46,13 +73,14 @@ def _get_provider():
     return None
 
 
-def _bind_project_context(websocket: WebSocket, token_holder: list):
-    """Re-read session and update the request-scoped project path contextvar."""
+def _bind_project_context(websocket: WebSocket, token_holder: list, project_name: str | None = None):
+    """Re-read session/payload and update the request-scoped project path contextvar."""
     if token_holder[0] is not None:
         _current_project_path.reset(token_holder[0])
         token_holder[0] = None
-    session = websocket.scope.get("session", {})
-    project_name = session.get("current_project_name")
+    if project_name is None:
+        session = websocket.scope.get("session", {})
+        project_name = session.get("current_project_name")
     if project_name:
         project_dir = resolve_project_dir(project_name)
         if project_dir:
@@ -88,6 +116,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "confirmation_id": confirmation.get("confirmation_id"),
                         "message": confirmation.get("message"),
                         "candidates": confirmation.get("candidates", []),
+                        "project_name": confirmation.get("project_name"),
                     }
                 )
                 return
@@ -138,17 +167,24 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                     continue
 
+                msg_type = payload.get("type")
+                project_name = payload.get("project_name")
+
                 # Refresh project context before handling every message so that
                 # subsequent turns pick up a newly-selected project.  (If the
                 # underlying session store was updated out-of-band, the frontend
                 # is expected to reconnect the WebSocket so the handshake picks
                 # up the new cookie.  Re-binding here is defensive for any
                 # future session backend that supports mid-connection refresh.)
-                _bind_project_context(websocket, token_holder)
+                _bind_project_context(websocket, token_holder, project_name)
 
-                msg_type = payload.get("type")
                 if msg_type == "user_message":
                     content = payload.get("content", "")
+                    if _current_project_path.get() is None and not _allowed_without_project(content):
+                        await websocket.send_json(
+                            {"type": "error", "message": "No active project selected."}
+                        )
+                        continue
                     messages.append({"role": "user", "content": content})
 
                     result = await engine.run_turn(messages)
@@ -165,6 +201,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             {"type": "error", "message": "No matching pending confirmation."}
                         )
                         continue
+
+                    # Bind to the project that was active when the confirmation was created,
+                    # regardless of what the frontend currently thinks the active project is.
+                    if pending.project_name:
+                        _bind_project_context(websocket, token_holder, pending.project_name)
 
                     if approved:
                         # Append a synthetic tool_result so the LLM can continue

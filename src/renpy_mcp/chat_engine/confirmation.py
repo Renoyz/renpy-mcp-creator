@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..config import _current_project_path
+
 
 @dataclass
 class PendingConfirmation:
@@ -15,6 +17,7 @@ class PendingConfirmation:
     arguments: dict[str, Any]
     message: str
     candidates: list[dict[str, Any]] = field(default_factory=list)
+    project_name: str | None = None
 
 
 class ConfirmationState:
@@ -52,12 +55,14 @@ class ConfirmationState:
         message = self._build_message(tool_name, arguments, tool_result)
         candidates = self._extract_candidates(tool_name, tool_result)
 
+        ctx_path = _current_project_path.get()
         self._pending = PendingConfirmation(
             confirmation_id=confirmation_id,
             tool_name=tool_name,
             arguments=arguments,
             message=message,
             candidates=candidates,
+            project_name=ctx_path.name if ctx_path else None,
         )
         return self._pending
 

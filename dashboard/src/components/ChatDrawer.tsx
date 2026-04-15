@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2 } from "lucide-react";
+import { useProject } from "../context/ProjectContext";
 
 export type MessageType =
   | "user"
@@ -20,6 +21,7 @@ export interface PendingConfirmation {
   confirmationId: string;
   message: string;
   candidates: { type: string; path: string }[];
+  projectName?: string;
 }
 
 interface ChatDrawerProps {
@@ -37,6 +39,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const [reconnectKey, setReconnectKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const { currentProject } = useProject();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -86,6 +89,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
             confirmationId: data.confirmation_id,
             message: data.message,
             candidates: data.candidates || [],
+            projectName: data.project_name,
           });
           return;
         }
@@ -146,7 +150,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, msg]);
-    wsRef.current.send(JSON.stringify({ type: "user_message", content: text }));
+    wsRef.current.send(JSON.stringify({ type: "user_message", content: text, project_name: currentProject?.name ?? null }));
     setInput("");
   };
 
@@ -157,6 +161,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
         type: "confirmation_response",
         confirmation_id: pendingConfirmation.confirmationId,
         approved,
+        project_name: pendingConfirmation.projectName ?? currentProject?.name ?? null,
       })
     );
     setPendingConfirmation(null);

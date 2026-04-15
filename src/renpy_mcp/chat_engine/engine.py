@@ -112,6 +112,7 @@ class ChatEngine:
                             "confirmation_id": confirmation_id,
                             "message": self.confirmation.pending.message if self.confirmation.pending else "",
                             "candidates": self.confirmation.pending.candidates if self.confirmation.pending else [],
+                            "project_name": self.confirmation.pending.project_name if self.confirmation.pending else None,
                         },
                         "error": None,
                     }

@@ -41,6 +41,65 @@ def _make_fake_engine():
     return FakeEngine
 
 
+def test_ws_chat_uses_payload_project_name(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """WebSocket should use project_name from payload even without session."""
+    project_name = "payload_proj"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "hi", "project_name": project_name})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert project_name in data["delta"]
+
+
+def test_ws_chat_no_project_guardrail(monkeypatch, client: TestClient) -> None:
+    """When no project is set and message is not in whitelist, return error."""
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
+
+    blocked_queries = [
+        "build the web version",
+        "create a background",
+        "show assets",
+        "status of current build",
+    ]
+    with client.websocket_connect("/ws/chat") as websocket:
+        for query in blocked_queries:
+            websocket.send_json({"type": "user_message", "content": query})
+            data = websocket.receive_json()
+            assert data["type"] == "error", f"Expected error for: {query}"
+            assert "No active project" in data["message"], f"Wrong message for: {query}"
+
+
+def test_ws_chat_allowed_without_project(monkeypatch, client: TestClient) -> None:
+    """General chat queries in the whitelist are allowed without a project."""
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
+
+    allowed_queries = ["hello", "help"]
+    with client.websocket_connect("/ws/chat") as websocket:
+        for query in allowed_queries:
+            websocket.send_json({"type": "user_message", "content": query})
+            data = websocket.receive_json()
+            assert data["type"] == "assistant_delta", f"Expected delta for: {query}"
+            assert data["delta"] == "NO_PROJECT", f"Wrong delta for: {query}"
+
+
 def test_ws_chat_uses_session_project(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """WebSocket should pick up the current project from session at connect time."""
     project_name = "session_proj"
@@ -59,7 +118,7 @@ def test_ws_chat_uses_session_project(monkeypatch, client: TestClient, tmp_path:
     assert r.status_code == 200
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "hi"})
+        websocket.send_json({"type": "user_message", "content": "hi", "project_name": project_name})
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert project_name in data["delta"]
@@ -85,7 +144,7 @@ def test_ws_chat_switches_project_after_reconnect(
     assert r.status_code == 200
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "hi"})
+        websocket.send_json({"type": "user_message", "content": "hi", "project_name": "proj_a"})
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert "proj_a" in data["delta"]
@@ -95,15 +154,20 @@ def test_ws_chat_switches_project_after_reconnect(
     assert r.status_code == 200
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "hi"})
+        websocket.send_json({"type": "user_message", "content": "hi", "project_name": "proj_b"})
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert "proj_b" in data["delta"]
 
 
-def test_ws_chat_mock_provider(monkeypatch, client: TestClient) -> None:
+def test_ws_chat_mock_provider(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """Test WebSocket chat with a mock provider to avoid real LLM calls."""
     from renpy_mcp.chat_engine.providers import AnthropicProvider
+
+    # Create a dummy project so payload project_name resolves
+    game_dir = tmp_path / "mock_proj" / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
 
     class FakeMessages:
         def create(self, **kwargs):
@@ -123,7 +187,7 @@ def test_ws_chat_mock_provider(monkeypatch, client: TestClient) -> None:
     )
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "hi"})
+        websocket.send_json({"type": "user_message", "content": "hi", "project_name": "mock_proj"})
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert "Hello from mock" in data["delta"]
@@ -143,9 +207,13 @@ def test_ws_chat_no_provider(client: TestClient) -> None:
         chat_ws._get_provider = original
 
 
-def test_ws_chat_tool_call(monkeypatch, client: TestClient) -> None:
+def test_ws_chat_tool_call(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """Test a full tool-call turn via WebSocket."""
     from renpy_mcp.chat_engine.providers import AnthropicProvider
+
+    game_dir = tmp_path / "tool_proj" / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
 
     class FakeMessages:
         call_count = 0
@@ -185,7 +253,7 @@ def test_ws_chat_tool_call(monkeypatch, client: TestClient) -> None:
     )
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "list projects"})
+        websocket.send_json({"type": "user_message", "content": "list projects", "project_name": "tool_proj"})
 
         # First response: tool_start
         data = websocket.receive_json()
