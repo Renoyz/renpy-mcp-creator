@@ -53,10 +53,10 @@ def click_send_button(page: Page) -> None:
 
 
 def confirm_pending_action(page: Page, timeout: int = 10000, approve: bool = True) -> None:
-    button_name = "确认" if approve else "取消"
-    action_button = page.get_by_role("button", name=button_name).last
-    expect(action_button).to_be_visible(timeout=timeout)
-    action_button.click()
+    confirmation_panel = page.locator("div.border-t.bg-muted\\/50")
+    expect(confirmation_panel).to_be_visible(timeout=timeout)
+    button_index = 1 if approve else 0
+    confirmation_panel.locator("button").nth(button_index).click()
 
 
 def install_mock_chat_socket(page: Page, mock_chat_server_url: str) -> None:
@@ -97,6 +97,17 @@ def test_project_workspace(page: Page, server_url: str) -> None:
     page.locator("h4:has-text('Story Map')").first.click()
     expect(page.locator("span:has-text('Story Map')")).to_be_visible(timeout=10000)
     assert "/story-map" in page.url
+
+
+def test_direct_workspace_url(page: Page, server_url: str) -> None:
+    """Direct navigation to a project workspace URL without prior UI entry."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_direct_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
 
 def test_dashboard_chat_generate_build(page: Page, server_url: str) -> None:

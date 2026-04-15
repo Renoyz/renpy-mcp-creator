@@ -1,23 +1,43 @@
-import { useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { useProject } from "../context/ProjectContext";
+import { useEffect, useState } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { CurrentProject, useProject } from "../context/ProjectContext";
 import { Loader2, Play, Hammer, Map, FileCode, Images } from "lucide-react";
 
 export function ProjectWorkspacePage() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const { currentProject, loading, selectProject } = useProject();
+  const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
 
   useEffect(() => {
     if (!name) return;
+    if (currentProject?.name === name) {
+      setResolvedProject(currentProject);
+      return;
+    }
     if (currentProject?.name !== name) {
-      selectProject(name).catch(() => {
-        navigate("/projects");
-      });
+      selectProject(name)
+        .then((project) => {
+          setResolvedProject(project);
+        })
+        .catch(() => {
+          navigate("/projects");
+        });
     }
   }, [name, currentProject, selectProject, navigate]);
 
-  if (loading || currentProject?.name !== name) {
+  const activeProject =
+    currentProject?.name === name
+      ? currentProject
+      : resolvedProject?.name === name
+      ? resolvedProject
+      : null;
+
+  if (!name) {
+    return null;
+  }
+
+  if (loading || !activeProject) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -25,15 +45,11 @@ export function ProjectWorkspacePage() {
     );
   }
 
-  if (!currentProject) {
-    return null;
-  }
-
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4">
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">{currentProject.name}</h1>
-        <p className="text-sm text-muted-foreground">{currentProject.path}</p>
+        <h1 className="text-2xl font-bold tracking-tight">{activeProject.name}</h1>
+        <p className="text-sm text-muted-foreground">{activeProject.path}</p>
       </header>
 
       <div className="flex flex-wrap gap-3">

@@ -25,11 +25,21 @@ def temp_project(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(temp_project: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(temp_project: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     """Provide a TestClient with project config injected."""
     from renpy_mcp.config import get_settings
     settings = get_settings()
     monkeypatch.setattr(settings, "workspace", temp_project.parent)
+
+    # Set up temp dashboard dir for hermetic static file tests
+    import renpy_mcp.web.fastapi_app as fa
+
+    dashboard_dir = tmp_path / "dashboard_dist"
+    dashboard_dir.mkdir()
+    (dashboard_dir / "index.html").write_text("<html><body>dashboard</body></html>", encoding="utf-8")
+    (dashboard_dir / "assets").mkdir()
+    (dashboard_dir / "assets" / "test.js").write_text("console.log('test');", encoding="utf-8")
+    monkeypatch.setattr(fa, "DASHBOARD_DIR", dashboard_dir)
 
     config = RenPyConfig(sdk_path=Path("."), project_path=temp_project)
     set_config(config)
@@ -49,6 +59,42 @@ class TestFastApiPages:
         r = client.get("/dashboard")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
+
+    def test_dashboard_deep_route_returns_html(self, client: TestClient):
+        r = client.get("/dashboard/projects/test-project")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert "dashboard" in r.text
+
+    def test_dashboard_story_map_returns_html(self, client: TestClient):
+        r = client.get("/dashboard/story-map")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert "dashboard" in r.text
+
+    def test_dashboard_static_asset_not_fallback(self, client: TestClient):
+        r = client.get("/dashboard/assets/test.js")
+        assert r.status_code == 200
+        assert "javascript" in r.headers["content-type"] or "js" in r.headers.get("content-type", "")
+        assert r.text.strip() == "console.log('test');"
+
+    def test_api_not_affected_by_dashboard_fallback(self, client: TestClient):
+        r = client.get("/api/nonexistent")
+        # Should return JSON 404 rather than HTML fallback
+        assert r.status_code == 404
+        assert "application/json" in r.headers["content-type"]
+
+    def test_dashboard_missing_asset_returns_404(self, client: TestClient):
+        r = client.get("/dashboard/assets/missing.js")
+        assert r.status_code == 404
+
+    def test_dashboard_missing_favicon_returns_404(self, client: TestClient):
+        r = client.get("/dashboard/favicon.ico")
+        assert r.status_code == 404
+
+    def test_dashboard_traversal_path_returns_404(self, client: TestClient):
+        r = client.get("/dashboard/..%5csecret.txt")
+        assert r.status_code == 404
 
 
 class TestFastApiGraph:

@@ -112,6 +112,30 @@ def create_app() -> FastAPI:
     async def dashboard():
         return FileResponse(DASHBOARD_DIR / "index.html")
 
+    @app.get("/dashboard/{path:path}")
+    async def dashboard_fallback(path: str):
+        """SPA fallback for React Router deep links."""
+        dashboard_root = DASHBOARD_DIR.resolve()
+        candidate = (dashboard_root / path).resolve()
+        try:
+            candidate.relative_to(dashboard_root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+
+        # If the path looks like a static asset request but the file is missing, 404
+        STATIC_EXTS = {
+            ".js", ".css", ".svg", ".png", ".jpg", ".jpeg",
+            ".webp", ".gif", ".ico", ".map", ".woff", ".woff2",
+            ".ttf", ".eot", ".json", ".xml", ".pdf", ".zip",
+        }
+        if candidate.suffix.lower() in STATIC_EXTS:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        return FileResponse(dashboard_root / "index.html")
+
     @app.get("/story-map")
     async def story_map():
         return FileResponse(STATIC_DIR / "story_map.html")
