@@ -54,6 +54,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
     const data = await resp.json();
     setCurrentProject(data.current_project ?? null);
+    window.dispatchEvent(new CustomEvent("project-changed"));
   }, []);
 
   useEffect(() => {

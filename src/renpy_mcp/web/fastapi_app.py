@@ -1,6 +1,7 @@
 """FastAPI application for unified-design Dashboard and API."""
 
 import json
+import os
 import re
 import struct
 import threading
@@ -91,9 +92,15 @@ def _send_bridge_command(config: RenPyConfig, cmd: dict, timeout: float = 5.0) -
 
 def create_app() -> FastAPI:
     app = FastAPI(title="RenPy MCP Unified Server")
-    app.add_middleware(
-        SessionMiddleware, secret_key="renpy-mcp-dev-secret-change-in-production"
-    )
+    settings = get_settings()
+    secret_key = settings.session_secret or os.environ.get("SESSION_SECRET")
+    if not secret_key:
+        import secrets
+
+        # Generate an ephemeral secret for this process lifetime.
+        # WARNING: Sessions will not persist across server restarts.
+        secret_key = secrets.token_urlsafe(32)
+    app.add_middleware(SessionMiddleware, secret_key=secret_key)
 
     # ---- Page routes ----
 

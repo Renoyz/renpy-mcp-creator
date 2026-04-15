@@ -34,12 +34,26 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [reconnectKey, setReconnectKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const handleProjectChange = () => {
+      if (open && wsRef.current) {
+        wsRef.current.close();
+        setReconnectKey((k) => k + 1);
+      }
+    };
+    window.addEventListener("project-changed", handleProjectChange);
+    return () => {
+      window.removeEventListener("project-changed", handleProjectChange);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -119,7 +133,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
     return () => {
       ws.close();
     };
-  }, [open, wsUrl]);
+  }, [open, wsUrl, reconnectKey]);
 
   const handleSend = () => {
     const text = input.trim();

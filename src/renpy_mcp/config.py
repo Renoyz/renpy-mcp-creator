@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     gemini_image_model: str = Field(default="gemini-2.5-flash-image")
     gemini_text_model: str = Field(default="gemini-2.0-flash-exp")
     default_template: str = Field(default="basic")
+    session_secret: str | None = Field(
+        default=None,
+        description="Secret key for HTTP session signing. Falls back to SESSION_SECRET env var, then a random token generated at startup.",
+    )
 
     model_config = {"env_prefix": "RENPY_MCP_", "case_sensitive": False}
 

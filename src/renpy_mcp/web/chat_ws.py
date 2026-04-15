@@ -46,17 +46,25 @@ def _get_provider():
     return None
 
 
+def _bind_project_context(websocket: WebSocket, token_holder: list):
+    """Re-read session and update the request-scoped project path contextvar."""
+    if token_holder[0] is not None:
+        _current_project_path.reset(token_holder[0])
+        token_holder[0] = None
+    session = websocket.scope.get("session", {})
+    project_name = session.get("current_project_name")
+    if project_name:
+        project_dir = resolve_project_dir(project_name)
+        if project_dir:
+            token_holder[0] = _current_project_path.set(project_dir)
+
+
 @router.websocket("/ws/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
-    session = websocket.scope.get("session", {})
-    project_name = session.get("current_project_name")
-    ctx_token = None
-    if project_name:
-        project_dir = resolve_project_dir(project_name)
-        if project_dir:
-            ctx_token = _current_project_path.set(project_dir)
+    token_holder: list = [None]
+    _bind_project_context(websocket, token_holder)
 
     try:
         provider = _get_provider()
@@ -130,6 +138,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     await websocket.send_json({"type": "error", "message": "Invalid JSON"})
                     continue
 
+                # Refresh project context before handling every message so that
+                # subsequent turns pick up a newly-selected project.  (If the
+                # underlying session store was updated out-of-band, the frontend
+                # is expected to reconnect the WebSocket so the handshake picks
+                # up the new cookie.  Re-binding here is defensive for any
+                # future session backend that supports mid-connection refresh.)
+                _bind_project_context(websocket, token_holder)
+
                 msg_type = payload.get("type")
                 if msg_type == "user_message":
                     content = payload.get("content", "")
@@ -196,5 +212,5 @@ async def chat_websocket(websocket: WebSocket) -> None:
             except Exception:
                 pass
     finally:
-        if ctx_token is not None:
-            _current_project_path.reset(ctx_token)
+        if token_holder[0] is not None:
+            _current_project_path.reset(token_holder[0])
