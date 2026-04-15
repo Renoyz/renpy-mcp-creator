@@ -31,11 +31,15 @@ def test_ws_chat_confirmation_approve(monkeypatch, client: TestClient, tmp_path:
     game_dir.mkdir(parents=True)
     (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
 
+    captured = {"second_messages": None}
+
     class FakeMessages:
         call_count = 0
 
         def create(self, **kwargs):
             FakeMessages.call_count += 1
+            if FakeMessages.call_count == 2:
+                captured["second_messages"] = kwargs.get("messages")
             msg = type(
                 "M",
                 (),
@@ -129,7 +133,7 @@ def test_ws_chat_confirmation_approve(monkeypatch, client: TestClient, tmp_path:
             assert data["type"] == "tool_start"
             assert data["tool_name"] == "generate_background"
 
-            # Step 3: tool_result (synthetic confirmation result)
+            # Step 3: tool_result (replayed original tool result)
             data = websocket.receive_json()
             assert data["type"] == "tool_result"
             assert data["result"]["success"] is True
@@ -138,6 +142,13 @@ def test_ws_chat_confirmation_approve(monkeypatch, client: TestClient, tmp_path:
             data = websocket.receive_json()
             assert data["type"] == "assistant_delta"
             assert data["delta"] == "Background saved."
+
+    tool_result_blocks = next(
+        msg["content"]
+        for msg in captured["second_messages"]
+        if msg.get("role") == "user" and isinstance(msg.get("content"), list)
+    )
+    assert tool_result_blocks[0]["tool_use_id"] == "call_bg_1"
 
 
 def test_ws_chat_confirmation_keeps_original_project(monkeypatch, client: TestClient, tmp_path: Path) -> None:

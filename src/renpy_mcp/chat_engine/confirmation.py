@@ -18,6 +18,8 @@ class PendingConfirmation:
     message: str
     candidates: list[dict[str, Any]] = field(default_factory=list)
     project_name: str | None = None
+    tool_use_id: str | None = None
+    tool_result: dict[str, Any] | None = None
 
 
 class ConfirmationState:
@@ -49,6 +51,7 @@ class ConfirmationState:
         confirmation_id: str,
         tool_name: str,
         arguments: dict[str, Any],
+        tool_use_id: str | None = None,
         tool_result: dict[str, Any] | None = None,
     ) -> PendingConfirmation:
         """Create a pending confirmation for a tool call."""
@@ -63,6 +66,8 @@ class ConfirmationState:
             message=message,
             candidates=candidates,
             project_name=ctx_path.name if ctx_path else None,
+            tool_use_id=tool_use_id,
+            tool_result=tool_result,
         )
         return self._pending
 

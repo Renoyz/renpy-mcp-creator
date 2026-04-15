@@ -87,6 +87,77 @@ def _bind_project_context(websocket: WebSocket, token_holder: list, project_name
             token_holder[0] = _current_project_path.set(project_dir)
 
 
+def _system_prompt_for_current_project(engine: ChatEngine) -> str:
+    """Augment the base prompt with the currently selected project context."""
+    base_prompt = getattr(
+        engine,
+        "system_prompt",
+        (
+            "You are an AI assistant for Ren'Py visual novel development. "
+            "When the user asks about the current workspace, rely on the selected project context."
+        ),
+    )
+    project_path = _current_project_path.get()
+    if project_path is None:
+        return base_prompt
+
+    return (
+        f"{base_prompt}\n\n"
+        "The user is already working inside a selected Ren'Py project.\n"
+        f"- Current project name: {project_path.name}\n"
+        f"- Current project path: {project_path}\n"
+        "You already know the current project from the workspace context. "
+        "Use it as the default target for project-scoped requests. "
+        "Do not ask the user to repeat the current project name or path unless they explicitly want to operate on a different project."
+    )
+
+
+def _tool_result_summary(content: str, success: bool) -> str | None:
+    """Create a user-facing summary from a tool_result content payload."""
+    if not success:
+        return None
+
+    result_data = content
+    if isinstance(result_data, str):
+        try:
+            result_data = json.loads(result_data)
+        except json.JSONDecodeError:
+            return None
+
+    if not isinstance(result_data, dict):
+        return None
+
+    image_type = result_data.get("image_type")
+    if image_type == "background":
+        paths = result_data.get("relative_files") or result_data.get("files") or []
+        first = paths[0] if isinstance(paths, list) and paths else result_data.get("primary_file")
+        if first:
+            return f"Background saved to {first}"
+        return "Background saved."
+
+    if image_type == "character":
+        paths = result_data.get("transparent_files") or result_data.get("relative_files") or result_data.get("files") or []
+        first = paths[0] if isinstance(paths, list) and paths else result_data.get("primary_file")
+        if first:
+            return f"Character sprite saved to {first}"
+        return "Character sprite saved."
+
+    return None
+    project_path = _current_project_path.get()
+    if project_path is None:
+        return base_prompt
+
+    return (
+        f"{base_prompt}\n\n"
+        "The user is already working inside a selected Ren'Py project.\n"
+        f"- Current project name: {project_path.name}\n"
+        f"- Current project path: {project_path}\n"
+        "You already know the current project from the workspace context. "
+        "Use it as the default target for project-scoped requests. "
+        "Do not ask the user to repeat the current project name or path unless they explicitly want to operate on a different project."
+    )
+
+
 @router.websocket("/ws/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -148,6 +219,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     if isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
+                                summary = _tool_result_summary(
+                                    block.get("content", ""),
+                                    bool(block.get("success", False)),
+                                )
+                                if summary:
+                                    await websocket.send_json(
+                                        {"type": "assistant_delta", "delta": summary}
+                                    )
                                 await websocket.send_json(
                                     {
                                         "type": "tool_result",
@@ -187,6 +266,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         continue
                     messages.append({"role": "user", "content": content})
 
+                    engine.system_prompt = _system_prompt_for_current_project(engine)
                     result = await engine.run_turn(messages)
                     await _send_turn_result(result)
                     messages = result.get("messages", messages)
@@ -208,20 +288,26 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         _bind_project_context(websocket, token_holder, pending.project_name)
 
                     if approved:
-                        # Append a synthetic tool_result so the LLM can continue
+                        # Append the original tool_result so the LLM can continue with the
+                        # correct tool_use_id and full result payload.
+                        approved_result = pending.tool_result or {}
                         messages.append(
                             {
                                 "role": "user",
                                 "content": [
                                     {
                                         "type": "tool_result",
-                                        "tool_use_id": confirmation_id,
-                                        "content": f"Tool {pending.tool_name} confirmed and executed.",
-                                        "success": True,
+                                        "tool_use_id": pending.tool_use_id or confirmation_id,
+                                        "content": approved_result.get(
+                                            "content",
+                                            f"Tool {pending.tool_name} confirmed and executed.",
+                                        ),
+                                        "success": approved_result.get("success", True),
                                     }
                                 ],
                             }
                         )
+                        engine.confirmation.resolve(approved=True)
                     else:
                         engine.confirmation.resolve(approved=False)
                         messages.append(
@@ -238,6 +324,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             }
                         )
 
+                    engine.system_prompt = _system_prompt_for_current_project(engine)
                     result = await engine.run_turn(messages)
                     await _send_turn_result(result)
                     messages = result.get("messages", messages)

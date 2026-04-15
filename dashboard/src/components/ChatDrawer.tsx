@@ -41,6 +41,29 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const { currentProject } = useProject();
 
+  const summarizeToolResult = (content: string): string | null => {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed?.image_type === "background") {
+        const first =
+          parsed.relative_files?.[0] ?? parsed.files?.[0] ?? parsed.primary_file ?? null;
+        return first ? `Background saved to ${first}` : "Background saved.";
+      }
+      if (parsed?.image_type === "character") {
+        const first =
+          parsed.transparent_files?.[0] ??
+          parsed.relative_files?.[0] ??
+          parsed.files?.[0] ??
+          parsed.primary_file ??
+          null;
+        return first ? `Character sprite saved to ${first}` : "Character sprite saved.";
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -91,6 +114,23 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
             candidates: data.candidates || [],
             projectName: data.project_name,
           });
+          return;
+        }
+        if (data.type === "tool_start" || data.type === "tool_result") {
+          if (data.type === "tool_result" && data.result?.success) {
+            const summary = summarizeToolResult(data.result.content || "");
+            if (summary) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: `${Date.now()}_${Math.random()}`,
+                  type: "assistant",
+                  content: summary,
+                  timestamp: Date.now(),
+                },
+              ]);
+            }
+          }
           return;
         }
         const msg: ChatMessage = {

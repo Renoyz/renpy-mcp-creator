@@ -195,6 +195,33 @@ def test_ws_chat_mock_provider(monkeypatch, client: TestClient, tmp_path: Path) 
         assert "Hello from mock" in data["delta"]
 
 
+def test_ws_chat_injects_current_project_into_system_prompt(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Project-bound chat should tell the model which current project is active."""
+    from renpy_mcp.config import _current_project_path
+    from renpy_mcp.web.chat_ws import _system_prompt_for_current_project
+
+    project_name = "system_prompt_proj"
+    project_dir = tmp_path / project_name
+    game_dir = project_dir / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    class FakeEngine:
+        system_prompt = "base prompt"
+
+    token = _current_project_path.set(project_dir)
+    try:
+        prompt = _system_prompt_for_current_project(FakeEngine())
+    finally:
+        _current_project_path.reset(token)
+
+    assert "already know the current project" in prompt.lower()
+    assert project_name in prompt
+    assert str(project_dir) in prompt
+
+
 def test_ws_chat_does_not_block_http_routes(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """A slow provider call should not block unrelated HTTP routes."""
     from renpy_mcp.chat_engine.providers import AnthropicProvider

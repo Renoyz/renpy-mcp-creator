@@ -102,6 +102,7 @@ class ChatEngine:
                         confirmation_id=confirmation_id,
                         tool_name=call["name"],
                         arguments=call.get("arguments", {}),
+                        tool_use_id=call.get("id"),
                         tool_result=result if result.get("success") else None,
                     )
                     # Pause ReAct loop — return pending confirmation to caller
