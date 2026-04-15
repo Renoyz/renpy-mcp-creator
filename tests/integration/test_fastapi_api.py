@@ -25,8 +25,12 @@ def temp_project(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def client(temp_project: Path) -> TestClient:
+def client(temp_project: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Provide a TestClient with project config injected."""
+    from renpy_mcp.config import get_settings
+    settings = get_settings()
+    monkeypatch.setattr(settings, "workspace", temp_project.parent)
+
     config = RenPyConfig(sdk_path=Path("."), project_path=temp_project)
     set_config(config)
     app = create_app()
@@ -74,13 +78,8 @@ class TestCurrentProject:
     """Tests for current project selection."""
 
     def test_current_project_selection(self, client: TestClient):
-        # Ensure a clean config state for this test
-        from renpy_mcp.web.fastapi_app import set_config
-        from renpy_mcp.config import RenPyConfig
-        set_config(RenPyConfig())
-
         project_name = "fastapi_select_test"
-        # Create project via API so it lands in the default workspace
+        # Create project via API in the hermetic workspace
         r = client.post("/api/projects", json={"name": project_name})
         assert r.status_code == 200
 

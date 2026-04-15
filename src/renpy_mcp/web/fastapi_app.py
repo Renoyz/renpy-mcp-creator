@@ -8,11 +8,14 @@ import time
 from pathlib import Path
 from urllib.parse import unquote
 
+from collections.abc import AsyncGenerator
+
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
-from ..config import RenPyConfig, get_settings
+from ..config import RenPyConfig, _current_project_path, get_settings, resolve_project_dir
 from ..services.project_manager import ProjectManager
 from .server import _parse_script_blocks
 
@@ -29,10 +32,25 @@ def set_config(config: RenPyConfig) -> None:
     _app_config = config
 
 
-def get_config() -> RenPyConfig:
+def _get_base_config() -> RenPyConfig:
     if _app_config is None:
         raise RuntimeError("FastAPI config not set")
     return _app_config
+
+
+async def get_config(request: Request) -> AsyncGenerator[RenPyConfig, None]:
+    config = _get_base_config()
+    session_name = request.session.get("current_project_name")
+    token = None
+    if session_name:
+        project_dir = resolve_project_dir(session_name)
+        if project_dir:
+            token = _current_project_path.set(project_dir)
+    try:
+        yield config
+    finally:
+        if token is not None:
+            _current_project_path.reset(token)
 
 
 def _send_bridge_command(config: RenPyConfig, cmd: dict, timeout: float = 5.0) -> dict:
@@ -73,6 +91,9 @@ def _send_bridge_command(config: RenPyConfig, cmd: dict, timeout: float = 5.0) -
 
 def create_app() -> FastAPI:
     app = FastAPI(title="RenPy MCP Unified Server")
+    app.add_middleware(
+        SessionMiddleware, secret_key="renpy-mcp-dev-secret-change-in-production"
+    )
 
     # ---- Page routes ----
 
@@ -132,29 +153,30 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/projects/current")
-    async def api_projects_current(config: RenPyConfig = Depends(get_config)):
-        if not config.project_path:
+    async def api_projects_current(request: Request):
+        session_name = request.session.get("current_project_name")
+        if not session_name:
+            return {"current_project": None}
+        project_dir = resolve_project_dir(session_name)
+        if not project_dir:
             return {"current_project": None}
         return {
             "current_project": {
-                "name": config.project_path.name,
-                "path": str(config.project_path),
+                "name": project_dir.name,
+                "path": str(project_dir),
             }
         }
 
     @app.post("/api/projects/select")
-    async def api_projects_select(request: Request, config: RenPyConfig = Depends(get_config)):
+    async def api_projects_select(request: Request):
         body = await request.json()
         name = body.get("name", "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="Project name is required")
-
-        settings = get_settings()
-        project_dir = settings.workspace / name
-        if not (project_dir / "game").exists():
+        project_dir = resolve_project_dir(name)
+        if not project_dir:
             raise HTTPException(status_code=404, detail="Project not found")
-
-        config.project_path = project_dir
+        request.session["current_project_name"] = name
         return {
             "success": True,
             "current_project": {

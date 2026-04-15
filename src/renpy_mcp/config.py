@@ -1,6 +1,8 @@
 """Application settings with v1.1.2 backward compatibility."""
 
+import contextvars
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +11,20 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 load_dotenv()
+
+# Context-local override for the active project path (request / WebSocket scoped)
+_current_project_path: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "current_project_path", default=None
+)
+
+
+@contextmanager
+def set_current_project_path(path: Path | None):
+    token = _current_project_path.set(path)
+    try:
+        yield
+    finally:
+        _current_project_path.reset(token)
 
 
 class Settings(BaseSettings):
@@ -67,7 +83,24 @@ class RenPyConfig:
     """Configuration for RenPy SDK and project paths (legacy from v1.1.2)."""
 
     sdk_path: Path = field(default_factory=lambda: _legacy_default_sdk_path())
-    project_path: Path | None = None
+    _project_path: Path | None = field(default=None, repr=False)
+
+    def __init__(self, sdk_path: Path | None = None, project_path: Path | None = None):
+        object.__setattr__(
+            self, "sdk_path", sdk_path if sdk_path is not None else _legacy_default_sdk_path()
+        )
+        object.__setattr__(self, "_project_path", project_path)
+
+    @property
+    def project_path(self) -> Path | None:
+        ctx_path = _current_project_path.get()
+        if ctx_path is not None:
+            return ctx_path
+        return self._project_path
+
+    @project_path.setter
+    def project_path(self, value: Path | None) -> None:
+        object.__setattr__(self, "_project_path", value)
 
     @property
     def renpy_exe(self) -> Path:
@@ -97,3 +130,17 @@ def _legacy_default_sdk_path() -> Path:
     if env:
         return Path(env)
     return Path(".")
+
+
+def resolve_project_dir(name: str) -> Path | None:
+    """Resolve a project directory under the workspace, guarding against path traversal."""
+    settings = get_settings()
+    try:
+        project_dir = (settings.workspace / name).resolve()
+        workspace = settings.workspace.resolve()
+        project_dir.relative_to(workspace)
+    except (ValueError, RuntimeError):
+        return None
+    if not (project_dir / "game").exists():
+        return None
+    return project_dir
