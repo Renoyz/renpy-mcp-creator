@@ -1,85 +1,134 @@
 #!/usr/bin/env python3
-"""Mock WebSocket server for testing Chat Drawer without real backend."""
+"""Mock WebSocket server for deterministic dashboard E2E tests."""
+
+from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 
 import websockets
 
 
-async def handler(websocket):
-    print(f"Client connected: {websocket.remote_address}")
+WORKSPACE = Path(os.environ.get("RENPY_MCP_WORKSPACE", Path.home() / ".renpy-mcp" / "workspace"))
+HOST = os.environ.get("MOCK_WS_HOST", "127.0.0.1")
+PORT = int(os.environ.get("MOCK_WS_PORT", "8765"))
+
+
+def _write_mock_background(project_name: str) -> str:
+    project_dir = WORKSPACE / project_name
+    output_dir = project_dir / "game" / "images" / "background"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    image_path = output_dir / "mock_courtyard.png"
+    image_path.write_bytes(b"mock background data")
+    return image_path.relative_to(project_dir).as_posix()
+
+
+async def handler(websocket) -> None:
+    pending: dict[str, str] | None = None
     try:
-        async for message in websocket:
+        async for raw in websocket:
             try:
-                data = json.loads(message)
+                data = json.loads(raw)
             except json.JSONDecodeError:
+                await websocket.send(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 continue
 
-            if data.get("type") == "user_message":
-                content = data.get("content", "")
+            msg_type = data.get("type")
 
-                # Simulate assistant thinking
+            if msg_type == "user_message":
+                project_name = data.get("project_name")
+                if not project_name:
+                    await websocket.send(
+                        json.dumps({"type": "error", "message": "No active project selected."})
+                    )
+                    continue
+
+                pending = {"project_name": project_name}
                 await websocket.send(
                     json.dumps(
                         {
-                            "type": "assistant_delta",
-                            "delta": f"收到你的消息：{content}\n正在调用工具...",
+                            "type": "awaiting_confirmation",
+                            "confirmation_id": "mock_conf_background",
+                            "message": "Mock background ready to save.",
+                            "candidates": [
+                                {
+                                    "type": "image",
+                                    "path": f"game/images/background/{project_name}_preview.png",
+                                }
+                            ],
+                            "project_name": project_name,
                         }
                     )
                 )
 
-                await asyncio.sleep(0.5)
-
-                # Simulate tool_start
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "tool_start",
-                            "tool_name": "echo",
-                        }
+            elif msg_type == "confirmation_response":
+                approved = bool(data.get("approved"))
+                if not pending:
+                    await websocket.send(
+                        json.dumps({"type": "error", "message": "No pending confirmation."})
                     )
+                    continue
+
+                project_name = pending["project_name"]
+                if not approved:
+                    await websocket.send(
+                        json.dumps({"type": "assistant_delta", "delta": "Mock generation cancelled."})
+                    )
+                    pending = None
+                    continue
+
+                relative_path = _write_mock_background(project_name)
+                await websocket.send(
+                    json.dumps({"type": "tool_start", "tool_name": "generate_background"})
                 )
-
-                await asyncio.sleep(0.5)
-
-                # Simulate tool_result
                 await websocket.send(
                     json.dumps(
                         {
                             "type": "tool_result",
-                            "result": {"content": f"Echo: {content}"},
+                            "result": {
+                                "success": True,
+                                "content": json.dumps(
+                                    {
+                                        "success": True,
+                                        "project": project_name,
+                                        "relative_files": [relative_path],
+                                        "suggested_image_names": ["mock courtyard"],
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
                         }
                     )
                 )
-
-                await asyncio.sleep(0.3)
-
-                # Final assistant message
                 await websocket.send(
                     json.dumps(
                         {
                             "type": "assistant_delta",
-                            "delta": "工具执行完成。",
+                            "delta": f"Background saved to {relative_path}",
                         }
                     )
                 )
+                pending = None
+
+            else:
+                await websocket.send(
+                    json.dumps({"type": "error", "message": f"Unknown message type: {msg_type}"})
+                )
     except websockets.exceptions.ConnectionClosed:
-        print(f"Client disconnected: {websocket.remote_address}")
+        return
 
 
-async def main():
-    host = "localhost"
-    port = 8765
-    print(f"Starting mock WS server on ws://{host}:{port}")
-    async with websockets.serve(handler, host, port):
-        await asyncio.Future()  # run forever
+async def main() -> None:
+    print(f"Starting mock WS server on ws://{HOST}:{PORT}", flush=True)
+    async with websockets.serve(handler, HOST, PORT):
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nShutting down.")
         sys.exit(0)
