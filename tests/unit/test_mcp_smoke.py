@@ -21,7 +21,7 @@ async def test_mcp_tools_registered():
     tools = await mcp.list_tools()
     resources = await mcp.list_resources()
 
-    assert len(tools) == 70, f"Expected 70 tools, got {len(tools)}"
+    assert len(tools) == 71, f"Expected 71 tools, got {len(tools)}"
     assert len(resources) == 1, f"Expected 1 resource, got {len(resources)}"
 
     tool_names = {t.name for t in tools}

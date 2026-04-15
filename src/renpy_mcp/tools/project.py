@@ -220,6 +220,80 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
         )
 
     @mcp.tool()
+    async def attach_background_to_start(project_name: str, image_name: str) -> str:
+        """Insert a scene statement for the given background image under label start in script.rpy.
+
+        Args:
+            project_name: Name of the project.
+            image_name: Ren'Py image name to use in the scene statement (e.g., "bg room").
+        """
+        project_dir = project_manager.ensure_project_dir(project_name)
+        script_path = project_dir / "game" / "script.rpy"
+        if not script_path.exists():
+            return json.dumps(
+                {"success": False, "error": "script.rpy not found"},
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        content = script_path.read_text(encoding="utf-8")
+        lines = content.splitlines(keepends=True)
+        label_re = re.compile(r'^\s*label\s+start\s*:\s*$')
+
+        label_idx = -1
+        for i, line in enumerate(lines):
+            if label_re.match(line):
+                label_idx = i
+                break
+
+        if label_idx == -1:
+            return json.dumps(
+                {"success": False, "error": "label start: not found in script.rpy"},
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        # Check if scene image_name already exists under this label
+        scene_line = f"    scene {image_name}\n"
+        already_exists = False
+        for j in range(label_idx + 1, len(lines)):
+            line = lines[j]
+            # Stop checking if we hit another label or a non-indented/non-empty/non-comment line
+            stripped = line.strip()
+            if stripped.startswith("label ") and stripped.endswith(":"):
+                break
+            if stripped == "":
+                continue
+            if stripped.startswith("#"):
+                continue
+            if line.strip() == scene_line.strip():
+                already_exists = True
+                break
+            # Any other indented statement means scene is not the first real statement
+            break
+
+        if already_exists:
+            return json.dumps(
+                {
+                    "success": True,
+                    "image_name": image_name,
+                    "file": str(script_path.relative_to(project_dir)),
+                    "message": "scene already present; no changes made",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+
+        # Insert scene right after label start:
+        lines.insert(label_idx + 1, scene_line)
+        script_path.write_text("".join(lines), encoding="utf-8")
+        return json.dumps(
+            {"success": True, "image_name": image_name, "file": str(script_path.relative_to(project_dir))},
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    @mcp.tool()
     async def set_project(path: str) -> str:
         """Set the active RenPy project path.
 

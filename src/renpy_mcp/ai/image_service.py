@@ -84,8 +84,8 @@ class ImageService:
                 error="Image generation service is not configured. Set RENPY_MCP_QWEN_API_KEY.",
             )
 
-        assets_dir = project_dir / "assets" / image_type
-        assets_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = project_dir / "game" / "images" / image_type
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         raw_name = (
             base_name or f"{_slugify(prompt)[:48]}-{datetime.utcnow():%Y%m%d%H%M%S}"
@@ -176,7 +176,7 @@ class ImageService:
                         error=f"Failed to download generated image: {exc}",
                     )
 
-                file_path = assets_dir / f"{file_name}.png"
+                file_path = output_dir / f"{file_name}.png"
                 file_path.write_bytes(image_resp.content)
                 saved_files.append(file_path)
                 logger.info("Saved image: %s", file_path.name)
@@ -190,7 +190,7 @@ class ImageService:
             )
 
         if image_type == "character":
-            _normalize_character_sizes(assets_dir, target_height=750)
+            _normalize_character_sizes(output_dir, target_height=750)
             logger.info(
                 "Applied post-generation size normalization to all character images"
             )

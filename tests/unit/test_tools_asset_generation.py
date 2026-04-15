@@ -48,15 +48,15 @@ class TestGenerateBackground:
         mock_result.success = True
         mock_result.prompt = "a cafe"
         mock_result.image_type = "background"
-        mock_result.files = [workspace / "bg_test" / "assets" / "background" / "cafe.png"]
-        mock_result.primary_file = workspace / "bg_test" / "assets" / "background" / "cafe.png"
+        mock_result.files = [workspace / "bg_test" / "game" / "images" / "background" / "cafe.png"]
+        mock_result.primary_file = workspace / "bg_test" / "game" / "images" / "background" / "cafe.png"
         mock_result.error = None
         mock_result.model_dump = lambda mode="json": {
             "success": True,
             "prompt": "a cafe",
             "image_type": "background",
-            "files": [str(workspace / "bg_test" / "assets" / "background" / "cafe.png")],
-            "primary_file": str(workspace / "bg_test" / "assets" / "background" / "cafe.png"),
+            "files": [str(workspace / "bg_test" / "game" / "images" / "background" / "cafe.png")],
+            "primary_file": str(workspace / "bg_test" / "game" / "images" / "background" / "cafe.png"),
             "error": None,
         }
 
@@ -72,7 +72,8 @@ class TestGenerateBackground:
             assert data["success"] is True
             assert data["project"] == "bg_test"
             rel = data["relative_files"][0]
-            assert "assets" in rel and "background" in rel and "cafe.png" in rel
+            assert rel.startswith("game/images/background/")
+            assert "suggested_image_names" in data
 
 
 class TestGenerateCharacter:
@@ -99,7 +100,7 @@ class TestGenerateCharacter:
         mcp, workspace = fresh_mcp
         await mcp.call_tool("create_project", {"name": "char_test"})
 
-        char_dir = workspace / "char_test" / "assets" / "character"
+        char_dir = workspace / "char_test" / "game" / "images" / "character"
         char_dir.mkdir(parents=True)
         (char_dir / "alice_neutral.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 
@@ -138,3 +139,6 @@ class TestGenerateCharacter:
             assert data["success"] is True
             assert data["project"] == "char_test"
             assert data["character"] == "alice"
+            rel = data["relative_files"][0]
+            assert rel.startswith("game/images/character/")
+            assert "suggested_image_names" in data

@@ -45,16 +45,4 @@ class TestBuildManager:
         assert result.success is False
         assert "No usable Ren'Py SDK found" in result.error
 
-    def test_auto_copy_assets(self, build_manager, tmp_path, settings):
-        project_dir = settings.workspace / "test_vn"
-        (project_dir / "assets" / "background").mkdir(parents=True)
-        (project_dir / "assets" / "character").mkdir(parents=True)
-        (project_dir / "game").mkdir()
 
-        (project_dir / "assets" / "background" / "bg.png").write_text("png")
-        (project_dir / "assets" / "character" / "char.png").write_text("png")
-
-        build_manager._auto_copy_assets(project_dir)
-
-        assert (project_dir / "game" / "images" / "bg.png").exists()
-        assert (project_dir / "game" / "images" / "char.png").exists()

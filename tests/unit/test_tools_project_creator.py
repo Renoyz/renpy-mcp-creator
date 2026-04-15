@@ -147,3 +147,61 @@ class TestGenerateScript:
         main_script = project_path / "game" / "script.rpy"
         content = main_script.read_text(encoding="utf-8")
         assert "call chapter1" in content
+
+    @pytest.mark.asyncio
+    async def test_attach_background_to_start(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "attach_test"})
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "attach_test", "image_name": "bg_room"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+        assert data["image_name"] == "bg_room"
+
+        project_path = workspace / "attach_test"
+        script_file = project_path / "game" / "script.rpy"
+        content = script_file.read_text(encoding="utf-8")
+        assert "scene bg_room" in content
+
+    @pytest.mark.asyncio
+    async def test_attach_background_to_start_idempotent(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "idempotent_test"})
+        # First call
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "idempotent_test", "image_name": "bg_room"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+
+        # Second call with same image_name should not duplicate
+        result2 = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "idempotent_test", "image_name": "bg_room"},
+        )
+        data2 = json.loads(result2[0][0].text)
+        assert data2["success"] is True
+
+        project_path = workspace / "idempotent_test"
+        script_file = project_path / "game" / "script.rpy"
+        content = script_file.read_text(encoding="utf-8")
+        assert content.count("scene bg_room") == 1
+
+    @pytest.mark.asyncio
+    async def test_attach_background_to_start_missing_label(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "missing_label_test"})
+        project_path = workspace / "missing_label_test"
+        script_file = project_path / "game" / "script.rpy"
+        script_file.write_text('label intro:\n    "Hello"\n    return\n', encoding="utf-8")
+
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "missing_label_test", "image_name": "bg_room"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is False
+        assert "label start" in data["error"].lower()

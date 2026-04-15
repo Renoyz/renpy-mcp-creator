@@ -21,26 +21,6 @@ class BuildManager:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def _auto_copy_assets(self, project_dir: Path) -> None:
-        """Automatically copy assets from assets/ to game/images/."""
-        assets_dir = project_dir / "assets"
-        images_dir = project_dir / "game" / "images"
-
-        if not assets_dir.exists():
-            return
-
-        images_dir.mkdir(parents=True, exist_ok=True)
-
-        for subdir in ["background", "character"]:
-            source_dir = assets_dir / subdir
-            if not source_dir.exists():
-                continue
-
-            for asset_file in source_dir.iterdir():
-                if asset_file.is_file() and asset_file.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-                    dest_file = images_dir / asset_file.name
-                    shutil.copy2(asset_file, dest_file)
-
     async def build(self, request: BuildRequest) -> BuildResult:
         """Execute a build request."""
         project_dir = self.settings.workspace / request.project_name
@@ -51,8 +31,6 @@ class BuildManager:
                 success=False,
                 error=f"Project '{request.project_name}' not found in {self.settings.workspace}",
             )
-
-        self._auto_copy_assets(project_dir)
 
         toolchain = self._resolve_toolchain()
         if toolchain is None:

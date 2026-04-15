@@ -71,7 +71,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
         )
 
         relative_files = (
-            [str(path.relative_to(project_dir)) for path in result.files]
+            [str(path.relative_to(project_dir)).replace("\\", "/") for path in result.files]
             if result.success
             else []
         )
@@ -79,6 +79,9 @@ def register_asset_tools(mcp, config: RenPyConfig):
         payload["project"] = project_name
         if relative_files:
             payload["relative_files"] = relative_files
+            payload["suggested_image_names"] = [
+                Path(path).stem.replace("_", " ") for path in relative_files
+            ]
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     @mcp.tool()
@@ -138,7 +141,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
         )
 
         relative_files = (
-            [str(path.relative_to(project_dir)) for path in result.files]
+            [str(path.relative_to(project_dir)).replace("\\", "/") for path in result.files]
             if result.success
             else []
         )
@@ -152,15 +155,15 @@ def register_asset_tools(mcp, config: RenPyConfig):
                 if transparent_path is not None:
                     try:
                         transparent_files.append(
-                            str(transparent_path.relative_to(project_dir))
+                            str(transparent_path.relative_to(project_dir)).replace("\\", "/")
                         )
                     except ValueError:
-                        transparent_files.append(str(transparent_path))
+                        transparent_files.append(str(transparent_path).replace("\\", "/"))
 
-            character_assets_dir = project_dir / "assets" / "character"
-            if character_assets_dir.exists():
+            character_output_dir = project_dir / "game" / "images" / "character"
+            if character_output_dir.exists():
                 await asyncio.to_thread(
-                    _normalize_character_sizes, character_assets_dir, target_height=750
+                    _normalize_character_sizes, character_output_dir, target_height=750
                 )
 
         payload = result.model_dump(mode="json")
@@ -168,8 +171,14 @@ def register_asset_tools(mcp, config: RenPyConfig):
         payload["character"] = character_name
         if relative_files:
             payload["relative_files"] = relative_files
+            payload["suggested_image_names"] = [
+                Path(path).stem.replace("_", " ") for path in relative_files
+            ]
         if transparent_files:
             payload["transparent_files"] = transparent_files
+            payload["suggested_transparent_names"] = [
+                Path(path).stem.replace("_", " ") for path in transparent_files
+            ]
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     def _collect_assets(game_dir: Path) -> dict[str, list[dict]]:
