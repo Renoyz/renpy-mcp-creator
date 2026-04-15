@@ -1,5 +1,7 @@
 """Integration tests for /ws/chat WebSocket endpoint."""
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -191,6 +193,61 @@ def test_ws_chat_mock_provider(monkeypatch, client: TestClient, tmp_path: Path) 
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert "Hello from mock" in data["delta"]
+
+
+def test_ws_chat_does_not_block_http_routes(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """A slow provider call should not block unrelated HTTP routes."""
+    from renpy_mcp.chat_engine.providers import AnthropicProvider
+
+    game_dir = tmp_path / "slow_proj" / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    started = threading.Event()
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            started.set()
+            time.sleep(1.0)
+            msg = type(
+                "M",
+                (),
+                {
+                    "content": [type("B", (), {"type": "text", "text": "slow reply"})()],
+                    "stop_reason": "end_turn",
+                    "usage": type("U", (), {"input_tokens": 5, "output_tokens": 5})(),
+                },
+            )()
+            return msg
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    provider = AnthropicProvider(api_key="fake")
+    provider.client = FakeClient()
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+
+    results: dict[str, object] = {}
+
+    def _drive_socket() -> None:
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"type": "user_message", "content": "hi", "project_name": "slow_proj"})
+            results["ws"] = websocket.receive_json()
+
+    worker = threading.Thread(target=_drive_socket)
+    worker.start()
+    assert started.wait(timeout=2.0), "provider did not start"
+
+    start = time.perf_counter()
+    response = client.get("/api/projects")
+    elapsed = time.perf_counter() - start
+
+    worker.join(timeout=3.0)
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+    assert results["ws"]["type"] == "assistant_delta"
 
 
 def test_ws_chat_no_provider(client: TestClient) -> None:

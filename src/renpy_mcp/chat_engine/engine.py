@@ -1,5 +1,6 @@
 """ChatEngine: ReAct loop for LLM-driven MCP tool invocation."""
 
+import asyncio
 import json
 from typing import Any
 
@@ -59,7 +60,8 @@ class ChatEngine:
 
         while iteration < self.max_react_iterations:
             iteration += 1
-            response = self.provider.chat(
+            response = await asyncio.to_thread(
+                self.provider.chat,
                 messages=messages,
                 tools=tools if tools else None,
                 system=self.system_prompt,

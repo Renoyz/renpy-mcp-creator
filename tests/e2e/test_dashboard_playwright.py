@@ -112,9 +112,14 @@ def test_direct_workspace_url(page: Page, server_url: str) -> None:
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
 
-def test_dashboard_chat_generate_build(page: Page, server_url: str) -> None:
-    """Real-backend smoke test: reach the first confirmation for a project-bound request."""
+def test_dashboard_chat_generate_build(
+    page: Page,
+    server_url: str,
+    mock_chat_server_url: str,
+) -> None:
+    """UI smoke test: a project-bound chat request reaches confirmation and can be cancelled."""
     assert wait_for_server(server_url), "Server not ready"
+    install_mock_chat_socket(page, mock_chat_server_url)
 
     project_name = f"playwright_e2e_{int(time.time())}"
     create_project_via_api(server_url, project_name)
@@ -129,12 +134,9 @@ def test_dashboard_chat_generate_build(page: Page, server_url: str) -> None:
         )
     )
     click_send_button(page)
-    confirm_pending_action(page, timeout=120000, approve=False)
+    confirm_pending_action(page, timeout=10000, approve=False)
 
-    resp = httpx.get(f"{server_url}/api/projects")
-    assert resp.status_code == 200
-    names = {p["name"] for p in resp.json().get("projects", [])}
-    assert project_name in names
+    expect(page.locator("text=Mock generation cancelled.")).to_be_visible(timeout=10000)
 
 
 def test_dashboard_chat_generates_background_into_project(
@@ -206,5 +208,17 @@ def test_workspace_build_and_preview(page: Page, server_url: str, e2e_workspace:
     preview_url = preview_link.get_attribute("href") or ""
     assert preview_url.startswith("http://127.0.0.1")
 
-    # Stop preview server via API to avoid port leaks across tests
-    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
+    # Stop preview server via the browser session so the current-project cookie is included.
+    stop_result = page.evaluate(
+        """
+        async () => {
+          const response = await fetch("/api/projects/preview/stop", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+          });
+          return { ok: response.ok, payload: await response.json() };
+        }
+        """
+    )
+    assert stop_result["ok"] is True
