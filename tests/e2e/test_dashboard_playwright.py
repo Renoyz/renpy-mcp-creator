@@ -1,6 +1,7 @@
 """Playwright E2E coverage for the dashboard workflow."""
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -93,7 +94,8 @@ def test_project_workspace(page: Page, server_url: str) -> None:
     create_project_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    expect(page.locator("main button[disabled]")).to_have_count(2, timeout=10000)
+    expect(page.locator("button", has_text="Build")).to_be_visible(timeout=10000)
+    expect(page.locator("button", has_text="Preview")).to_be_visible(timeout=10000)
     page.locator("h4:has-text('Story Map')").first.click()
     expect(page.locator("span:has-text('Story Map')")).to_be_visible(timeout=10000)
     assert "/story-map" in page.url
@@ -163,3 +165,46 @@ def test_dashboard_chat_generates_background_into_project(
         e2e_workspace / project_name / "game" / "images" / "background" / "mock_courtyard.png"
     )
     assert generated_file.exists(), f"Generated background missing at {generated_file}"
+
+
+def test_workspace_build_and_preview(page: Page, server_url: str, e2e_workspace: Path) -> None:
+    """Click Build and Preview in the workspace and verify UI state changes."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_build_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Click Build and wait for a terminal state (success or failed)
+    build_button = page.locator("button", has_text=re.compile("Build|Building"))
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+
+    # Wait until Build button is no longer in running state
+    expect(build_button).not_to_contain_text("Building", timeout=30000)
+
+    # Assert build status message is visible (success or error)
+    status_locator = page.locator("div.rounded-md.p-3")
+    expect(status_locator).to_be_visible(timeout=10000)
+    status_text = status_locator.text_content() or ""
+    assert (
+        "Build" in status_text
+        or "Built" in status_text
+        or "SDK" in status_text
+        or "succeeded" in status_text
+        or "failed" in status_text.lower()
+    )
+
+    # Click Preview (server is running with RENPY_MCP_MOCK_BUILD=1, so build produces real output)
+    preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
+    preview_button.click()
+    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+
+    # Assert preview URL is shown
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+    preview_url = preview_link.get_attribute("href") or ""
+    assert preview_url.startswith("http://127.0.0.1")
+
+    # Stop preview server via API to avoid port leaks across tests
+    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
