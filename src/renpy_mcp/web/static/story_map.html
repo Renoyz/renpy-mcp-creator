@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ren'Py Story Map</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ---- Header ---- */
+#header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+  height: 48px;
+  z-index: 10;
+}
+
+#header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e94560;
+}
+
+#status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+#status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+  transition: background 0.3s;
+}
+
+#status-dot.connected { background: #4ecca3; }
+#status-dot.disconnected { background: #e94560; }
+
+#controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#controls button {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1a4080;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+#controls button:hover {
+  background: #1a4080;
+}
+
+#search-box {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1a4080;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  width: 160px;
+}
+
+#search-box::placeholder { color: #666; }
+
+/* ---- Graph ---- */
+#graph-container {
+  width: 100%;
+  height: calc(100vh - 48px);
+  position: relative;
+}
+
+svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Nodes */
+.node-group { cursor: pointer; }
+
+.node-circle {
+  stroke-width: 2px;
+  transition: r 0.2s, stroke-width 0.2s;
+}
+
+.node-group:hover .node-circle {
+  stroke-width: 3px;
+}
+
+.node-group.highlighted .node-circle {
+  stroke: #fff;
+  stroke-width: 3px;
+}
+
+.node-label {
+  font-size: 11px;
+  fill: #e0e0e0;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: #1a1a2e;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.node-badge {
+  font-size: 9px;
+  fill: #aaa;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+/* Edges */
+.edge {
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.edge.jump { stroke: #4a6fa5; }
+.edge.call { stroke: #e94560; stroke-dasharray: 6,3; }
+
+.edge-label {
+  font-size: 9px;
+  fill: #888;
+}
+
+/* Arrowheads */
+marker path {
+  fill: #4a6fa5;
+}
+
+marker.call-marker path {
+  fill: #e94560;
+}
+
+/* ---- Tooltip ---- */
+#tooltip {
+  position: absolute;
+  display: none;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  pointer-events: none;
+  z-index: 20;
+  max-width: 300px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+#tooltip .tt-label {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+#tooltip .tt-type {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+
+#tooltip .tt-file { color: #888; }
+#tooltip .tt-stat { color: #4ecca3; }
+#tooltip .tt-choices { color: #e9a045; margin-top: 4px; }
+#tooltip .tt-choices li { margin-left: 16px; }
+
+/* ---- Jump notification ---- */
+#jump-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: #4ecca3;
+  color: #1a1a2e;
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  z-index: 30;
+}
+
+#jump-toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+/* ---- Legend ---- */
+#legend {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: rgba(22, 33, 62, 0.9);
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 11px;
+  line-height: 2;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1.5px solid rgba(255,255,255,0.3);
+}
+
+.legend-line {
+  width: 20px;
+  height: 0;
+  display: inline-block;
+  border-top: 2px solid;
+}
+
+.legend-line.jump-line { border-color: #4a6fa5; }
+.legend-line.call-line { border-color: #e94560; border-top-style: dashed; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Ren'Py Story Map</h1>
+  <nav style="display:flex;gap:8px;margin-left:16px;">
+    <a href="/story-map" style="color:#e0e0e0;text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;background:#0f3460;">Story Map</a>
+    <a href="/dashboard" style="color:#888;text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;">Dashboard</a>
+    <a href="/script-editor" style="color:#888;text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;">Script Editor</a>
+    <a href="/heatmap" style="color:#888;text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;">Heatmap</a>
+    <a href="/assets" style="color:#888;text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;">Assets</a>
+  </nav>
+  <div id="controls">
+    <input id="search-box" type="text" placeholder="Search label...">
+    <button onclick="resetZoom()">Reset View</button>
+    <button onclick="toggleLayout()">Toggle Layout</button>
+  </div>
+  <div id="status">
+    <div id="status-dot"></div>
+    <span id="status-text">Checking...</span>
+  </div>
+</div>
+
+<div id="graph-container">
+  <svg id="graph"></svg>
+</div>
+
+<div id="tooltip"></div>
+<div id="jump-toast"></div>
+
+<div id="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:#4ecca3"></span> Start</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#4a6fa5"></span> Normal</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#e9a045"></span> Choice</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#e94560"></span> Dead End</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#555"></span> Orphan</div>
+  <div class="legend-item"><span class="legend-dot" style="background:#9b59b6"></span> End (return)</div>
+  <div class="legend-item"><span class="legend-line jump-line"></span> Jump</div>
+  <div class="legend-item"><span class="legend-line call-line"></span> Call</div>
+</div>
+
+<script>
+const NODE_COLORS = {
+  start:    "#4ecca3",
+  normal:   "#4a6fa5",
+  dead_end: "#e94560",
+  orphan:   "#555",
+  end:      "#9b59b6",
+};
+
+const TYPE_LABELS = {
+  start: "START",
+  normal: "",
+  dead_end: "DEAD END",
+  orphan: "ORPHAN",
+  end: "END",
+};
+
+const TYPE_BG = {
+  start:    "#4ecca322",
+  dead_end: "#e9456022",
+  orphan:   "#55555522",
+  end:      "#9b59b622",
+};
+
+let simulation, svg, gRoot, linkGroup, nodeGroup;
+let graphData = { nodes: [], edges: [] };
+let useHierarchical = true;
+let _renderNodes = [];  // nodes used by current render (for drag)
+
+// ---- Fetch data ----
+async function loadGraph() {
+  try {
+    const resp = await fetch("/api/graph");
+    graphData = await resp.json();
+    if (graphData.error) {
+      document.title = "Error: " + graphData.error;
+      return;
+    }
+    render();
+  } catch (e) {
+    console.error("Failed to load graph:", e);
+  }
+}
+
+// ---- Check bridge status ----
+async function checkStatus() {
+  try {
+    const resp = await fetch("/api/status");
+    const data = await resp.json();
+    const dot = document.getElementById("status-dot");
+    const text = document.getElementById("status-text");
+    if (data.connected) {
+      dot.className = "connected";
+      text.textContent = "Bridge connected";
+    } else {
+      dot.className = "disconnected";
+      text.textContent = "Bridge offline";
+    }
+  } catch {
+    document.getElementById("status-dot").className = "disconnected";
+    document.getElementById("status-text").textContent = "Server error";
+  }
+}
+
+// ---- Jump ----
+async function jumpTo(label) {
+  try {
+    const resp = await fetch("/api/jump", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    const data = await resp.json();
+    showToast(data.success ? `Jumped to: ${label}` : `Error: ${data.error}`);
+  } catch (e) {
+    showToast("Jump failed: " + e.message);
+  }
+}
+
+function showToast(msg) {
+  const toast = document.getElementById("jump-toast");
+  toast.textContent = msg;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 2000);
+}
+
+// ---- Tooltip ----
+function showTooltip(event, d) {
+  const tt = document.getElementById("tooltip");
+  const typeBg = TYPE_BG[d.type] || "transparent";
+  const typeLabel = TYPE_LABELS[d.type];
+
+  let html = `<div class="tt-label">${d.id}`;
+  if (typeLabel) {
+    html += `<span class="tt-type" style="background:${typeBg};color:${nodeColor(d)}">${typeLabel}</span>`;
+  }
+  html += `</div>`;
+  html += `<div class="tt-file">${d.file}:${d.line}</div>`;
+  html += `<div class="tt-stat">Dialogue lines: ${d.dialogue_count}</div>`;
+
+  if (d.menu_choices && d.menu_choices.length > 0) {
+    html += `<div class="tt-choices">Choices:<ul>`;
+    d.menu_choices.forEach(c => { html += `<li>${c}</li>`; });
+    html += `</ul></div>`;
+  }
+
+  tt.innerHTML = html;
+  tt.style.display = "block";
+  tt.style.left = (event.pageX + 14) + "px";
+  tt.style.top = (event.pageY - 10) + "px";
+}
+
+function hideTooltip() {
+  document.getElementById("tooltip").style.display = "none";
+}
+
+// ---- Node color ----
+function nodeColor(d) {
+  if (d.has_menu && d.type !== "start") return "#e9a045";
+  return NODE_COLORS[d.type] || NODE_COLORS.normal;
+}
+
+function nodeRadius(d) {
+  if (d.type === "start") return 20;
+  const base = 12;
+  return base + Math.min(d.dialogue_count * 0.5, 10);
+}
+
+// Shorten a line so it stops at the target node's border
+function shortenEdge(sx, sy, tx, ty, targetRadius) {
+  const dx = tx - sx, dy = ty - sy;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len === 0) return { x: tx, y: ty };
+  const ratio = (len - targetRadius - 2) / len;  // -2 for padding
+  return { x: sx + dx * ratio, y: sy + dy * ratio };
+}
+
+// ---- Hierarchical layout ----
+function computeHierarchicalPositions(nodes, edges) {
+  // Build adjacency
+  const children = {};
+  const parents = {};
+  nodes.forEach(n => { children[n.id] = []; parents[n.id] = []; });
+  edges.forEach(e => {
+    const src = typeof e.source === "object" ? e.source.id : e.source;
+    const tgt = typeof e.target === "object" ? e.target.id : e.target;
+    if (children[src]) children[src].push(tgt);
+    if (parents[tgt]) parents[tgt].push(src);
+  });
+
+  // Multi-source BFS from start, then handle disconnected components
+  const layers = {};
+  const visited = new Set();
+  const startNode = nodes.find(n => n.id === "start") || nodes[0];
+  if (!startNode) return;
+
+  const queue = [startNode.id];
+  layers[startNode.id] = 0;
+  visited.add(startNode.id);
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const child of (children[cur] || [])) {
+      if (!visited.has(child)) {
+        visited.add(child);
+        layers[child] = (layers[cur] || 0) + 1;
+        queue.push(child);
+      }
+    }
+  }
+
+  // Handle disconnected components — BFS from each unvisited node
+  nodes.forEach(n => {
+    if (!visited.has(n.id)) {
+      visited.add(n.id);
+      layers[n.id] = 0;
+      const compQueue = [n.id];
+      while (compQueue.length > 0) {
+        const cur = compQueue.shift();
+        for (const child of (children[cur] || [])) {
+          if (!visited.has(child)) {
+            visited.add(child);
+            layers[child] = (layers[cur] || 0) + 1;
+            compQueue.push(child);
+          }
+        }
+      }
+    }
+  });
+
+  // Push nodes deeper (longest-path improvement, safe for cycles)
+  for (let iter = 0; iter < 10; iter++) {
+    let changed = false;
+    nodes.forEach(n => {
+      const preds = parents[n.id] || [];
+      if (preds.length === 0) return;
+      const maxPred = Math.max(...preds.map(p => layers[p] || 0));
+      if (maxPred + 1 > layers[n.id]) {
+        layers[n.id] = maxPred + 1;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+
+  // Group by layer
+  const byLayer = {};
+  nodes.forEach(n => {
+    const layer = layers[n.id];
+    if (!byLayer[layer]) byLayer[layer] = [];
+    byLayer[layer].push(n);
+  });
+
+  // Layout with sub-row wrapping for wide layers
+  const MAX_PER_ROW = 20;
+  const layerSpacing = 120;
+  const nodeSpacing = 100;
+  const width = window.innerWidth;
+  let currentY = 80;
+
+  Object.keys(byLayer).sort((a, b) => a - b).forEach(layer => {
+    const layerNodes = byLayer[layer];
+    for (let i = 0; i < layerNodes.length; i += MAX_PER_ROW) {
+      const row = layerNodes.slice(i, i + MAX_PER_ROW);
+      const totalWidth = (row.length - 1) * nodeSpacing;
+      const startX = (width - totalWidth) / 2;
+      row.forEach((n, j) => {
+        n.x = startX + j * nodeSpacing;
+        n.y = currentY;
+      });
+      currentY += layerSpacing;
+    }
+  });
+}
+
+// ---- Render ----
+function render() {
+  const container = document.getElementById("graph-container");
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  d3.select("#graph").selectAll("*").remove();
+
+  svg = d3.select("#graph")
+    .attr("viewBox", [0, 0, width, height]);
+
+  // Arrowhead markers
+  const defs = svg.append("defs");
+  defs.append("marker")
+    .attr("id", "arrow-jump")
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 10)
+    .attr("refY", 0)
+    .attr("markerWidth", 8)
+    .attr("markerHeight", 8)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-5L10,0L0,5")
+    .attr("fill", "#4a6fa5");
+
+  defs.append("marker")
+    .attr("id", "arrow-call")
+    .attr("class", "call-marker")
+    .attr("viewBox", "0 -5 10 10")
+    .attr("refX", 10)
+    .attr("refY", 0)
+    .attr("markerWidth", 8)
+    .attr("markerHeight", 8)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-5L10,0L0,5")
+    .attr("fill", "#e94560");
+
+  gRoot = svg.append("g");
+
+  // Zoom
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 4])
+    .on("zoom", (event) => gRoot.attr("transform", event.transform));
+
+  svg.call(zoom);
+  window._zoom = zoom;
+
+  // Build nodes/edges copies for D3
+  const nodes = graphData.nodes.map(d => ({ ...d }));
+  const edges = graphData.edges.map(d => ({ ...d }));
+  _renderNodes = nodes;  // expose for drag handlers
+
+  // Build node map for O(1) lookups
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  if (useHierarchical) {
+    computeHierarchicalPositions(nodes, edges);
+  } else {
+    // Random initial positions for force layout
+    nodes.forEach(n => {
+      n.x = width / 2 + (Math.random() - 0.5) * 400;
+      n.y = height / 2 + (Math.random() - 0.5) * 400;
+    });
+  }
+
+  // Links
+  linkGroup = gRoot.append("g").attr("class", "links");
+  const links = linkGroup.selectAll("line")
+    .data(edges)
+    .join("line")
+    .attr("class", d => "edge " + d.type)
+    .attr("marker-end", d => d.type === "call" ? "url(#arrow-call)" : "url(#arrow-jump)");
+
+  // Node groups
+  nodeGroup = gRoot.append("g").attr("class", "nodes");
+  const nodeG = nodeGroup.selectAll("g")
+    .data(nodes)
+    .join("g")
+    .attr("class", "node-group")
+    .on("click", (event, d) => { event.stopPropagation(); jumpTo(d.id); })
+    .on("mouseover", (event, d) => showTooltip(event, d))
+    .on("mousemove", (event, d) => showTooltip(event, d))
+    .on("mouseout", hideTooltip)
+    .call(d3.drag()
+      .on("start", dragStart)
+      .on("drag", dragging)
+      .on("end", dragEnd));
+
+  nodeG.append("circle")
+    .attr("class", "node-circle")
+    .attr("r", d => nodeRadius(d))
+    .attr("fill", d => nodeColor(d))
+    .attr("stroke", d => d3.color(nodeColor(d)).brighter(0.5));
+
+  nodeG.append("text")
+    .attr("class", "node-label")
+    .attr("dy", d => nodeRadius(d) + 14)
+    .text(d => d.id);
+
+  // Menu badge
+  nodeG.filter(d => d.has_menu)
+    .append("text")
+    .attr("class", "node-badge")
+    .attr("dy", 4)
+    .text("?");
+
+  // Helper to find a node by edge source/target (handles both string and object)
+  function findNode(ref) {
+    const id = typeof ref === "object" ? ref.id : ref;
+    return nodeMap.get(id);
+  }
+
+  // Update edge positions with shortened endpoints
+  function updateEdgePositions() {
+    links.each(function(d) {
+      const s = findNode(d.source);
+      const t = findNode(d.target);
+      if (!s || !t) return;
+      const end = shortenEdge(s.x, s.y, t.x, t.y, nodeRadius(t));
+      d3.select(this)
+        .attr("x1", s.x).attr("y1", s.y)
+        .attr("x2", end.x).attr("y2", end.y);
+    });
+  }
+
+  if (useHierarchical) {
+    // Static positions
+    nodeG.attr("transform", d => `translate(${d.x},${d.y})`);
+    updateEdgePositions();
+
+    // Auto-fit view
+    autoFit(nodes);
+  } else {
+    // Force simulation
+    simulation = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(edges).id(d => d.id).distance(100))
+      .force("charge", d3.forceManyBody().strength(-300))
+      .force("center", d3.forceCenter(width / 2, height / 2))
+      .force("y", d3.forceY(height / 2).strength(0.05))
+      .on("tick", () => {
+        updateEdgePositions();
+        nodeG.attr("transform", d => `translate(${d.x},${d.y})`);
+      });
+  }
+}
+
+function autoFit(nodes) {
+  if (nodes.length === 0) return;
+  const padding = 60;
+  const container = document.getElementById("graph-container");
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  nodes.forEach(n => {
+    minX = Math.min(minX, n.x);
+    maxX = Math.max(maxX, n.x);
+    minY = Math.min(minY, n.y);
+    maxY = Math.max(maxY, n.y);
+  });
+
+  const graphW = maxX - minX + padding * 2;
+  const graphH = maxY - minY + padding * 2;
+  const scale = Math.min(W / graphW, H / graphH, 1.5);
+  const tx = W / 2 - (minX + maxX) / 2 * scale;
+  const ty = H / 2 - (minY + maxY) / 2 * scale;
+
+  svg.transition().duration(500).call(
+    window._zoom.transform,
+    d3.zoomIdentity.translate(tx, ty).scale(scale)
+  );
+}
+
+// ---- Drag ----
+function dragStart(event, d) {
+  if (simulation) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x;
+    d.fy = d.y;
+  }
+}
+
+function dragging(event, d) {
+  d.x = d.fx = event.x;
+  d.y = d.fy = event.y;
+
+  if (useHierarchical) {
+    d3.select(this).attr("transform", `translate(${d.x},${d.y})`);
+    // Update edges using nodeMap for O(1) lookups
+    const findDragNode = (ref) => {
+      if (typeof ref === "object") return ref;
+      return nodeMap.get(ref);
+    };
+    linkGroup.selectAll("line").each(function(e) {
+      const s = findDragNode(e.source);
+      const t = findDragNode(e.target);
+      if (!s || !t) return;
+      const end = shortenEdge(s.x, s.y, t.x, t.y, nodeRadius(t));
+      d3.select(this)
+        .attr("x1", s.x).attr("y1", s.y)
+        .attr("x2", end.x).attr("y2", end.y);
+    });
+  }
+}
+
+function dragEnd(event, d) {
+  if (simulation) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null;
+    d.fy = null;
+  }
+}
+
+// ---- Controls ----
+function resetZoom() {
+  const container = document.getElementById("graph-container");
+  svg.transition().duration(500).call(
+    window._zoom.transform,
+    d3.zoomIdentity.translate(container.clientWidth / 2, container.clientHeight / 2).scale(0.8).translate(-container.clientWidth / 2, -container.clientHeight / 2)
+  );
+}
+
+function toggleLayout() {
+  useHierarchical = !useHierarchical;
+  if (simulation) { simulation.stop(); simulation = null; }
+  render();
+}
+
+// Search
+document.getElementById("search-box").addEventListener("input", (e) => {
+  const query = e.target.value.toLowerCase();
+  d3.selectAll(".node-group").classed("highlighted", d => {
+    return query && d.id.toLowerCase().includes(query);
+  });
+});
+
+// ---- Init ----
+loadGraph();
+checkStatus();
+setInterval(checkStatus, 5000);
+</script>
+</body>
+</html>

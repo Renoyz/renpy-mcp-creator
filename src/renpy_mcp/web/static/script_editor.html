@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ren'Py Script Editor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Nav ---- */
+#nav {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+  height: 44px;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+#nav h1 { font-size: 15px; font-weight: 600; color: #e94560; }
+
+#nav a {
+  color: #888;
+  text-decoration: none;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: background 0.2s, color 0.2s;
+}
+
+#nav a:hover, #nav a.active { color: #e0e0e0; background: #0f3460; }
+
+.nav-spacer { flex: 1; }
+
+/* ---- Layout ---- */
+#layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ---- Sidebar ---- */
+#sidebar {
+  width: 220px;
+  background: #16213e;
+  border-right: 1px solid #0f3460;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+#sidebar-header {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4ecca3;
+  border-bottom: 1px solid #0f3460;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.file-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #aaa;
+}
+
+.file-item:hover { background: #0f346040; }
+.file-item.active { background: #0f3460; color: #e0e0e0; }
+
+/* ---- Main content ---- */
+#content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 40px;
+}
+
+#content-empty {
+  text-align: center;
+  color: #555;
+  margin-top: 100px;
+  font-size: 14px;
+}
+
+/* ---- Flowchart blocks ---- */
+.flow-container {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.block {
+  position: relative;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  cursor: pointer;
+}
+
+.block:hover {
+  border-color: #0f3460;
+}
+
+.block.editing {
+  border-color: #4ecca3;
+  box-shadow: 0 0 0 1px #4ecca340;
+}
+
+.block-inner {
+  padding: 8px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.block-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.block-content {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  min-width: 0;
+}
+
+.block-line {
+  font-size: 10px;
+  color: #555;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+/* Block types */
+.block-label { background: #4ecca310; border-left: 3px solid #4ecca3; }
+.block-label .block-badge { background: #4ecca330; color: #4ecca3; }
+
+.block-dialogue { background: #4a6fa510; }
+.block-dialogue .block-badge { background: #4a6fa530; color: #6fa8dc; }
+
+.block-narration { background: #9b59b610; }
+.block-narration .block-badge { background: #9b59b620; color: #b07cd8; }
+
+.block-menu { background: #e9a04510; border-left: 3px solid #e9a045; }
+.block-menu .block-badge { background: #e9a04530; color: #e9a045; }
+
+.block-scene, .block-show, .block-hide {
+  background: #2ecc7110;
+}
+.block-scene .block-badge, .block-show .block-badge, .block-hide .block-badge {
+  background: #2ecc7120; color: #2ecc71;
+}
+
+.block-jump, .block-call {
+  background: #e9456010;
+  border-left: 3px solid #e94560;
+}
+.block-jump .block-badge, .block-call .block-badge {
+  background: #e9456030; color: #e94560;
+}
+
+.block-return { background: #e9456010; border-left: 3px solid #e94560; }
+.block-return .block-badge { background: #e9456030; color: #e94560; }
+
+.block-audio { background: #1abc9c10; }
+.block-audio .block-badge { background: #1abc9c20; color: #1abc9c; }
+
+.block-python { background: #f39c1210; }
+.block-python .block-badge { background: #f39c1220; color: #f39c12; }
+
+.block-condition { background: #3498db10; border-left: 3px solid #3498db; }
+.block-condition .block-badge { background: #3498db20; color: #3498db; }
+
+.block-define, .block-default { background: #16213e; }
+.block-define .block-badge, .block-default .block-badge { background: #0f346060; color: #888; }
+
+.block-comment { background: transparent; }
+.block-comment .block-content { color: #555; font-style: italic; }
+.block-comment .block-badge { background: transparent; color: #444; }
+
+.block-other { background: #16213e; }
+.block-other .block-badge { background: #0f346060; color: #666; }
+
+/* Menu choices */
+.menu-choices {
+  margin-top: 6px;
+  padding-left: 4px;
+}
+
+.menu-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 4px 8px;
+  background: #0f346030;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.choice-arrow {
+  color: #e9a045;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.choice-text { color: #e9a045; }
+
+.choice-body {
+  color: #888;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* Connector lines between blocks */
+.connector {
+  width: 2px;
+  height: 8px;
+  background: #0f3460;
+  margin: 0 auto;
+}
+
+.connector-branch {
+  height: 16px;
+  background: #e9a04540;
+}
+
+/* ---- Edit modal ---- */
+#edit-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+
+#edit-overlay.open { display: flex; }
+
+#edit-panel {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+#edit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #0f3460;
+}
+
+#edit-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #4ecca3;
+}
+
+#edit-close {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+#edit-close:hover { color: #e0e0e0; }
+
+#edit-body {
+  padding: 16px;
+}
+
+.edit-field {
+  margin-bottom: 12px;
+}
+
+.edit-field label {
+  display: block;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.edit-field input, .edit-field textarea, .edit-field select {
+  width: 100%;
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #1a4080;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.edit-field textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: monospace;
+}
+
+#edit-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #0f3460;
+}
+
+.btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid #1a4080;
+  background: #0f3460;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.btn:hover { background: #1a4080; }
+.btn-primary { background: #4ecca3; color: #1a1a2e; border-color: #4ecca3; font-weight: 600; }
+.btn-primary:hover { background: #3db890; }
+.btn-danger { background: #e94560; color: #fff; border-color: #e94560; }
+.btn-danger:hover { background: #d03050; }
+
+/* ---- Add block button ---- */
+.add-block-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 4px auto;
+  border-radius: 50%;
+  background: #0f3460;
+  border: 1px dashed #1a4080;
+  color: #666;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s;
+  opacity: 0;
+}
+
+.flow-container:hover .add-block-btn { opacity: 0.5; }
+.add-block-btn:hover { opacity: 1 !important; background: #1a4080; color: #4ecca3; }
+
+/* ---- Toast ---- */
+#toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  padding: 8px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  transition: transform 0.3s, opacity 0.3s;
+  z-index: 200;
+}
+
+#toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+#toast.success { background: #4ecca3; color: #1a1a2e; }
+#toast.error { background: #e94560; color: #fff; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div id="nav">
+  <h1>Ren'Py Script Editor</h1>
+  <a href="/story-map">Story Map</a>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/script-editor" class="active">Script Editor</a>
+  <a href="/heatmap">Heatmap</a>
+  <a href="/assets">Assets</a>
+  <span class="nav-spacer"></span>
+</div>
+
+<div id="layout">
+  <div id="sidebar">
+    <div id="sidebar-header">Script Files</div>
+    <div id="file-list"></div>
+  </div>
+  <div id="content">
+    <div id="content-empty">Select a .rpy file to view its structure</div>
+    <div class="flow-container" id="flow" style="display:none;"></div>
+  </div>
+</div>
+
+<div id="edit-overlay" onclick="if(event.target===this)closeEditor()">
+  <div id="edit-panel">
+    <div id="edit-header">
+      <span id="edit-title">Edit Block</span>
+      <button id="edit-close" onclick="closeEditor()">&times;</button>
+    </div>
+    <div id="edit-body"></div>
+    <div id="edit-footer">
+      <button class="btn" onclick="closeEditor()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let currentFile = "";
+let blocks = [];
+let characters = [];
+let allLabels = [];
+let editingBlock = null;
+
+// ---- API ----
+async function api(method, url, body) {
+  const opts = { method };
+  if (body) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  return (await fetch(url, opts)).json();
+}
+
+// ---- Load files ----
+async function loadFiles() {
+  const data = await api("GET", "/api/script/files");
+  const list = document.getElementById("file-list");
+  list.innerHTML = "";
+  for (const file of (data.files || [])) {
+    const el = document.createElement("div");
+    el.className = "file-item";
+    el.textContent = file;
+    el.onclick = () => selectFile(file);
+    list.appendChild(el);
+  }
+  // Also load characters and labels
+  const [charData, labelData] = await Promise.all([
+    api("GET", "/api/characters"),
+    api("GET", "/api/labels"),
+  ]);
+  characters = charData.characters || [];
+  allLabels = labelData.labels || [];
+}
+
+async function selectFile(file) {
+  currentFile = file;
+  document.querySelectorAll(".file-item").forEach(el => {
+    el.classList.toggle("active", el.textContent === file);
+  });
+  const data = await api("GET", `/api/script/parse?file=${encodeURIComponent(file)}`);
+  if (data.error) {
+    toast(data.error, true);
+    return;
+  }
+  blocks = data.blocks || [];
+  renderFlow();
+}
+
+// ---- Render flowchart ----
+function renderFlow() {
+  const flow = document.getElementById("flow");
+  const empty = document.getElementById("content-empty");
+  flow.style.display = "block";
+  empty.style.display = "none";
+  flow.innerHTML = "";
+
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    const el = createBlockElement(b, i);
+    flow.appendChild(el);
+
+    // Add connector between blocks (not after last)
+    if (i < blocks.length - 1) {
+      const nextType = blocks[i + 1].type;
+      const conn = document.createElement("div");
+      conn.className = "connector" + (b.type === "menu" ? " connector-branch" : "");
+      flow.appendChild(conn);
+    }
+
+    // Add "+" button between blocks for inserting
+    if (i < blocks.length - 1) {
+      const addBtn = document.createElement("div");
+      addBtn.className = "add-block-btn";
+      addBtn.textContent = "+";
+      addBtn.title = "Insert block here";
+      addBtn.onclick = () => openInsertDialog(i + 1);
+      flow.appendChild(addBtn);
+    }
+  }
+}
+
+function createBlockElement(b, index) {
+  const el = document.createElement("div");
+  el.className = `block block-${b.type}`;
+  el.onclick = () => openEditor(b, index);
+
+  let badge = b.type.toUpperCase();
+  let content = "";
+
+  switch (b.type) {
+    case "label":
+      badge = "LABEL";
+      content = `<strong>${esc(b.name)}</strong>`;
+      break;
+    case "dialogue":
+      badge = charName(b.character);
+      content = esc(b.text);
+      break;
+    case "narration":
+      badge = "NARR";
+      content = esc(b.text);
+      break;
+    case "menu":
+      content = b.prompt ? `<div style="margin-bottom:6px;color:#aaa;">${esc(b.prompt)}</div>` : "";
+      content += '<div class="menu-choices">';
+      for (const c of (b.choices || [])) {
+        content += `<div class="menu-choice">
+          <span class="choice-arrow">&rsaquo;</span>
+          <div>
+            <div class="choice-text">${esc(c.text)}</div>
+            ${c.body.length ? `<div class="choice-body">${c.body.map(esc).join(" / ")}</div>` : ""}
+          </div>
+        </div>`;
+      }
+      content += '</div>';
+      break;
+    case "scene":
+    case "show":
+    case "hide":
+      content = `<code>${b.type} ${esc(b.target)}</code>`;
+      if (b.transition) content += ` <span style="color:#666">with ${esc(b.transition)}</span>`;
+      break;
+    case "jump":
+      content = `&rarr; <strong>${esc(b.target)}</strong>`;
+      break;
+    case "call":
+      content = `call <strong>${esc(b.target)}</strong>`;
+      break;
+    case "return":
+      content = `<strong>return</strong>`;
+      break;
+    case "audio":
+      content = `${b.action} ${b.channel} <code>${esc(b.target)}</code>`;
+      break;
+    case "python":
+      content = `<code>$ ${esc(b.code)}</code>`;
+      break;
+    case "condition":
+      content = `<code>${esc(b.keyword)} ${esc(b.condition || "")}</code>`;
+      if (b.raw && b.raw.length > 1) {
+        content += `<div style="font-size:11px;color:#666;margin-top:2px;">${b.raw.length} lines</div>`;
+      }
+      break;
+    case "define":
+    case "default":
+      badge = b.type.toUpperCase();
+      content = `<code>${esc(b.name)} = ${esc(b.value)}</code>`;
+      break;
+    case "comment":
+      badge = "#";
+      content = esc(b.text);
+      break;
+    default:
+      content = `<code>${esc(b.text || b.raw?.[0] || "")}</code>`;
+  }
+
+  el.innerHTML = `
+    <div class="block-inner">
+      <span class="block-badge">${badge}</span>
+      <div class="block-content">${content}</div>
+      <span class="block-line">L${b.line_start}</span>
+    </div>`;
+  return el;
+}
+
+function charName(id) {
+  const c = characters.find(c => c.id === id);
+  return c ? c.name : id || "???";
+}
+
+// ---- Editor ----
+function openEditor(block, index) {
+  editingBlock = { ...block, index };
+  const body = document.getElementById("edit-body");
+  const title = document.getElementById("edit-title");
+  title.textContent = `Edit: ${block.type}`;
+
+  let html = "";
+
+  switch (block.type) {
+    case "dialogue":
+      html = `
+        <div class="edit-field">
+          <label>Character</label>
+          <select id="ed-char">
+            ${characters.map(c => `<option value="${c.id}" ${c.id === block.character ? "selected" : ""}>${c.name} (${c.id})</option>`).join("")}
+          </select>
+        </div>
+        <div class="edit-field">
+          <label>Text</label>
+          <textarea id="ed-text" rows="3">${esc(block.text)}</textarea>
+        </div>`;
+      break;
+    case "narration":
+      html = `
+        <div class="edit-field">
+          <label>Text</label>
+          <textarea id="ed-text" rows="3">${esc(block.text)}</textarea>
+        </div>`;
+      break;
+    case "jump":
+      html = `
+        <div class="edit-field">
+          <label>Target Label</label>
+          <select id="ed-target">
+            ${allLabels.map(l => `<option value="${l}" ${l === block.target ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
+        </div>`;
+      break;
+    case "call":
+      html = `
+        <div class="edit-field">
+          <label>Target Label</label>
+          <select id="ed-target">
+            ${allLabels.map(l => `<option value="${l}" ${l === block.target ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
+        </div>`;
+      break;
+    case "scene":
+    case "show":
+    case "hide":
+      html = `
+        <div class="edit-field">
+          <label>Image / Target</label>
+          <input id="ed-target" value="${esc(block.target)}">
+        </div>
+        <div class="edit-field">
+          <label>Transition</label>
+          <input id="ed-transition" value="${esc(block.transition || "")}" placeholder="e.g. fade, dissolve">
+        </div>`;
+      break;
+    case "python":
+      html = `
+        <div class="edit-field">
+          <label>Python Expression</label>
+          <input id="ed-code" value="${esc(block.code)}">
+        </div>`;
+      break;
+    case "audio":
+      html = `
+        <div class="edit-field">
+          <label>Action</label>
+          <select id="ed-action">
+            ${["play","stop","queue"].map(a => `<option ${a === block.action ? "selected" : ""}>${a}</option>`).join("")}
+          </select>
+        </div>
+        <div class="edit-field">
+          <label>Channel</label>
+          <select id="ed-channel">
+            ${["music","sound","audio","voice"].map(c => `<option ${c === block.channel ? "selected" : ""}>${c}</option>`).join("")}
+          </select>
+        </div>
+        <div class="edit-field">
+          <label>File / Arguments</label>
+          <input id="ed-target" value="${esc(block.target)}">
+        </div>`;
+      break;
+    case "label":
+      html = `
+        <div class="edit-field">
+          <label>Label Name</label>
+          <input id="ed-name" value="${esc(block.name)}">
+        </div>`;
+      break;
+    default:
+      // Show raw editor for complex blocks
+      html = `
+        <div class="edit-field">
+          <label>Raw Content</label>
+          <textarea id="ed-raw" rows="6" style="font-family:monospace;font-size:12px;">${esc((block.raw || []).join("\n"))}</textarea>
+        </div>`;
+      break;
+  }
+
+  body.innerHTML = html;
+  document.getElementById("edit-overlay").classList.add("open");
+
+  // Focus first input
+  setTimeout(() => {
+    const first = body.querySelector("input,textarea,select");
+    if (first && first.tagName !== "SELECT") first.focus();
+  }, 100);
+}
+
+function closeEditor() {
+  document.getElementById("edit-overlay").classList.remove("open");
+  editingBlock = null;
+}
+
+async function saveEdit() {
+  if (!editingBlock) return;
+  const b = editingBlock;
+  const indent = "    "; // Standard 4-space indent
+  let newLines = [];
+
+  switch (b.type) {
+    case "dialogue": {
+      const char = document.getElementById("ed-char").value;
+      const text = document.getElementById("ed-text").value;
+      newLines = [`${indent}${char} "${text}"`];
+      break;
+    }
+    case "narration": {
+      const text = document.getElementById("ed-text").value;
+      newLines = [`${indent}"${text}"`];
+      break;
+    }
+    case "jump": {
+      const target = document.getElementById("ed-target").value;
+      newLines = [`${indent}jump ${target}`];
+      break;
+    }
+    case "call": {
+      const target = document.getElementById("ed-target").value;
+      newLines = [`${indent}call ${target}`];
+      break;
+    }
+    case "scene":
+    case "show":
+    case "hide": {
+      const target = document.getElementById("ed-target").value;
+      const trans = document.getElementById("ed-transition").value.trim();
+      newLines = [`${indent}${b.type} ${target}`];
+      if (trans) newLines.push(`${indent}with ${trans}`);
+      break;
+    }
+    case "python": {
+      const code = document.getElementById("ed-code").value;
+      newLines = [`${indent}$ ${code}`];
+      break;
+    }
+    case "audio": {
+      const action = document.getElementById("ed-action").value;
+      const channel = document.getElementById("ed-channel").value;
+      const target = document.getElementById("ed-target").value;
+      newLines = [`${indent}${action} ${channel} ${target}`];
+      break;
+    }
+    case "label": {
+      const name = document.getElementById("ed-name").value.trim();
+      newLines = [`label ${name}:`];
+      break;
+    }
+    default: {
+      const raw = document.getElementById("ed-raw").value;
+      newLines = raw.split("\n");
+      break;
+    }
+  }
+
+  // Send edit to server
+  const result = await api("POST", "/api/script/save", {
+    file: currentFile,
+    edits: [{
+      line_start: b.line_start,
+      line_end: b.line_end,
+      new_lines: newLines,
+    }],
+  });
+
+  if (result.success) {
+    blocks = result.blocks;
+    renderFlow();
+    closeEditor();
+    toast("Saved");
+  } else {
+    toast(result.error || "Save failed", true);
+  }
+}
+
+// ---- Insert dialog ----
+function openInsertDialog(afterIndex) {
+  const block = blocks[afterIndex - 1];
+  const insertLine = block ? block.line_end + 1 : 1;
+
+  editingBlock = {
+    type: "_insert",
+    index: afterIndex,
+    insert_after_line: insertLine,
+  };
+
+  const body = document.getElementById("edit-body");
+  document.getElementById("edit-title").textContent = "Insert Block";
+  body.innerHTML = `
+    <div class="edit-field">
+      <label>Block Type</label>
+      <select id="ins-type" onchange="updateInsertFields()">
+        <option value="dialogue">Dialogue</option>
+        <option value="narration">Narration</option>
+        <option value="scene">Scene Change</option>
+        <option value="show">Show Character</option>
+        <option value="jump">Jump</option>
+      </select>
+    </div>
+    <div id="ins-fields"></div>`;
+  updateInsertFields();
+  document.getElementById("edit-overlay").classList.add("open");
+}
+
+function updateInsertFields() {
+  const type = document.getElementById("ins-type").value;
+  const fields = document.getElementById("ins-fields");
+
+  switch (type) {
+    case "dialogue":
+      fields.innerHTML = `
+        <div class="edit-field">
+          <label>Character</label>
+          <select id="ins-char">
+            ${characters.map(c => `<option value="${c.id}">${c.name} (${c.id})</option>`).join("")}
+          </select>
+        </div>
+        <div class="edit-field">
+          <label>Text</label>
+          <textarea id="ins-text" rows="2" placeholder="Enter dialogue..."></textarea>
+        </div>`;
+      break;
+    case "narration":
+      fields.innerHTML = `
+        <div class="edit-field">
+          <label>Text</label>
+          <textarea id="ins-text" rows="2" placeholder="Enter narration..."></textarea>
+        </div>`;
+      break;
+    case "scene":
+      fields.innerHTML = `
+        <div class="edit-field">
+          <label>Background</label>
+          <input id="ins-target" placeholder="e.g. bg meadow">
+        </div>
+        <div class="edit-field">
+          <label>Transition</label>
+          <input id="ins-transition" value="fade">
+        </div>`;
+      break;
+    case "show":
+      fields.innerHTML = `
+        <div class="edit-field">
+          <label>Character / Image</label>
+          <input id="ins-target" placeholder="e.g. sylvie green smile">
+        </div>
+        <div class="edit-field">
+          <label>Transition</label>
+          <input id="ins-transition" value="dissolve">
+        </div>`;
+      break;
+    case "jump":
+      fields.innerHTML = `
+        <div class="edit-field">
+          <label>Target Label</label>
+          <select id="ins-target">
+            ${allLabels.map(l => `<option value="${l}">${l}</option>`).join("")}
+          </select>
+        </div>`;
+      break;
+  }
+}
+
+// Override saveEdit for inserts
+const _origSave = saveEdit;
+saveEdit = async function() {
+  if (!editingBlock || editingBlock.type !== "_insert") {
+    return _origSave();
+  }
+
+  const type = document.getElementById("ins-type").value;
+  const indent = "    ";
+  let newLines = [""];  // blank line before
+
+  switch (type) {
+    case "dialogue": {
+      const char = document.getElementById("ins-char").value;
+      const text = document.getElementById("ins-text").value;
+      if (!text) { toast("Text is required", true); return; }
+      newLines.push(`${indent}${char} "${text}"`);
+      break;
+    }
+    case "narration": {
+      const text = document.getElementById("ins-text").value;
+      if (!text) { toast("Text is required", true); return; }
+      newLines.push(`${indent}"${text}"`);
+      break;
+    }
+    case "scene": {
+      const target = document.getElementById("ins-target").value;
+      const trans = document.getElementById("ins-transition").value.trim();
+      newLines.push(`${indent}scene ${target}`);
+      if (trans) newLines.push(`${indent}with ${trans}`);
+      break;
+    }
+    case "show": {
+      const target = document.getElementById("ins-target").value;
+      const trans = document.getElementById("ins-transition").value.trim();
+      newLines.push(`${indent}show ${target}`);
+      if (trans) newLines.push(`${indent}with ${trans}`);
+      break;
+    }
+    case "jump": {
+      const target = document.getElementById("ins-target").value;
+      newLines.push(`${indent}jump ${target}`);
+      break;
+    }
+  }
+
+  const insertLine = editingBlock.insert_after_line;
+  const result = await api("POST", "/api/script/save", {
+    file: currentFile,
+    edits: [{
+      line_start: insertLine + 1,
+      line_end: insertLine, // empty range = insert
+      new_lines: newLines,
+    }],
+  });
+
+  if (result.success) {
+    blocks = result.blocks;
+    renderFlow();
+    closeEditor();
+    toast("Block inserted");
+  } else {
+    toast(result.error || "Insert failed", true);
+  }
+};
+
+// ---- Utils ----
+function esc(s) {
+  if (!s) return "";
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function toast(msg, isError) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = isError ? "show error" : "show success";
+  setTimeout(() => el.className = "", 2500);
+}
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeEditor();
+});
+
+// ---- Init ----
+loadFiles();
+</script>
+</body>
+</html>
