@@ -220,6 +220,8 @@ def test_ws_chat_injects_current_project_into_system_prompt(
     assert "already know the current project" in prompt.lower()
     assert project_name in prompt
     assert str(project_dir) in prompt
+    assert "read the relevant project file" in prompt.lower()
+    assert "do not claim a project file was modified" in prompt.lower()
 
 
 def test_ws_chat_does_not_block_http_routes(monkeypatch, client: TestClient, tmp_path: Path) -> None:
@@ -353,3 +355,61 @@ def test_ws_chat_tool_call(monkeypatch, client: TestClient, tmp_path: Path) -> N
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert data["delta"] == "Done"
+
+
+def test_ws_chat_only_streams_new_assistant_messages(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Second turns should not replay assistant text that was already sent."""
+    game_dir = tmp_path / "incremental_proj" / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+
+    class FakeEngine:
+        def __init__(self, mcp=None, provider=None):
+            self.turn = 0
+
+        async def run_turn(self, messages):
+            self.turn += 1
+            if self.turn == 1:
+                return {
+                    "messages": [
+                        {"role": "user", "content": "first"},
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "First reply"}],
+                        },
+                    ]
+                }
+            return {
+                "messages": [
+                    {"role": "user", "content": "first"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "First reply"}],
+                    },
+                    {"role": "user", "content": "second"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Second reply"}],
+                    },
+                ]
+            }
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", FakeEngine)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "hello", "project_name": "incremental_proj"})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert data["delta"] == "First reply"
+
+        websocket.send_json({"type": "user_message", "content": "hello again", "project_name": "incremental_proj"})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert data["delta"] == "Second reply"

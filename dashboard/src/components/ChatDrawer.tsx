@@ -44,6 +44,9 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const summarizeToolResult = (content: string): string | null => {
     try {
       const parsed = JSON.parse(content);
+      if (parsed?.success && typeof parsed?.message === "string" && parsed.message.trim()) {
+        return parsed.message;
+      }
       if (parsed?.image_type === "background") {
         const first =
           parsed.relative_files?.[0] ?? parsed.files?.[0] ?? parsed.primary_file ?? null;

@@ -162,6 +162,8 @@ def test_dashboard_chat_generates_background_into_project(
     expect(
         page.locator("text=Background saved to game/images/background/mock_courtyard.png")
     ).to_be_visible(timeout=10000)
+    expect(page.locator("text=tool start")).to_have_count(0)
+    expect(page.locator("text=tool result")).to_have_count(0)
 
     generated_file = (
         e2e_workspace / project_name / "game" / "images" / "background" / "mock_courtyard.png"

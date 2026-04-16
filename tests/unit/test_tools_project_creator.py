@@ -191,6 +191,79 @@ class TestGenerateScript:
         assert content.count("scene bg_room") == 1
 
     @pytest.mark.asyncio
+    async def test_attach_background_to_start_replaces_existing_scene(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "replace_scene_test"})
+        project_path = workspace / "replace_scene_test"
+        script_file = project_path / "game" / "script.rpy"
+        script_file.write_text(
+            'label start:\n'
+            '    scene black\n'
+            '    "Welcome."\n'
+            '    return\n',
+            encoding="utf-8",
+        )
+
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "replace_scene_test", "image_name": "bg academy"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+
+        content = script_file.read_text(encoding="utf-8")
+        assert "scene bg academy" in content
+        assert "scene black" not in content
+        assert content.index("scene bg academy") < content.index('"Welcome."')
+
+    @pytest.mark.asyncio
+    async def test_attach_background_to_start_cleans_stale_following_scene(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "cleanup_scene_test"})
+        project_path = workspace / "cleanup_scene_test"
+        script_file = project_path / "game" / "script.rpy"
+        script_file.write_text(
+            'label start:\n'
+            '    scene bg academy\n'
+            '    scene black\n'
+            '    "Welcome."\n'
+            '    return\n',
+            encoding="utf-8",
+        )
+
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "cleanup_scene_test", "image_name": "bg academy"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+
+        content = script_file.read_text(encoding="utf-8")
+        assert content.count("scene bg academy") == 1
+        assert "scene black" not in content
+
+    @pytest.mark.asyncio
+    async def test_attach_background_to_start_registers_image_definition(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "register_image_test"})
+        project_path = workspace / "register_image_test"
+        background_dir = project_path / "game" / "images" / "background"
+        background_dir.mkdir(parents=True, exist_ok=True)
+        (background_dir / "bg-school.png").write_bytes(b"fake-png")
+
+        result = await mcp.call_tool(
+            "attach_background_to_start",
+            {"project_name": "register_image_test", "image_name": "bg school"},
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+
+        script_file = project_path / "game" / "script.rpy"
+        content = script_file.read_text(encoding="utf-8")
+        assert 'image bg school = "images/background/bg-school.png"' in content
+        assert "scene bg school" in content
+
+    @pytest.mark.asyncio
     async def test_attach_background_to_start_missing_label(self, fresh_mcp):
         mcp, workspace = fresh_mcp
         await mcp.call_tool("create_project", {"name": "missing_label_test"})

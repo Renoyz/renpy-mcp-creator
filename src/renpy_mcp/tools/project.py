@@ -11,6 +11,48 @@ from ..config import RenPyConfig, get_settings
 from ..renpy_runner import RenPyRunner
 from ..services.project_manager import ProjectManager
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
+
+
+def _normalize_image_lookup(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[_\-]+", " ", value).strip().lower())
+
+
+def _find_matching_image_path(project_dir: Path, image_name: str) -> Path | None:
+    images_dir = project_dir / "game" / "images"
+    if not images_dir.exists():
+        return None
+
+    target = _normalize_image_lookup(image_name)
+    for file_path in images_dir.rglob("*"):
+        if not file_path.is_file() or file_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        if _normalize_image_lookup(file_path.stem) == target:
+            return file_path
+    return None
+
+
+def _ensure_image_definition(
+    lines: list[str], image_name: str, relative_asset_path: str
+) -> tuple[list[str], bool]:
+    definition_line = f'image {image_name} = "{relative_asset_path}"\n'
+    definition_re = re.compile(rf'^\s*image\s+{re.escape(image_name)}\s*=')
+
+    for idx, line in enumerate(lines):
+        if definition_re.match(line):
+            if line == definition_line:
+                return lines, False
+            lines[idx] = definition_line
+            return lines, True
+
+    insert_idx = 0
+    while insert_idx < len(lines) and lines[insert_idx].strip().startswith("image "):
+        insert_idx += 1
+    lines.insert(insert_idx, definition_line)
+    if insert_idx < len(lines) - 1 and lines[insert_idx + 1].strip():
+        lines.insert(insert_idx + 1, "\n")
+    return lines, True
+
 
 def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
     """Register project-related MCP tools."""
@@ -239,6 +281,12 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
         content = script_path.read_text(encoding="utf-8")
         lines = content.splitlines(keepends=True)
         label_re = re.compile(r'^\s*label\s+start\s*:\s*$')
+        matched_asset = _find_matching_image_path(project_dir, image_name)
+        registration_changed = False
+
+        if matched_asset is not None:
+            asset_relative = str(matched_asset.relative_to(project_dir / "game")).replace("\\", "/")
+            lines, registration_changed = _ensure_image_definition(lines, image_name, asset_relative)
 
         label_idx = -1
         for i, line in enumerate(lines):
@@ -253,42 +301,82 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
                 ensure_ascii=False,
             )
 
-        # Check if scene image_name already exists under this label
         scene_line = f"    scene {image_name}\n"
-        already_exists = False
+        first_statement_idx = None
+        next_label_idx = len(lines)
+
         for j in range(label_idx + 1, len(lines)):
             line = lines[j]
-            # Stop checking if we hit another label or a non-indented/non-empty/non-comment line
             stripped = line.strip()
             if stripped.startswith("label ") and stripped.endswith(":"):
+                next_label_idx = j
                 break
-            if stripped == "":
+            if stripped == "" or stripped.startswith("#"):
                 continue
-            if stripped.startswith("#"):
-                continue
-            if line.strip() == scene_line.strip():
-                already_exists = True
-                break
-            # Any other indented statement means scene is not the first real statement
-            break
+            if first_statement_idx is None:
+                first_statement_idx = j
 
-        if already_exists:
+        cleanup_applied = False
+        if first_statement_idx is not None and lines[first_statement_idx].strip() == scene_line.strip():
+            cleanup_indices: list[int] = []
+            for j in range(first_statement_idx + 1, next_label_idx):
+                stripped = lines[j].strip()
+                if stripped == "" or stripped.startswith("#"):
+                    continue
+                if stripped.startswith("scene "):
+                    cleanup_indices.append(j)
+                    continue
+                break
+
+            if cleanup_indices:
+                for idx in reversed(cleanup_indices):
+                    lines.pop(idx)
+                script_path.write_text("".join(lines), encoding="utf-8")
+                cleanup_applied = True
+                return json.dumps(
+                    {
+                        "success": True,
+                        "image_name": image_name,
+                        "file": str(script_path.relative_to(project_dir)),
+                        "message": "Removed stale opening scene statements after the selected background.",
+                        "registered_asset": registration_changed,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+        if first_statement_idx is not None and lines[first_statement_idx].strip() == scene_line.strip() and not cleanup_applied:
             return json.dumps(
                 {
                     "success": True,
                     "image_name": image_name,
                     "file": str(script_path.relative_to(project_dir)),
                     "message": "scene already present; no changes made",
+                    "registered_asset": registration_changed,
                 },
                 indent=2,
                 ensure_ascii=False,
             )
 
-        # Insert scene right after label start:
-        lines.insert(label_idx + 1, scene_line)
+        if first_statement_idx is None:
+            lines.insert(label_idx + 1, scene_line)
+            message = f"Inserted opening scene '{image_name}' into label start."
+        elif lines[first_statement_idx].lstrip().startswith("scene "):
+            lines[first_statement_idx] = scene_line
+            message = f"Replaced opening scene with '{image_name}' in label start."
+        else:
+            lines.insert(first_statement_idx, scene_line)
+            message = f"Inserted opening scene '{image_name}' before the first statement in label start."
+
         script_path.write_text("".join(lines), encoding="utf-8")
         return json.dumps(
-            {"success": True, "image_name": image_name, "file": str(script_path.relative_to(project_dir))},
+            {
+                "success": True,
+                "image_name": image_name,
+                "file": str(script_path.relative_to(project_dir)),
+                "message": message,
+                "registered_asset": registration_changed,
+            },
             indent=2,
             ensure_ascii=False,
         )

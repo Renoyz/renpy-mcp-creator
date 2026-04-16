@@ -108,53 +108,11 @@ def _system_prompt_for_current_project(engine: ChatEngine) -> str:
         f"- Current project path: {project_path}\n"
         "You already know the current project from the workspace context. "
         "Use it as the default target for project-scoped requests. "
-        "Do not ask the user to repeat the current project name or path unless they explicitly want to operate on a different project."
-    )
-
-
-def _tool_result_summary(content: str, success: bool) -> str | None:
-    """Create a user-facing summary from a tool_result content payload."""
-    if not success:
-        return None
-
-    result_data = content
-    if isinstance(result_data, str):
-        try:
-            result_data = json.loads(result_data)
-        except json.JSONDecodeError:
-            return None
-
-    if not isinstance(result_data, dict):
-        return None
-
-    image_type = result_data.get("image_type")
-    if image_type == "background":
-        paths = result_data.get("relative_files") or result_data.get("files") or []
-        first = paths[0] if isinstance(paths, list) and paths else result_data.get("primary_file")
-        if first:
-            return f"Background saved to {first}"
-        return "Background saved."
-
-    if image_type == "character":
-        paths = result_data.get("transparent_files") or result_data.get("relative_files") or result_data.get("files") or []
-        first = paths[0] if isinstance(paths, list) and paths else result_data.get("primary_file")
-        if first:
-            return f"Character sprite saved to {first}"
-        return "Character sprite saved."
-
-    return None
-    project_path = _current_project_path.get()
-    if project_path is None:
-        return base_prompt
-
-    return (
-        f"{base_prompt}\n\n"
-        "The user is already working inside a selected Ren'Py project.\n"
-        f"- Current project name: {project_path.name}\n"
-        f"- Current project path: {project_path}\n"
-        "You already know the current project from the workspace context. "
-        "Use it as the default target for project-scoped requests. "
-        "Do not ask the user to repeat the current project name or path unless they explicitly want to operate on a different project."
+        "Do not ask the user to repeat the current project name or path unless they explicitly want to operate on a different project.\n"
+        "For any request that modifies project content or files (backgrounds, characters, dialogue, choices, options, or scripts), "
+        "read the relevant project file(s) first, then apply concrete tool-based edits to those files.\n"
+        "Do not claim a project file was modified unless a tool_result has just confirmed success.\n"
+        "When updating existing script content, replace conflicting statements instead of appending duplicates."
     )
 
 
@@ -176,9 +134,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
         engine = ChatEngine(mcp=mcp, provider=provider)
         messages: list[dict[str, Any]] = []
+        sent_message_count = 0
 
         async def _send_turn_result(result: dict[str, Any]) -> None:
             """Stream a turn result over the WebSocket."""
+            nonlocal sent_message_count
             if result.get("type") == "awaiting_confirmation":
                 confirmation = result.get("confirmation", {})
                 await websocket.send_json(
@@ -196,8 +156,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "error", "message": result["error"]})
                 return
 
-            # Replay messages in chronological order
-            for msg in result.get("messages", []):
+            result_messages = result.get("messages", [])
+
+            # Stream only newly-added messages so earlier assistant replies are
+            # not replayed on subsequent turns. Some tests and lightweight
+            # adapters return only the latest turn instead of cumulative
+            # history; fall back to replaying the whole result in that case.
+            start_index = sent_message_count if len(result_messages) > sent_message_count else 0
+            for msg in result_messages[start_index:]:
                 role = msg.get("role")
                 if role == "assistant":
                     content = msg.get("content", [])
@@ -219,14 +185,6 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     if isinstance(content, list):
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
-                                summary = _tool_result_summary(
-                                    block.get("content", ""),
-                                    bool(block.get("success", False)),
-                                )
-                                if summary:
-                                    await websocket.send_json(
-                                        {"type": "assistant_delta", "delta": summary}
-                                    )
                                 await websocket.send_json(
                                     {
                                         "type": "tool_result",
@@ -236,6 +194,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                         },
                                     }
                                 )
+            sent_message_count = len(result_messages)
 
         try:
             while True:
