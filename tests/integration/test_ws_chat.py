@@ -1,5 +1,6 @@
 """Integration tests for /ws/chat WebSocket endpoint."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -413,3 +414,222 @@ def test_ws_chat_only_streams_new_assistant_messages(
         data = websocket.receive_json()
         assert data["type"] == "assistant_delta"
         assert data["delta"] == "Second reply"
+
+
+def test_ws_chat_persists_history_to_file(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """After a chat turn, the conversation should be persisted to disk and retrievable via API."""
+    project_name = "persist_chat_proj"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+
+    class FakeEngine:
+        def __init__(self, mcp=None, provider=None):
+            pass
+
+        async def run_turn(self, messages):
+            return {
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Persisted reply"}],
+                    },
+                ]
+            }
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", FakeEngine)
+
+    # Select project so the history API accepts the request
+    r = client.post("/api/projects/select", json={"name": project_name})
+    assert r.status_code == 200
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "hello", "project_name": project_name})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert data["delta"] == "Persisted reply"
+
+    # Verify file was written
+    history_file = tmp_path / project_name / "logs" / "chat-history.json"
+    assert history_file.exists()
+    raw = json.loads(history_file.read_text(encoding="utf-8"))
+    assert any(m.get("role") == "user" and m.get("content") == "hello" for m in raw["messages"])
+    assert any(
+        m.get("role") == "assistant"
+        and any(b.get("text") == "Persisted reply" for b in m.get("content", []))
+        for m in raw["messages"]
+    )
+
+    # Verify API returns the persisted messages
+    api_resp = client.get(f"/api/projects/{project_name}/chat/history")
+    assert api_resp.status_code == 200
+    api_data = api_resp.json()
+    assert any(m.get("role") == "user" and m.get("content") == "hello" for m in api_data["messages"])
+    assert any(
+        m.get("role") == "assistant"
+        and any(b.get("text") == "Persisted reply" for b in m.get("content", []))
+        for m in api_data["messages"]
+    )
+
+
+def test_ws_chat_project_isolation(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Chat history for one project must not leak into another project's history file."""
+    for name in ("proj_a", "proj_b"):
+        game_dir = tmp_path / name / "game"
+        game_dir.mkdir(parents=True)
+        (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+
+    class FakeEngine:
+        def __init__(self, mcp=None, provider=None):
+            pass
+
+        async def run_turn(self, messages):
+            from renpy_mcp.config import _current_project_path
+            path = _current_project_path.get()
+            return {
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": str(path.name) if path else "none"}],
+                    },
+                ]
+            }
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", FakeEngine)
+
+    for name in ("proj_a", "proj_b"):
+        r = client.post("/api/projects/select", json={"name": name})
+        assert r.status_code == 200
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"type": "user_message", "content": "hi", "project_name": name})
+            websocket.receive_json()
+
+    for name in ("proj_a", "proj_b"):
+        history_file = tmp_path / name / "logs" / "chat-history.json"
+        assert history_file.exists()
+        data = json.loads(history_file.read_text(encoding="utf-8"))
+        assert all(name in str(m.get("content", "")) for m in data["messages"] if m.get("role") == "assistant")
+
+        other = "proj_b" if name == "proj_a" else "proj_a"
+        assert not any(other in str(m.get("content", "")) for m in data["messages"] if m.get("role") == "assistant")
+
+
+def test_ws_chat_persists_history_via_session_project(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Even when frontend does not send project_name, history should be persisted using the session project."""
+    project_name = "session_history_proj"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+
+    class FakeEngine:
+        def __init__(self, mcp=None, provider=None):
+            pass
+
+        async def run_turn(self, messages):
+            return {
+                "messages": [
+                    {"role": "user", "content": "hello session"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Session reply"}],
+                    },
+                ]
+            }
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", FakeEngine)
+
+    r = client.post("/api/projects/select", json={"name": project_name})
+    assert r.status_code == 200
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        # intentionally omit project_name
+        websocket.send_json({"type": "user_message", "content": "hello session"})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert data["delta"] == "Session reply"
+
+    history_file = tmp_path / project_name / "logs" / "chat-history.json"
+    assert history_file.exists()
+    raw = json.loads(history_file.read_text(encoding="utf-8"))
+    assert any(m.get("role") == "user" and m.get("content") == "hello session" for m in raw["messages"])
+    assert any(
+        m.get("role") == "assistant"
+        and any(b.get("text") == "Session reply" for b in m.get("content", []))
+        for m in raw["messages"]
+    )
+
+
+def test_ws_chat_history_survives_app_recreate(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """History written via WS should be readable after recreating the app (simulating server restart)."""
+    project_name = "restart_history_proj"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._get_provider",
+        lambda: type("P", (), {"complete": lambda **kw: []})(),
+    )
+
+    class FakeEngine:
+        def __init__(self, mcp=None, provider=None):
+            pass
+
+        async def run_turn(self, messages):
+            return {
+                "messages": [
+                    {"role": "user", "content": "write me"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Persisted across restart"}],
+                    },
+                ]
+            }
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", FakeEngine)
+
+    r = client.post("/api/projects/select", json={"name": project_name})
+    assert r.status_code == 200
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "write me", "project_name": project_name})
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+
+    # Simulate server restart: recreate app and client
+    new_app = create_app()
+    new_client = TestClient(new_app)
+    new_client.post("/api/projects/select", json={"name": project_name})
+
+    r = new_client.get(f"/api/projects/{project_name}/chat/history")
+    assert r.status_code == 200
+    api_data = r.json()
+    assert any(m.get("role") == "user" and m.get("content") == "write me" for m in api_data["messages"])
+    assert any(
+        m.get("role") == "assistant"
+        and any(b.get("text") == "Persisted across restart" for b in m.get("content", []))
+        for m in api_data["messages"]
+    )

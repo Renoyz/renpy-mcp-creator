@@ -563,3 +563,61 @@ class TestBuildAndPreview:
         r = new_client.post("/api/projects/preview", json={})
         assert r.status_code == 200
         assert "127.0.0.1:55555" in r.json()["url"]
+
+
+class TestChatHistoryApi:
+    """Tests for /api/projects/{project_name}/chat/history."""
+
+    def test_chat_history_empty_when_no_history(self, client: TestClient):
+        project_name = "no_history_proj"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/chat/history")
+        assert r.status_code == 200
+        assert r.json()["messages"] == []
+
+    def test_chat_history_rejects_mismatched_project(self, client: TestClient):
+        client.post("/api/projects", json={"name": "proj_a"})
+        client.post("/api/projects", json={"name": "proj_b"})
+        client.post("/api/projects/select", json={"name": "proj_a"})
+
+        r = client.get("/api/projects/proj_b/chat/history")
+        assert r.status_code == 400
+        assert "current project" in r.json()["detail"].lower()
+
+    def test_chat_history_returns_persisted_messages(self, client: TestClient, temp_project: Path):
+        from renpy_mcp.web.chat_ws import _write_chat_history
+
+        project_name = temp_project.name
+        client.post("/api/projects/select", json={"name": project_name})
+
+        fake_messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},
+        ]
+        _write_chat_history(project_name, fake_messages)
+
+        r = client.get(f"/api/projects/{project_name}/chat/history")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["messages"] == fake_messages
+
+    def test_chat_history_isolated_per_project(self, client: TestClient, tmp_path: Path):
+        from renpy_mcp.web.chat_ws import _write_chat_history
+
+        for name in ("hist_a", "hist_b"):
+            game_dir = tmp_path / name / "game"
+            game_dir.mkdir(parents=True)
+            (game_dir / "script.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+            _write_chat_history(name, [{"role": "user", "content": f"msg_for_{name}"}])
+
+        client.post("/api/projects/select", json={"name": "hist_a"})
+        r = client.get("/api/projects/hist_a/chat/history")
+        assert r.status_code == 200
+        assert r.json()["messages"][0]["content"] == "msg_for_hist_a"
+
+        client.post("/api/projects/select", json={"name": "hist_b"})
+        r = client.get("/api/projects/hist_b/chat/history")
+        assert r.status_code == 200
+        assert r.json()["messages"][0]["content"] == "msg_for_hist_b"

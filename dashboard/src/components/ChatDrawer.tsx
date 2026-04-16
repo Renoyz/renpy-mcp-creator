@@ -31,6 +31,92 @@ interface ChatDrawerProps {
   wsUrl?: string;
 }
 
+const summarizeToolResult = (content: string): string | null => {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed?.success && typeof parsed?.message === "string" && parsed.message.trim()) {
+      return parsed.message;
+    }
+    if (parsed?.image_type === "background") {
+      const first =
+        parsed.relative_files?.[0] ?? parsed.files?.[0] ?? parsed.primary_file ?? null;
+      return first ? `Background saved to ${first}` : "Background saved.";
+    }
+    if (parsed?.image_type === "character") {
+      const first =
+        parsed.transparent_files?.[0] ??
+        parsed.relative_files?.[0] ??
+        parsed.files?.[0] ??
+        parsed.primary_file ??
+        null;
+      return first ? `Character sprite saved to ${first}` : "Character sprite saved.";
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+function convertHistoryToMessages(history: any[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+  const genId = () => `${Date.now()}_${Math.random()}`;
+  for (const msg of history) {
+    const role = msg.role;
+    const content = msg.content;
+    if (role === "user") {
+      if (typeof content === "string" && content.trim()) {
+        result.push({ id: genId(), type: "user", content, timestamp: Date.now() });
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "tool_result") {
+            const toolContent = block.content || "";
+            let parsed: any = null;
+            try {
+              parsed = JSON.parse(toolContent);
+            } catch {
+              parsed = null;
+            }
+            if (parsed?.primary_preview_url) {
+              const label =
+                parsed.image_type === "background"
+                  ? "Background generated"
+                  : "Character sprite generated";
+              result.push({
+                id: genId(),
+                type: "assistant",
+                content: label,
+                imageUrl: parsed.primary_preview_url,
+                timestamp: Date.now(),
+              });
+            } else {
+              const summary = summarizeToolResult(toolContent);
+              if (summary) {
+                result.push({ id: genId(), type: "assistant", content: summary, timestamp: Date.now() });
+              }
+            }
+          }
+        }
+      }
+    } else if (role === "assistant") {
+      if (Array.isArray(content)) {
+        const textParts: string[] = [];
+        for (const block of content) {
+          if (block.type === "text") {
+            textParts.push(block.text || "");
+          }
+        }
+        const joined = textParts.join("");
+        if (joined.trim()) {
+          result.push({ id: genId(), type: "assistant", content: joined, timestamp: Date.now() });
+        }
+      } else if (typeof content === "string" && content.trim()) {
+        result.push({ id: genId(), type: "assistant", content, timestamp: Date.now() });
+      }
+    }
+  }
+  return result;
+}
+
 export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -40,37 +126,40 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
   const [reconnectKey, setReconnectKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const historyRequestIdRef = useRef(0);
   const { currentProject } = useProject();
-
-  const summarizeToolResult = (content: string): string | null => {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed?.success && typeof parsed?.message === "string" && parsed.message.trim()) {
-        return parsed.message;
-      }
-      if (parsed?.image_type === "background") {
-        const first =
-          parsed.relative_files?.[0] ?? parsed.files?.[0] ?? parsed.primary_file ?? null;
-        return first ? `Background saved to ${first}` : "Background saved.";
-      }
-      if (parsed?.image_type === "character") {
-        const first =
-          parsed.transparent_files?.[0] ??
-          parsed.relative_files?.[0] ??
-          parsed.files?.[0] ??
-          parsed.primary_file ??
-          null;
-        return first ? `Character sprite saved to ${first}` : "Character sprite saved.";
-      }
-    } catch {
-      return null;
-    }
-    return null;
-  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!open || !currentProject?.name) {
+      if (!currentProject?.name) setMessages([]);
+      return;
+    }
+    historyRequestIdRef.current += 1;
+    const requestId = historyRequestIdRef.current;
+    setMessages([]);
+    const controller = new AbortController();
+    fetch(`/api/projects/${encodeURIComponent(currentProject.name)}/chat/history`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : Promise.resolve({ messages: [] })))
+      .then((data) => {
+        if (historyRequestIdRef.current !== requestId) return;
+        const history = Array.isArray(data.messages) ? data.messages : [];
+        setMessages(convertHistoryToMessages(history));
+      })
+      .catch((err) => {
+        if (historyRequestIdRef.current !== requestId) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setMessages([]);
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [open, currentProject?.name]);
 
   useEffect(() => {
     const handleProjectChange = () => {

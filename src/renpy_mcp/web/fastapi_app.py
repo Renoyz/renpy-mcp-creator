@@ -370,6 +370,13 @@ def create_app() -> FastAPI:
             "updated_at": status.get("updated_at"),
         }
 
+    @app.get("/api/projects/{project_name}/chat/history")
+    async def api_chat_history(request: Request, project_name: str):
+        from .chat_ws import _read_chat_history
+        name = _resolve_current_project_name(request, {"name": project_name})
+        messages = _read_chat_history(name)
+        return {"messages": messages}
+
     @app.post("/api/projects/preview")
     async def api_preview_project(request: Request):
         body = await request.json()

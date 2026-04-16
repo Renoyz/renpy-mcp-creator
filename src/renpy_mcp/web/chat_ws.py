@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -11,6 +12,39 @@ from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
 
 router = APIRouter()
+
+
+def _chat_history_path(project_name: str) -> Path:
+    settings = get_settings()
+    return settings.workspace / project_name / "logs" / "chat-history.json"
+
+
+def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> None:
+    path = _chat_history_path(project_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"messages": messages}, indent=2), encoding="utf-8")
+
+
+def _read_chat_history(project_name: str) -> list[dict[str, Any]]:
+    path = _chat_history_path(project_name)
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("messages", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _active_project_name(websocket: WebSocket, payload_project_name: str | None = None) -> str | None:
+    """Resolve the currently-bound project name from contextvar, session, or payload."""
+    path = _current_project_path.get()
+    if path is not None:
+        return path.name
+    if payload_project_name:
+        return payload_project_name
+    session = websocket.scope.get("session", {})
+    return session.get("current_project_name")
+
 
 # General chat queries that do not require an active project.
 # Intentionally conservative: only greetings and help/introduction intents.
@@ -229,6 +263,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     result = await engine.run_turn(messages)
                     await _send_turn_result(result)
                     messages = result.get("messages", messages)
+                    active_project = _active_project_name(websocket, project_name)
+                    if active_project:
+                        _write_chat_history(active_project, messages)
 
                 elif msg_type == "confirmation_response":
                     confirmation_id = payload.get("confirmation_id", "")
@@ -287,6 +324,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     result = await engine.run_turn(messages)
                     await _send_turn_result(result)
                     messages = result.get("messages", messages)
+                    active_project = pending.project_name or _active_project_name(websocket, project_name)
+                    if active_project:
+                        _write_chat_history(active_project, messages)
                 else:
                     await websocket.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
 
