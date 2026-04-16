@@ -16,6 +16,14 @@ export function ProjectWorkspacePage() {
   const [previewMessage, setPreviewMessage] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewAvailable, setPreviewAvailable] = useState(false);
+
+  const activeProject =
+    currentProject?.name === name
+      ? currentProject
+      : resolvedProject?.name === name
+      ? resolvedProject
+      : null;
 
   useEffect(() => {
     if (!name) return;
@@ -34,12 +42,21 @@ export function ProjectWorkspacePage() {
     }
   }, [name, currentProject, selectProject, navigate]);
 
-  const activeProject =
-    currentProject?.name === name
-      ? currentProject
-      : resolvedProject?.name === name
-      ? resolvedProject
-      : null;
+  useEffect(() => {
+    if (!activeProject) return;
+    fetch("/api/projects/build/status")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.status && data.status !== "idle") {
+          setBuildStatus(data.status);
+          setBuildMessage(data.message || "");
+          setPreviewAvailable(!!data.previewable);
+        }
+      })
+      .catch(() => {
+        // ignore
+      });
+  }, [activeProject]);
 
   const handleBuild = async () => {
     if (!activeProject) return;
@@ -56,9 +73,11 @@ export function ProjectWorkspacePage() {
       if (resp.ok && data.success) {
         setBuildStatus("success");
         setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
+        setPreviewAvailable(true);
       } else {
         setBuildStatus("failed");
         setBuildMessage(data.error || "Build failed");
+        setPreviewAvailable(false);
       }
     } catch (e) {
       setBuildStatus("failed");
@@ -164,6 +183,9 @@ export function ProjectWorkspacePage() {
           }`}
         >
           {buildMessage}
+          {previewAvailable && (
+            <div className="mt-1 text-xs text-green-600">Preview available</div>
+          )}
         </div>
       )}
 

@@ -6,6 +6,7 @@ import re
 import struct
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -127,6 +128,55 @@ def _store_previewable_build_result(project_name: str, output_path: Path | None)
         _last_build_results[project_name] = preview_path
     else:
         _last_build_results.pop(project_name, None)
+
+
+def _build_status_path(project_name: str) -> Path:
+    """Return the path to the project's persisted build status file."""
+    settings = get_settings()
+    return settings.workspace / project_name / "logs" / "build-status.json"
+
+
+def _write_build_status(
+    project_name: str,
+    status: str,
+    message: str,
+    output_path: Path | None,
+    target: str = "web",
+) -> None:
+    """Persist build status to disk."""
+    status_file = _build_status_path(project_name)
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "message": message,
+        "output_path": str(output_path) if output_path else None,
+        "previewable": _previewable_output_path(output_path) is not None,
+        "target": target,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    status_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _read_build_status(project_name: str) -> dict | None:
+    """Read persisted build status if it exists."""
+    status_file = _build_status_path(project_name)
+    if not status_file.exists():
+        return None
+    try:
+        return json.loads(status_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _resolve_preview_build_dir(project_name: str) -> Path | None:
+    """Resolve the previewable build directory from memory cache or persisted status."""
+    cached = _last_build_results.get(project_name)
+    if cached is not None:
+        return Path(cached)
+    persisted = _read_build_status(project_name)
+    if persisted and persisted.get("previewable") and persisted.get("output_path"):
+        return Path(persisted["output_path"])
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +325,7 @@ def create_app() -> FastAPI:
             build_dir.mkdir(parents=True, exist_ok=True)
             (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
             _store_previewable_build_result(name, build_dir)
+            _write_build_status(name, "success", f"Built to {build_dir}", build_dir, target=target)
             return BuildResult(
                 project_name=name,
                 target=target,
@@ -286,9 +337,38 @@ def create_app() -> FastAPI:
         result = await manager.build(BuildRequest(project_name=name, target=target))
         if result.success:
             _store_previewable_build_result(name, result.output_path)
+            _write_build_status(
+                name,
+                "success",
+                f"Built to {result.output_path}" if result.output_path else "Build succeeded",
+                result.output_path,
+                target=target,
+            )
         else:
             _last_build_results.pop(name, None)
+            _write_build_status(
+                name,
+                "failed",
+                result.error or "Build failed",
+                None,
+                target=target,
+            )
         return result.model_dump(mode="json")
+
+    @app.get("/api/projects/build/status")
+    async def api_build_status(request: Request):
+        name = _resolve_current_project_name(request)
+        status = _read_build_status(name)
+        if status is None:
+            return {"status": "idle", "message": "", "output_path": None, "previewable": False, "target": None, "updated_at": None}
+        return {
+            "status": status.get("status", "idle"),
+            "message": status.get("message", ""),
+            "output_path": status.get("output_path"),
+            "previewable": status.get("previewable", False),
+            "target": status.get("target"),
+            "updated_at": status.get("updated_at"),
+        }
 
     @app.post("/api/projects/preview")
     async def api_preview_project(request: Request):
@@ -297,7 +377,7 @@ def create_app() -> FastAPI:
         project_dir = resolve_project_dir(name)
         if not project_dir:
             raise HTTPException(status_code=404, detail="Project not found")
-        build_dir = _last_build_results.get(name)
+        build_dir = _resolve_preview_build_dir(name)
         if build_dir is None:
             raise HTTPException(status_code=404, detail="No successful build available. Run build first.")
         build_dir = Path(build_dir)

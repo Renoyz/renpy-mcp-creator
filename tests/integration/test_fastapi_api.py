@@ -458,3 +458,108 @@ class TestBuildAndPreview:
         preview = client.post("/api/projects/preview", json={})
         assert preview.status_code == 404
         assert "No successful build available" in preview.json()["detail"]
+
+    def test_build_status_written_on_success(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        project_name = "build_status_success_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+
+        status = client.get("/api/projects/build/status")
+        assert status.status_code == 200
+        data = status.json()
+        assert data["status"] == "success"
+        assert "Built to" in data["message"]
+        assert data["previewable"] is False
+        assert data["target"] == "web"
+        assert data["updated_at"] is not None
+
+    def test_build_status_written_on_failure(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
+        from renpy_mcp.services import build_manager as bm
+
+        monkeypatch.setattr(bm.BuildManager, "_resolve_toolchain", lambda self: None)
+
+        project_name = "build_status_fail_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is False
+
+        status = client.get("/api/projects/build/status")
+        assert status.status_code == 200
+        data = status.json()
+        assert data["status"] == "failed"
+        assert "No usable Ren'Py SDK found" in data["message"]
+        assert data["previewable"] is False
+        assert data["target"] == "web"
+        assert data["updated_at"] is not None
+
+    def test_preview_restores_after_app_recreation(self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        """Simulate server restart by clearing in-memory cache and recreating app."""
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+        from renpy_mcp.services import preview_manager as pm
+        from renpy_mcp.services.preview_manager import PreviewServer
+
+        workspace = get_settings().workspace
+
+        async def _mock_build(self, request):
+            output_path = workspace / f"{request.project_name}-dists" / f"{request.project_name}-web"
+            output_path.mkdir(parents=True, exist_ok=True)
+            (output_path / "index.html").write_text("<html></html>", encoding="utf-8")
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=output_path,
+            )
+
+        async def _mock_start(self, project_name, directory):
+            return PreviewServer(
+                project_name=project_name,
+                directory=directory,
+                port=55555,
+                process=None,  # type: ignore[arg-type]
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        monkeypatch.setattr(pm.PreviewManager, "start", _mock_start)
+
+        project_name = "restart_preview_test"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+
+        # Simulate restart: clear in-memory cache
+        import renpy_mcp.web.fastapi_app as fa
+        fa._last_build_results.pop(project_name, None)
+
+        # Recreate app (simulates new process)
+        new_app = create_app()
+        new_client = TestClient(new_app)
+        # Must select project in new client session
+        new_client.post("/api/projects/select", json={"name": project_name})
+
+        r = new_client.post("/api/projects/preview", json={})
+        assert r.status_code == 200
+        assert "127.0.0.1:55555" in r.json()["url"]

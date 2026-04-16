@@ -226,3 +226,46 @@ def test_workspace_build_and_preview(page: Page, server_url: str, e2e_workspace:
         """
     )
     assert stop_result["ok"] is True
+
+
+def test_workspace_build_status_survives_refresh(page: Page, server_url: str) -> None:
+    """Build success status and preview availability should survive page refresh."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_refresh_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    build_button = page.locator("button", has_text=re.compile("Build|Building"))
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+
+    expect(build_button).not_to_contain_text("Building", timeout=30000)
+    status_locator = page.locator("div.rounded-md.p-3")
+    expect(status_locator).to_be_visible(timeout=10000)
+    status_text = status_locator.text_content() or ""
+    assert "Build" in status_text or "Built" in status_text or "succeeded" in status_text
+    assert "Preview available" in status_text
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Build status message should still appear
+    refreshed_status = page.locator("div.rounded-md.p-3")
+    expect(refreshed_status).to_be_visible(timeout=10000)
+    refreshed_text = refreshed_status.text_content() or ""
+    assert "Build" in refreshed_text or "Built" in refreshed_text or "succeeded" in refreshed_text
+    assert "Preview available" in refreshed_text
+
+    # Preview should still work after refresh
+    preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
+    preview_button.click()
+    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+    preview_url = preview_link.get_attribute("href") or ""
+    assert preview_url.startswith("http://127.0.0.1")
+
+    # Stop preview server to avoid port leaks
+    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)

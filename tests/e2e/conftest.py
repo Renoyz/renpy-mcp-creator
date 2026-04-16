@@ -50,8 +50,8 @@ def server_url(e2e_workspace: Path):
     cmd = [sys.executable, "-m", "renpy_mcp.main", "--transport", "http", "--port", str(port)]
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env=env,
         cwd=str(REPO_ROOT),
     )
