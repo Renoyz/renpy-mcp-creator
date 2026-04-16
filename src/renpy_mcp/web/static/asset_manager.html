@@ -371,6 +371,18 @@ let summary = {};
 let currentFilter = "all";
 let showUnusedOnly = false;
 let currentAudio = null;
+let currentProjectName = "";
+
+async function init() {
+  const projResp = await fetch("/api/projects/current");
+  const projData = await projResp.json();
+  currentProjectName = projData.current_project?.name || "";
+  if (!currentProjectName) {
+    document.getElementById("grid").innerHTML = '<div style="padding:20px;color:#888">No active project selected.</div>';
+    return;
+  }
+  await init();
+}
 
 async function loadAssets() {
   const resp = await fetch("/api/assets");
@@ -445,7 +457,7 @@ function createCard(asset) {
 
   let preview;
   if (isImage) {
-    preview = `<img src="/api/asset-file/${encodedPath}" loading="lazy" alt="${esc(asset.name)}">`;
+    preview = `<img src="/api/projects/${encodeURIComponent(currentProjectName)}/asset-file/${encodedPath}" loading="lazy" alt="${esc(asset.name)}">`;
   } else if (isAudio) {
     preview = `
       <div class="audio-icon">&#9835;</div>
@@ -495,7 +507,7 @@ function toggleAudio(path, btn) {
     document.querySelectorAll(".play-btn").forEach(b => b.innerHTML = "&#9654;");
   }
 
-  const audio = new Audio(`/api/asset-file/${path}`);
+  const audio = new Audio(`/api/projects/${encodeURIComponent(currentProjectName)}/asset-file/${path}`);
   audio.dataset.path = path;
   audio.play();
   btn.innerHTML = "&#9646;&#9646;";
@@ -517,11 +529,11 @@ async function showDetail(path) {
   const preview = document.getElementById("detail-preview");
   const encodedPath = encodeURIComponent(asset.path);
   if (asset.category === "image") {
-    preview.innerHTML = `<img src="/api/asset-file/${encodedPath}" alt="${esc(asset.name)}">`;
+    preview.innerHTML = `<img src="/api/projects/${encodeURIComponent(currentProjectName)}/asset-file/${encodedPath}" alt="${esc(asset.name)}">`;
   } else if (asset.category === "audio") {
-    preview.innerHTML = `<audio controls src="/api/asset-file/${encodedPath}" style="width:80%;"></audio>`;
+    preview.innerHTML = `<audio controls src="/api/projects/${encodeURIComponent(currentProjectName)}/asset-file/${encodedPath}" style="width:80%;"></audio>`;
   } else {
-    preview.innerHTML = `<video controls src="/api/asset-file/${encodedPath}" style="max-width:100%;max-height:300px;"></video>`;
+    preview.innerHTML = `<video controls src="/api/projects/${encodeURIComponent(currentProjectName)}/asset-file/${encodedPath}" style="max-width:100%;max-height:300px;"></video>`;
   }
 
   let body = `

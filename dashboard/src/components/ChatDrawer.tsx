@@ -14,6 +14,7 @@ export interface ChatMessage {
   type: MessageType;
   content: string;
   toolName?: string;
+  imageUrl?: string;
   timestamp: number;
 }
 
@@ -121,17 +122,40 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
         }
         if (data.type === "tool_start" || data.type === "tool_result") {
           if (data.type === "tool_result" && data.result?.success) {
-            const summary = summarizeToolResult(data.result.content || "");
-            if (summary) {
+            let parsed: any = null;
+            try {
+              parsed = JSON.parse(data.result.content || "{}");
+            } catch {
+              parsed = null;
+            }
+            if (parsed?.primary_preview_url) {
+              const label =
+                parsed.image_type === "background"
+                  ? "Background generated"
+                  : "Character sprite generated";
               setMessages((prev) => [
                 ...prev,
                 {
                   id: `${Date.now()}_${Math.random()}`,
                   type: "assistant",
-                  content: summary,
+                  content: label,
+                  imageUrl: parsed.primary_preview_url,
                   timestamp: Date.now(),
                 },
               ]);
+            } else {
+              const summary = summarizeToolResult(data.result.content || "");
+              if (summary) {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: `${Date.now()}_${Math.random()}`,
+                    type: "assistant",
+                    content: summary,
+                    timestamp: Date.now(),
+                  },
+                ]);
+              }
             }
           }
           return;
@@ -281,6 +305,13 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
                     {msg.toolName && <span className="font-medium">({msg.toolName})</span>}
                   </div>
                   <div className="whitespace-pre-wrap">{msg.content}</div>
+                  {msg.imageUrl && (
+                    <img
+                      src={msg.imageUrl}
+                      alt="Generated asset"
+                      className="mt-2 max-h-48 rounded-md border"
+                    />
+                  )}
                 </div>
               </div>
             ))}

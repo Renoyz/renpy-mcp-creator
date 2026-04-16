@@ -697,13 +697,14 @@ def create_app() -> FastAPI:
                 continue
         return {"name": name, "locations": locations[:50]}
 
-    @app.get("/api/asset-file/{file_path:path}")
-    async def api_asset_file(file_path: str, config: RenPyConfig = Depends(get_config)):
-        if not config.project_path:
-            raise HTTPException(status_code=400, detail="No project set")
+    @app.get("/api/projects/{project_name}/asset-file/{file_path:path}")
+    async def api_project_asset_file(project_name: str, file_path: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
 
         file_rel = unquote(file_path)
-        game_dir = config.project_path / "game"
+        game_dir = project_dir / "game"
         filepath = game_dir / file_rel
         try:
             filepath.resolve().relative_to(game_dir.resolve())

@@ -159,9 +159,11 @@ def test_dashboard_chat_generates_background_into_project(
     click_send_button(page)
     confirm_pending_action(page)
 
-    expect(
-        page.locator("text=Background saved to game/images/background/mock_courtyard.png")
-    ).to_be_visible(timeout=10000)
+    expect(page.locator("img[alt='Generated asset']")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Background generated")).to_be_visible(timeout=10000)
+    img_src = page.locator("img[alt='Generated asset']").get_attribute("src")
+    assert "/api/projects/" in img_src
+    assert project_name in img_src
     expect(page.locator("text=tool start")).to_have_count(0)
     expect(page.locator("text=tool result")).to_have_count(0)
 

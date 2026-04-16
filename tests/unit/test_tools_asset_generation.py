@@ -74,6 +74,46 @@ class TestGenerateBackground:
             rel = data["relative_files"][0]
             assert rel.startswith("game/images/background/")
             assert "suggested_image_names" in data
+            assert "preview_urls" in data
+            assert "primary_preview_url" in data
+            assert data["primary_preview_url"] == "/api/projects/bg_test/asset-file/images/background/cafe.png"
+
+
+    @pytest.mark.asyncio
+    async def test_generate_background_url_encoding(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "bg_encode"})
+
+        mock_result = AsyncMock()
+        mock_result.success = True
+        mock_result.prompt = "a cafe"
+        mock_result.image_type = "background"
+        # Simulate a filename with spaces and Chinese characters
+        mock_result.files = [workspace / "bg_encode" / "game" / "images" / "background" / "my cafe 咖啡馆.png"]
+        mock_result.primary_file = workspace / "bg_encode" / "game" / "images" / "background" / "my cafe 咖啡馆.png"
+        mock_result.error = None
+        mock_result.model_dump = lambda mode="json": {
+            "success": True,
+            "prompt": "a cafe",
+            "image_type": "background",
+            "files": [str(workspace / "bg_encode" / "game" / "images" / "background" / "my cafe 咖啡馆.png")],
+            "primary_file": str(workspace / "bg_encode" / "game" / "images" / "background" / "my cafe 咖啡馆.png"),
+            "error": None,
+        }
+
+        with patch("renpy_mcp.tools.assets.image_service.is_available", return_value=True), patch(
+            "renpy_mcp.tools.assets.image_service.generate_image",
+            return_value=mock_result,
+        ):
+            result = await mcp.call_tool(
+                "generate_background",
+                {"project_name": "bg_encode", "description": "a cafe"},
+            )
+            data = json.loads(result[0][0].text)
+            assert data["success"] is True
+            url = data["primary_preview_url"]
+            assert url.startswith("/api/projects/bg_encode/asset-file/")
+            assert "%20" in url or "%E9%A6%86" in url
 
 
 class TestGenerateCharacter:
@@ -142,3 +182,6 @@ class TestGenerateCharacter:
             rel = data["relative_files"][0]
             assert rel.startswith("game/images/character/")
             assert "suggested_image_names" in data
+            assert "preview_urls" in data
+            assert "primary_preview_url" in data
+            assert data["primary_preview_url"] == "/api/projects/char_test/asset-file/images/character/alice_neutral_transparent.png"

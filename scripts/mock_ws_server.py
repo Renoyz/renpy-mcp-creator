@@ -81,6 +81,8 @@ async def handler(websocket) -> None:
                     continue
 
                 relative_path = _write_mock_background(project_name)
+                from urllib.parse import quote
+                preview_url = f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(relative_path.replace('game/', ''), safe='/')}"
                 await websocket.send(
                     json.dumps({"type": "tool_start", "tool_name": "generate_background"})
                 )
@@ -94,20 +96,15 @@ async def handler(websocket) -> None:
                                     {
                                         "success": True,
                                         "project": project_name,
+                                        "image_type": "background",
                                         "relative_files": [relative_path],
+                                        "preview_urls": [preview_url],
+                                        "primary_preview_url": preview_url,
                                         "suggested_image_names": ["mock courtyard"],
                                     },
                                     ensure_ascii=False,
                                 ),
                             },
-                        }
-                    )
-                )
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "assistant_delta",
-                            "delta": f"Background saved to {relative_path}",
                         }
                     )
                 )

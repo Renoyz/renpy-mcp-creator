@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from ..ai.background_remover import BackgroundRemover
 from ..ai.image_service import ImageService, _normalize_character_sizes
@@ -82,6 +83,16 @@ def register_asset_tools(mcp, config: RenPyConfig):
             payload["suggested_image_names"] = [
                 Path(path).stem.replace("_", " ") for path in relative_files
             ]
+            preview_urls = []
+            for rel in relative_files:
+                try:
+                    rel_in_game = Path(rel).relative_to("game")
+                    preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel_in_game.as_posix(), safe='/')}")
+                except ValueError:
+                    preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel, safe='/')}")
+            payload["preview_urls"] = preview_urls
+            payload["primary_preview_url"] = preview_urls[0]
+            payload["image_type"] = "background"
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     @mcp.tool()
@@ -174,11 +185,31 @@ def register_asset_tools(mcp, config: RenPyConfig):
             payload["suggested_image_names"] = [
                 Path(path).stem.replace("_", " ") for path in relative_files
             ]
+            preview_urls = []
+            for rel in relative_files:
+                try:
+                    rel_in_game = Path(rel).relative_to("game")
+                    preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel_in_game.as_posix(), safe='/')}")
+                except ValueError:
+                    preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel, safe='/')}")
+            payload["preview_urls"] = preview_urls
+            payload["primary_preview_url"] = preview_urls[0]
+            payload["image_type"] = "character"
         if transparent_files:
             payload["transparent_files"] = transparent_files
             payload["suggested_transparent_names"] = [
                 Path(path).stem.replace("_", " ") for path in transparent_files
             ]
+            transparent_preview_urls = []
+            for rel in transparent_files:
+                try:
+                    rel_in_game = Path(rel).relative_to("game")
+                    transparent_preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel_in_game.as_posix(), safe='/')}")
+                except ValueError:
+                    transparent_preview_urls.append(f"/api/projects/{quote(project_name, safe='')}/asset-file/{quote(rel, safe='/')}")
+            payload["transparent_preview_urls"] = transparent_preview_urls
+            # Prefer transparent version as primary preview for characters
+            payload["primary_preview_url"] = transparent_preview_urls[0]
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     def _collect_assets(game_dir: Path) -> dict[str, list[dict]]:

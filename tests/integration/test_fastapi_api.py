@@ -197,6 +197,61 @@ class TestFastApiScript:
         assert any("Updated line" in t for t in texts)
 
 
+class TestAssetFile:
+    def test_asset_file_serves_project_image(self, client: TestClient, temp_project: Path):
+        image_dir = temp_project / "game" / "images"
+        image_dir.mkdir(parents=True)
+        (image_dir / "test.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        r = client.get(f"/api/projects/{temp_project.name}/asset-file/images/test.png")
+        assert r.status_code == 200
+        assert r.headers.get("content-type") == "image/png"
+
+    def test_asset_file_blocks_traversal(self, client: TestClient, temp_project: Path):
+        # Create a file outside game_dir so traversal would succeed if not blocked
+        (temp_project / "secret.txt").write_text("leak", encoding="utf-8")
+
+        # Use URL-encoded traversal so httpx TestClient does not normalize it away
+        r = client.get(f"/api/projects/{temp_project.name}/asset-file/..%2fsecret.txt")
+        assert r.status_code == 403
+
+    def test_asset_file_survives_project_switch(self, client: TestClient, tmp_path: Path):
+        """An image URL for project A should still work after switching session to project B."""
+        # Create project A with an image
+        project_a = tmp_path / "project_a"
+        game_a = project_a / "game"
+        game_a.mkdir(parents=True)
+        (game_a / "script.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+        (game_a / "options.rpy").write_text("define config.name = _('A')\n", encoding="utf-8")
+        (game_a / "images").mkdir(parents=True, exist_ok=True)
+        (game_a / "images" / "bg_a.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        # Create project B with no image
+        project_b = tmp_path / "project_b"
+        game_b = project_b / "game"
+        game_b.mkdir(parents=True)
+        (game_b / "script.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+        (game_b / "options.rpy").write_text("define config.name = _('B')\n", encoding="utf-8")
+
+        # Select project B in session
+        r = client.post("/api/projects/select", json={"name": "project_b"})
+        assert r.status_code == 200
+
+        # Access project A image via explicit project route (no session dependency)
+        r = client.get("/api/projects/project_a/asset-file/images/bg_a.png")
+        assert r.status_code == 200
+        assert r.headers.get("content-type") == "image/png"
+
+        # Access project B image that does not exist
+        r = client.get("/api/projects/project_b/asset-file/images/bg_a.png")
+        assert r.status_code == 404
+
+    def test_asset_file_rejects_unknown_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_proj/asset-file/images/test.png")
+        assert r.status_code == 404
+        assert "Project not found" in r.json()["detail"]
+
+
 class TestBuildAndPreview:
     """Tests for build and preview endpoints."""
 
