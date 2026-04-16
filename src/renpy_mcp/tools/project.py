@@ -12,6 +12,14 @@ from ..renpy_runner import RenPyRunner
 from ..services.project_manager import ProjectManager
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
+_DEFAULT_CHARACTER_LAYOUT_BLOCK = (
+    "define left_pos = Position(xalign=0.2, yalign=1.0)\n"
+    "define center_pos = Position(xalign=0.5, yalign=1.0)\n"
+    "define right_pos = Position(xalign=0.8, yalign=1.0)\n"
+    "\n"
+    "transform scaled:\n"
+    "    zoom 0.65\n"
+)
 
 
 def _normalize_image_lookup(value: str) -> str:
@@ -52,6 +60,59 @@ def _ensure_image_definition(
     if insert_idx < len(lines) - 1 and lines[insert_idx + 1].strip():
         lines.insert(insert_idx + 1, "\n")
     return lines, True
+
+
+def _normalize_show_statement(line: str) -> str:
+    match = re.match(
+        r"^(?P<prefix>\s*show\s+\S+)(?:\s+at\s+(?P<at>.*?))?(?P<with>\s+with\s+.*)?$",
+        line.rstrip("\n"),
+    )
+    if not match:
+        return line
+
+    prefix = match.group("prefix")
+    at_clause = (match.group("at") or "").strip()
+    with_clause = match.group("with") or ""
+
+    if at_clause in {"scaled, left_pos", "scaled, center_pos", "scaled, right_pos"}:
+        return line
+
+    position_map = {
+        "left": "left_pos",
+        "center": "center_pos",
+        "right": "right_pos",
+    }
+    position = position_map.get(at_clause, "center_pos")
+    normalized = f"{prefix} at scaled, {position}{with_clause}"
+    return normalized + ("\n" if line.endswith("\n") else "")
+
+
+def _ensure_default_character_layout(script_content: str) -> str:
+    lines = script_content.splitlines(keepends=True)
+    show_re = re.compile(r"^\s*show\s+\S+")
+    if not any(show_re.match(line) for line in lines):
+        return script_content
+
+    lines = [_normalize_show_statement(line) if show_re.match(line) else line for line in lines]
+    content = "".join(lines)
+
+    if "transform scaled:" in content and "define center_pos = Position(" in content:
+        return content
+
+    insert_idx = 0
+    while insert_idx < len(lines):
+        stripped = lines[insert_idx].strip()
+        if stripped.startswith("define ") or stripped.startswith("image ") or stripped == "":
+            insert_idx += 1
+            continue
+        break
+
+    block = _DEFAULT_CHARACTER_LAYOUT_BLOCK
+    if insert_idx > 0 and lines[insert_idx - 1].strip():
+        block = "\n" + block
+    block += "\n"
+    lines.insert(insert_idx, block)
+    return "".join(lines)
 
 
 def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
@@ -215,11 +276,12 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
         script_path = project_dir / "game" / f"{safe_name}.rpy"
         script_path.parent.mkdir(parents=True, exist_ok=True)
 
-        script_path.write_text(script_content, encoding="utf-8")
+        normalized_script_content = _ensure_default_character_layout(script_content)
+        script_path.write_text(normalized_script_content, encoding="utf-8")
 
         # Extract the label name from the script content
         label_name = None
-        for line in script_content.split("\n"):
+        for line in normalized_script_content.split("\n"):
             line = line.strip()
             if line.startswith("label ") and ":" in line:
                 label_name = line[6 : line.index(":")].strip()
@@ -240,8 +302,8 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
 """
                 main_script.write_text(new_main_content, encoding="utf-8")
 
-        preview_lines = "\n".join(script_content.split("\n")[:15])
-        if len(script_content.split("\n")) > 15:
+        preview_lines = "\n".join(normalized_script_content.split("\n")[:15])
+        if len(normalized_script_content.split("\n")) > 15:
             preview_lines += "\n... (truncated)"
 
         message = f"Script saved to {script_path.relative_to(project_dir)}"

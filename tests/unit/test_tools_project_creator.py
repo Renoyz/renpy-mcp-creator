@@ -149,6 +149,35 @@ class TestGenerateScript:
         assert "call chapter1" in content
 
     @pytest.mark.asyncio
+    async def test_generate_script_injects_default_character_transforms(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        await mcp.call_tool("create_project", {"name": "transform_test"})
+        result = await mcp.call_tool(
+            "generate_script",
+            {
+                "project_name": "transform_test",
+                "script_name": "intro",
+                "script_content": (
+                    'define japanese_girl = Character("樱子", color="#ff69b4")\n'
+                    '\n'
+                    'label intro:\n'
+                    '    show japanese-girl at center with dissolve\n'
+                    '    japanese_girl "你好"\n'
+                    '    return\n'
+                ),
+            },
+        )
+        data = json.loads(result[0][0].text)
+        assert data["success"] is True
+
+        project_path = workspace / "transform_test"
+        script_file = project_path / "game" / "intro.rpy"
+        content = script_file.read_text(encoding="utf-8")
+        assert "transform scaled:" in content
+        assert "define center_pos = Position(xalign=0.5, yalign=1.0)" in content
+        assert "show japanese-girl at scaled, center_pos with dissolve" in content
+
+    @pytest.mark.asyncio
     async def test_attach_background_to_start(self, fresh_mcp):
         mcp, workspace = fresh_mcp
         await mcp.call_tool("create_project", {"name": "attach_test"})

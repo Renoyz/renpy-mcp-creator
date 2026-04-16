@@ -53,7 +53,7 @@ def _size_for_image_type(image_type: str) -> str:
     """Return recommended DashScope size string for the asset type."""
     if image_type == "background":
         return "1280*720"
-    return "1024*1024"
+    return "832*1248"
 
 
 class ImageService:

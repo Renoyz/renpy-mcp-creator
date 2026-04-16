@@ -117,6 +117,12 @@ class TestGenerateBackground:
 
 
 class TestGenerateCharacter:
+    def test_character_size_uses_portrait_ratio(self):
+        from renpy_mcp.ai.image_service import _size_for_image_type
+
+        assert _size_for_image_type("background") == "1280*720"
+        assert _size_for_image_type("character") == "832*1248"
+
     @pytest.mark.asyncio
     async def test_generate_character_no_api_key(self, fresh_mcp):
         mcp, workspace = fresh_mcp
