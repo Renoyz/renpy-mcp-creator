@@ -106,6 +106,45 @@ async def test_chat_engine_single_tool_call(mock_mcp: FastMCP) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_engine_preserves_json_tool_result_content() -> None:
+    mcp = FastMCP("asset-mcp")
+
+    @mcp.tool()
+    async def mock_image_tool() -> str:
+        return '{"primary_preview_url": "/api/projects/demo/asset-file/images/background/bg.png", "image_type": "background"}'
+
+    provider = FakeProvider(
+        responses=[
+            LLMResponse(
+                content_blocks=[
+                    {
+                        "type": "tool_use",
+                        "id": "call_bg_1",
+                        "name": "mock_image_tool",
+                        "input": {},
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            LLMResponse(
+                content_blocks=[{"type": "text", "text": "Generated background"}],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+
+    engine = ChatEngine(mcp, provider)
+    result = await engine.run_turn(messages=[{"role": "user", "content": "generate a background"}])
+
+    tool_result_block = result["messages"][2]["content"][0]
+    assert tool_result_block["type"] == "tool_result"
+    assert (
+        tool_result_block["content"]
+        == '{"primary_preview_url": "/api/projects/demo/asset-file/images/background/bg.png", "image_type": "background"}'
+    )
+
+
+@pytest.mark.asyncio
 async def test_chat_engine_tool_error_then_retry(mock_mcp: FastMCP) -> None:
     provider = FakeProvider(
         responses=[

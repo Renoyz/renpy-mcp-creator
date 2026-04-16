@@ -205,6 +205,17 @@ class ChatEngine:
         """Serialize tool output to a string for the LLM."""
         if isinstance(output, str):
             return output
+        # FastMCP call_tool commonly returns a tuple of:
+        #   ([TextContent(...)], {"result": "<raw tool string>"})
+        # Prefer the structured "result" payload so downstream clients can
+        # parse JSON tool outputs instead of receiving a Python repr.
+        if isinstance(output, tuple) and len(output) >= 2:
+            _, structured = output[0], output[1]
+            if isinstance(structured, dict) and "result" in structured:
+                return self._serialize_output(structured["result"])
+            output = output[0]
+        if isinstance(output, dict) and "result" in output and len(output) == 1:
+            return self._serialize_output(output["result"])
         if hasattr(output, "model_dump"):
             return json.dumps(output.model_dump(mode="json"), ensure_ascii=False)
         # Handle MCP content blocks (list of TextContent/ImageContent)

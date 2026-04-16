@@ -358,6 +358,78 @@ def test_ws_chat_tool_call(monkeypatch, client: TestClient, tmp_path: Path) -> N
         assert data["delta"] == "Done"
 
 
+def test_ws_chat_tool_result_keeps_json_payload(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Image-like tool results should reach the client as raw JSON strings."""
+    from renpy_mcp.chat_engine.providers import AnthropicProvider
+
+    game_dir = tmp_path / "image_proj" / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+
+    class FakeMessages:
+        call_count = 0
+
+        def create(self, **kwargs):
+            self.call_count += 1
+            msg = type(
+                "M",
+                (),
+                {
+                    "content": [],
+                    "stop_reason": "tool_use" if self.call_count == 1 else "end_turn",
+                    "usage": type("U", (), {"input_tokens": 5, "output_tokens": 5})(),
+                },
+            )()
+            if self.call_count == 1:
+                msg.content = [
+                    type(
+                        "B",
+                        (),
+                        {"type": "tool_use", "id": "call_img_1", "name": "mock_image_tool", "input": {}},
+                    )()
+                ]
+            else:
+                msg.content = [type("B", (), {"type": "text", "text": "Done"})()]
+            return msg
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    async def fake_call_tool(name: str, arguments: dict) -> tuple[list[object], dict[str, str]]:
+        assert name == "mock_image_tool"
+        payload = (
+            '{"primary_preview_url": "/api/projects/image_proj/asset-file/images/background/bg.png", '
+            '"image_type": "background"}'
+        )
+        block = type("TextContent", (), {"text": payload})()
+        return ([block], {"result": payload})
+
+    provider = AnthropicProvider(api_key="fake")
+    provider.client = FakeClient()
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws.mcp.call_tool", fake_call_tool)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "generate image", "project_name": "image_proj"})
+
+        data = websocket.receive_json()
+        assert data["type"] == "tool_start"
+        assert data["tool_name"] == "mock_image_tool"
+
+        data = websocket.receive_json()
+        assert data["type"] == "tool_result"
+        result_payload = json.loads(data["result"]["content"])
+        assert result_payload["image_type"] == "background"
+        assert result_payload["primary_preview_url"].endswith("/images/background/bg.png")
+
+        data = websocket.receive_json()
+        assert data["type"] == "assistant_delta"
+        assert data["delta"] == "Done"
+
+
 def test_ws_chat_only_streams_new_assistant_messages(
     monkeypatch, client: TestClient, tmp_path: Path
 ) -> None:
