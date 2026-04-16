@@ -141,3 +141,92 @@ def test_openai_provider_chat_with_tools(monkeypatch) -> None:
     )
     assert resp.text == "hi there"
     assert resp.stop_reason == "stop"
+
+
+def test_openai_provider_converts_internal_tool_history() -> None:
+    """OpenAI-compatible providers must translate internal Anthropic-style history."""
+
+    class FakeChoice:
+        def __init__(self):
+            self.finish_reason = "stop"
+            self.message = type(
+                "M",
+                (),
+                {
+                    "content": "done",
+                    "tool_calls": None,
+                },
+            )()
+
+    class FakeUsage:
+        prompt_tokens = 10
+        completion_tokens = 5
+        total_tokens = 15
+
+    class FakeResponse:
+        def __init__(self):
+            self.choices = [FakeChoice()]
+            self.usage = FakeUsage()
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            messages = kwargs["messages"]
+            assert messages[0] == {"role": "system", "content": "sys"}
+            assert messages[1] == {"role": "user", "content": "generate a background"}
+            assert messages[2]["role"] == "assistant"
+            assert messages[2]["content"] == "Calling tool"
+            assert messages[2]["tool_calls"] == [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "generate_background",
+                        "arguments": '{"prompt": "courtyard"}',
+                    },
+                }
+            ]
+            assert messages[3] == {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": '{"success": true}',
+            }
+            return FakeResponse()
+
+    class FakeClient:
+        chat = type("C", (), {"completions": FakeCompletions()})()
+
+    provider = OpenAICompatibleProvider(api_key="fake", default_model="gpt-test")
+    provider.client = FakeClient()
+
+    resp = provider.chat(
+        messages=[
+            {"role": "user", "content": "generate a background"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Calling tool"},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "generate_background",
+                        "input": {"prompt": "courtyard"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": '{"success": true}',
+                        "success": True,
+                    }
+                ],
+            },
+        ],
+        system="sys",
+    )
+
+    assert resp.text == "done"
+    assert resp.stop_reason == "stop"

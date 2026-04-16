@@ -158,6 +158,67 @@ class OpenAICompatibleProvider(BaseProvider):
         self.client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
         self.default_model = default_model
 
+    def _to_openai_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Translate internal chat history into OpenAI-compatible message schema."""
+        converted: list[dict[str, Any]] = []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+
+            if role == "assistant" and isinstance(content, list):
+                text_parts: list[str] = []
+                tool_calls: list[dict[str, Any]] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block_type in {"tool_use", "function_call"}:
+                        arguments = block.get("input", block.get("arguments", {}))
+                        tool_calls.append(
+                            {
+                                "id": block.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                                },
+                            }
+                        )
+                if text_parts or tool_calls:
+                    converted.append(
+                        {
+                            "role": "assistant",
+                            "content": "".join(text_parts) if text_parts else None,
+                            **({"tool_calls": tool_calls} if tool_calls else {}),
+                        }
+                    )
+                continue
+
+            if role == "user" and isinstance(content, list):
+                text_parts: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block_type == "tool_result":
+                        converted.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": block.get("tool_use_id", ""),
+                                "content": block.get("content", ""),
+                            }
+                        )
+                if text_parts:
+                    converted.append({"role": "user", "content": "".join(text_parts)})
+                continue
+
+            converted.append(message)
+        return converted
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -167,7 +228,7 @@ class OpenAICompatibleProvider(BaseProvider):
         max_tokens: int = 1024,
         temperature: float | None = None,
     ) -> LLMResponse:
-        openai_messages = list(messages)
+        openai_messages = self._to_openai_messages(messages)
         if system is not None:
             # Prepend system message if not already present
             if not openai_messages or openai_messages[0].get("role") != "system":
