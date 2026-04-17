@@ -16,6 +16,11 @@ router = APIRouter()
 
 def _chat_history_path(project_name: str) -> Path:
     settings = get_settings()
+    return settings.workspace / project_name / "meta" / "chat_history.json"
+
+
+def _legacy_chat_history_path(project_name: str) -> Path:
+    settings = get_settings()
     return settings.workspace / project_name / "logs" / "chat-history.json"
 
 
@@ -27,10 +32,17 @@ def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> No
 
 def _read_chat_history(project_name: str) -> list[dict[str, Any]]:
     path = _chat_history_path(project_name)
-    if not path.exists():
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8")).get("messages", [])
+        except (json.JSONDecodeError, OSError):
+            return []
+    # Backward compatibility: fall back to the old logs path.
+    legacy_path = _legacy_chat_history_path(project_name)
+    if not legacy_path.exists():
         return []
     try:
-        return json.loads(path.read_text(encoding="utf-8")).get("messages", [])
+        return json.loads(legacy_path.read_text(encoding="utf-8")).get("messages", [])
     except (json.JSONDecodeError, OSError):
         return []
 

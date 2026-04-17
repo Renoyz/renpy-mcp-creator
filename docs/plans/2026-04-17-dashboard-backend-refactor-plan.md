@@ -7,8 +7,12 @@
 - [ ] 前端改造以 `new_design/design1_extracted/app` 为 UI 新标准，生产承载目录仍是 `dashboard/`。
 - [ ] 不长期保留两套并行 Dashboard；迁移完成后，旧工作区页面与旧消息模型逐步退出。
 - [ ] 所有阶段按小批次提交，始终保持后端可启动、前端可构建、核心测试可跑。
+- [ ] **强制执行 TDD**：每一批改动必须先补或先写测试，再做实现；禁止“先写功能、最后补测试”。
+- [ ] **TDD 最小循环固定为**：写失败测试 -> 运行并确认失败 -> 写最小实现 -> 运行目标测试通过 -> 运行相关回归测试。
+- [ ] 如果某一项确实无法先写自动化测试，必须在执行摘要里明确说明原因、风险和替代验证方式，不能静默跳过。
 
 ## Phase 1：冻结契约与持久化
+- [ ] 先为新增模型和 `ProjectManager` 持久化行为补失败测试，再开始实现。
 - [ ] 新建 `src/renpy_mcp/blueprint/models.py`，定义 `ProjectStatus`、`PipelineStage`、`ProjectMeta`、`ProjectBlueprint`、`ChapterSummary`、`SceneSummary`、`SceneScript`、`FlowNode`、`FlowEdge`。
 - [ ] 新建 `src/renpy_mcp/chat_engine/audit_models.py`，定义结构化 `AuditIssue` 和 `AuditReport`。
 - [ ] 保留现有 `src/renpy_mcp/models.py` 中的 `ProjectInfo`、`BuildRequest`、`BuildResult` 作为兼容层。
@@ -20,6 +24,7 @@
 - [ ] 为上述模型与 `ProjectManager` 新增单元测试。
 
 ## Phase 2：打通只读快照 API
+- [ ] 先为每个新增 API 写失败测试或扩展现有 API 测试，再实现接口。
 - [ ] 保持 `GET /api/projects`、`POST /api/projects`、`GET /api/projects/current` 兼容现有前端。
 - [ ] 新增 `GET /api/projects/{name}/meta`。
 - [ ] 新增 `PUT /api/projects/{name}/meta`。
@@ -37,6 +42,7 @@
 - [ ] 为新 API 添加单元测试和集成测试。
 
 ## Phase 3：以 `new_design` 为标准迁移生产前端
+- [ ] 先补前端组件/页面级测试或最小可验证用例，再迁移对应 UI。
 - [ ] 确认生产前端继续使用 `dashboard/` 作为唯一构建入口。
 - [ ] 以 `new_design/design1_extracted/app` 的工作区布局为目标，重建 `dashboard/src/pages/ProjectWorkspacePage.tsx`。
 - [ ] 将 `BlueprintView`、`ChapterTimeline`、`MainContent`、`SceneView`、`StoryMapView`、`AuditReportView` 的结构迁移到 `dashboard/src/`。
@@ -50,6 +56,7 @@
 - [ ] 为新工作区页面补最少可用的交互测试或页面验收用例。
 
 ## Phase 4：重做 Chat 协议与 Blueprint 流程
+- [ ] 先为 WS/SSE 协议和 Blueprint 阶段流转写失败测试，再实现编排逻辑。
 - [ ] 保留 `/ws/chat` 作为唯一聊天入口。
 - [ ] 将服务端事件协议升级为 `message`、`blueprint_draft`、`confirmation_request`、`progress`、`audit_completed`、`error`。
 - [ ] 保持客户端请求协议只有 `user_message` 和 `confirmation_response`。
@@ -69,6 +76,7 @@
 - [ ] 为 WS/SSE 新协议补集成测试。
 
 ## Phase 5：接入审计结果并预留双 Agent 骨架
+- [ ] 先为 `AuditReport` 持久化、读取和前端消费写失败测试，再实现功能。
 - [ ] 在后端实现 `AuditReport` 的持久化与读取接口。
 - [ ] 第一版允许将现有 lint、graph、asset 检查结果汇总成结构化 `AuditReport`。
 - [ ] 让 Dashboard 主页面增加 Audit 标签页。

@@ -529,8 +529,8 @@ def test_ws_chat_persists_history_to_file(
         assert data["type"] == "assistant_delta"
         assert data["delta"] == "Persisted reply"
 
-    # Verify file was written
-    history_file = tmp_path / project_name / "logs" / "chat-history.json"
+    # Verify file was written to the new meta path
+    history_file = tmp_path / project_name / "meta" / "chat_history.json"
     assert history_file.exists()
     raw = json.loads(history_file.read_text(encoding="utf-8"))
     assert any(m.get("role") == "user" and m.get("content") == "hello" for m in raw["messages"])
@@ -591,7 +591,7 @@ def test_ws_chat_project_isolation(monkeypatch, client: TestClient, tmp_path: Pa
             websocket.receive_json()
 
     for name in ("proj_a", "proj_b"):
-        history_file = tmp_path / name / "logs" / "chat-history.json"
+        history_file = tmp_path / name / "meta" / "chat_history.json"
         assert history_file.exists()
         data = json.loads(history_file.read_text(encoding="utf-8"))
         assert all(name in str(m.get("content", "")) for m in data["messages"] if m.get("role") == "assistant")
@@ -641,7 +641,7 @@ def test_ws_chat_persists_history_via_session_project(
         assert data["type"] == "assistant_delta"
         assert data["delta"] == "Session reply"
 
-    history_file = tmp_path / project_name / "logs" / "chat-history.json"
+    history_file = tmp_path / project_name / "meta" / "chat_history.json"
     assert history_file.exists()
     raw = json.loads(history_file.read_text(encoding="utf-8"))
     assert any(m.get("role") == "user" and m.get("content") == "hello session" for m in raw["messages"])

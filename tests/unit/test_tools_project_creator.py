@@ -60,6 +60,33 @@ class TestListProjects:
         names = {p["name"] for p in data["projects"]}
         assert "project_a" in names
         assert "project_b" in names
+        assert data.get("errors", []) == []
+
+    @pytest.mark.asyncio
+    async def test_list_projects_propagates_corrupt_meta_errors(self, fresh_mcp):
+        mcp, workspace = fresh_mcp
+        # Valid project
+        await mcp.call_tool("create_project", {"name": "valid_proj"})
+
+        # Legacy project (no meta)
+        legacy_dir = workspace / "legacy_proj"
+        (legacy_dir / "game").mkdir(parents=True)
+        (legacy_dir / "game" / "script.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+
+        # Corrupt project (invalid meta/project.json)
+        corrupt_dir = workspace / "corrupt_proj"
+        (corrupt_dir / "meta").mkdir(parents=True)
+        (corrupt_dir / "meta" / "project.json").write_text("not json", encoding="utf-8")
+
+        result = await mcp.call_tool("list_projects", {})
+        data = json.loads(result[0][0].text)
+
+        names = {p["name"] for p in data["projects"]}
+        assert "valid_proj" in names
+        assert "legacy_proj" in names
+        assert "corrupt_proj" not in names
+
+        assert any("corrupt_proj" in err and "meta/project.json" in err for err in data["errors"])
 
 
 class TestProjectFiles:

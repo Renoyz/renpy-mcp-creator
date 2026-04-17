@@ -142,8 +142,11 @@ def register_project_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
     @mcp.tool()
     async def list_projects() -> str:
         """Return metadata for available projects in the workspace."""
-        projects = [p.model_dump(mode="json") for p in project_manager.list_projects()]
-        return json.dumps({"projects": projects}, indent=2, ensure_ascii=False)
+        result = project_manager.list_projects()
+        projects = [p.model_dump(mode="json") for p in result.projects]
+        return json.dumps(
+            {"projects": projects, "errors": result.errors}, indent=2, ensure_ascii=False
+        )
 
     @mcp.tool()
     async def list_project_files(project_name: str) -> str:

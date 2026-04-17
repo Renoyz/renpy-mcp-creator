@@ -413,3 +413,218 @@ def test_chat_history_does_not_leak_on_project_switch(
     page.wait_for_timeout(500)
     expect(page.locator(f"text=msg_for_{project_b}")).to_be_visible(timeout=5000)
     expect(page.locator(f"text=msg_for_{project_a}")).to_have_count(0, timeout=5000)
+
+
+def test_project_list_shows_warning_for_corrupt_projects(page: Page, server_url: str) -> None:
+    """Dashboard should display both valid project cards and corrupt-project warnings."""
+    page.route(
+        f"{server_url}/api/projects",
+        lambda route, request: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "projects": [
+                        {"name": "valid_proj", "path": "/tmp/valid_proj"}
+                    ],
+                    "errors": [
+                        "Project 'corrupt_proj' has corrupt meta/project.json: invalid JSON"
+                    ],
+                }
+            ),
+        ),
+    )
+    page.goto(f"{server_url}/dashboard")
+    expect(page.locator("h4:has-text('valid_proj')")).to_be_visible(timeout=10000)
+    expect(page.locator("text=部分项目元数据损坏")).to_be_visible(timeout=10000)
+    expect(
+        page.locator("text=Project 'corrupt_proj' has corrupt meta/project.json")
+    ).to_be_visible(timeout=10000)
+
+
+def test_project_list_no_empty_state_when_only_errors(page: Page, server_url: str) -> None:
+    """When there are only errors and no projects, the misleading empty state must not appear."""
+    page.route(
+        f"{server_url}/api/projects",
+        lambda route, request: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "projects": [],
+                    "errors": [
+                        "Project 'corrupt_proj' has corrupt meta/project.json: invalid JSON"
+                    ],
+                }
+            ),
+        ),
+    )
+    page.goto(f"{server_url}/dashboard")
+    expect(page.locator("text=部分项目元数据损坏")).to_be_visible(timeout=10000)
+    expect(page.locator("text=还没有项目")).to_have_count(0)
+
+
+def test_project_list_clears_warning_on_fetch_failure(page: Page, server_url: str) -> None:
+    """A subsequent fetch failure must not leave a stale corrupt-project warning on screen."""
+    get_calls = [0]
+
+    def _handle_route(route, request):
+        if request.method == "POST":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"name": "new_proj", "path": "/tmp/new_proj"}
+                ),
+            )
+            return
+        # GET /api/projects
+        get_calls[0] += 1
+        if get_calls[0] == 1:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "projects": [
+                            {"name": "valid_proj", "path": "/tmp/valid_proj"}
+                        ],
+                        "errors": [
+                            "Project 'corrupt_proj' has corrupt meta/project.json: invalid JSON"
+                        ],
+                    }
+                ),
+            )
+        else:
+            route.fulfill(
+                status=500,
+                content_type="text/plain",
+                body="Internal Server Error",
+            )
+
+    page.route(f"{server_url}/api/projects", _handle_route)
+    page.goto(f"{server_url}/dashboard")
+    expect(page.locator("text=部分项目元数据损坏")).to_be_visible(timeout=10000)
+
+    # Trigger a re-fetch by creating a project (POST succeeds, then GET fails)
+    page.locator("button:has-text('新建项目')").click()
+    page.locator("input[placeholder='my_visual_novel']").fill("new_proj")
+    page.locator("button:has-text('创建')").click()
+
+    expect(page.locator("text=Failed to fetch projects")).to_be_visible(timeout=10000)
+    expect(page.locator("text=部分项目元数据损坏")).to_have_count(0)
+    expect(page.locator("h4:has-text('valid_proj')")).to_have_count(0)
+
+
+def test_project_list_ignores_stale_success_response(page: Page, server_url: str) -> None:
+    """A newer successful fetch must not be overwritten by an older successful response that arrives late."""
+    pending_gets: list = []
+    get_count = [0]
+
+    def _handle_route(route, request):
+        if request.method == "POST":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"name": "new_proj", "path": "/tmp/new_proj"}),
+            )
+            return
+        get_count[0] += 1
+        if get_count[0] == 1:
+            pending_gets.append(route)
+        elif get_count[0] == 2:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"projects": [{"name": "new_proj", "path": "/tmp/new_proj"}], "errors": []}
+                ),
+            )
+        else:
+            route.continue_()
+
+    page.route(f"{server_url}/api/projects", _handle_route)
+    page.goto(f"{server_url}/dashboard")
+
+    # Explicitly wait until the first GET is captured by the route handler.
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if len(pending_gets) == 1:
+            break
+        page.wait_for_timeout(50)
+    assert len(pending_gets) == 1, "First GET /api/projects was not captured in time"
+
+    page.locator("button:has-text('新建项目')").click()
+    page.locator("input[placeholder='my_visual_novel']").fill("new_proj")
+    page.locator("button:has-text('创建')").click()
+
+    expect(page.locator("h4:has-text('new_proj')")).to_be_visible(timeout=10000)
+
+    # Release the stale initial GET with old data
+    for r in pending_gets:
+        r.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {"projects": [{"name": "stale_proj", "path": "/tmp/stale_proj"}], "errors": []}
+            ),
+        )
+
+    expect(page.locator("h4:has-text('new_proj')")).to_be_visible(timeout=5000)
+    expect(page.locator("h4:has-text('stale_proj')")).to_have_count(0)
+
+
+def test_project_list_ignores_stale_error_response(page: Page, server_url: str) -> None:
+    """A newer successful fetch must not be cleared by an older failed response that arrives late."""
+    pending_gets: list = []
+    get_count = [0]
+
+    def _handle_route(route, request):
+        if request.method == "POST":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({"name": "new_proj", "path": "/tmp/new_proj"}),
+            )
+            return
+        get_count[0] += 1
+        if get_count[0] == 1:
+            pending_gets.append(route)
+        elif get_count[0] == 2:
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {"projects": [{"name": "new_proj", "path": "/tmp/new_proj"}], "errors": []}
+                ),
+            )
+        else:
+            route.continue_()
+
+    page.route(f"{server_url}/api/projects", _handle_route)
+    page.goto(f"{server_url}/dashboard")
+
+    # Explicitly wait until the first GET is captured by the route handler.
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if len(pending_gets) == 1:
+            break
+        page.wait_for_timeout(50)
+    assert len(pending_gets) == 1, "First GET /api/projects was not captured in time"
+
+    page.locator("button:has-text('新建项目')").click()
+    page.locator("input[placeholder='my_visual_novel']").fill("new_proj")
+    page.locator("button:has-text('创建')").click()
+
+    expect(page.locator("h4:has-text('new_proj')")).to_be_visible(timeout=10000)
+
+    # Release the stale initial GET with a 500 error
+    for r in pending_gets:
+        r.fulfill(
+            status=500,
+            content_type="text/plain",
+            body="Internal Server Error",
+        )
+
+    expect(page.locator("h4:has-text('new_proj')")).to_be_visible(timeout=5000)
+    expect(page.locator("text=Failed to fetch projects")).to_have_count(0)

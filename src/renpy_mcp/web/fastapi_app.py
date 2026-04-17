@@ -15,9 +15,17 @@ from collections.abc import AsyncGenerator
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..config import RenPyConfig, _current_project_path, get_settings, resolve_project_dir
+from ..blueprint.models import (
+    FlowEdge,
+    FlowNode,
+    ProjectBlueprint,
+    ProjectMeta,
+    SceneScript,
+)
 from ..models import BuildRequest, BuildResult
 from ..services.build_manager import BuildManager
 from ..services.preview_manager import PreviewManager
@@ -252,8 +260,9 @@ def create_app() -> FastAPI:
     async def api_projects():
         settings = get_settings()
         project_manager = ProjectManager(settings)
-        projects = [p.model_dump(mode="json") for p in project_manager.list_projects()]
-        return {"projects": projects}
+        result = project_manager.list_projects()
+        projects = [p.model_dump(mode="json") for p in result.projects]
+        return {"projects": projects, "errors": result.errors}
 
     @app.post("/api/projects")
     async def api_projects_create(request: Request):
@@ -309,6 +318,276 @@ def create_app() -> FastAPI:
                 "path": str(project_dir),
             },
         }
+
+    @app.get("/api/projects/{project_name}/meta")
+    async def api_project_meta(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if meta is None:
+            meta = ProjectMeta(name=project_name, path=project_dir)
+        return meta.model_dump(mode="json")
+
+    @app.put("/api/projects/{project_name}/meta")
+    async def api_project_meta_put(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid project meta: malformed JSON ({exc})"
+            )
+        if not isinstance(body, dict):
+            raise HTTPException(
+                status_code=400, detail="Invalid project meta: body must be a JSON object"
+            )
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            existing = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if existing is None:
+            existing = ProjectMeta(name=project_name, path=project_dir)
+        allowed = {k for k in ProjectMeta.model_fields if k not in ("path", "name")}
+        unknown = [k for k in body if k not in allowed and k not in ("path", "name")]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid project meta: unsupported fields {unknown}",
+            )
+        updates = {k: v for k, v in body.items() if k in allowed}
+        # Round-trip through JSON so enum/datetime fields are properly parsed
+        existing_dict = json.loads(existing.model_dump_json(by_alias=False))
+        existing_dict.update(updates)
+        existing_dict["name"] = project_name
+        existing_dict["path"] = str(project_dir)
+        try:
+            updated = ProjectMeta.model_validate(existing_dict)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid project meta: {exc}")
+        pm.write_project_meta(project_name, updated)
+        return {"success": True}
+
+    @app.get("/api/projects/{project_name}/blueprint")
+    async def api_project_blueprint(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            blueprint = pm.read_blueprint(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if blueprint is None:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+        return blueprint.model_dump(mode="json")
+
+    @app.put("/api/projects/{project_name}/blueprint")
+    async def api_project_blueprint_put(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid blueprint: malformed JSON ({exc})"
+            )
+        try:
+            blueprint = ProjectBlueprint.model_validate(body)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid blueprint: {exc}")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        pm.write_blueprint(project_name, blueprint)
+        return {"success": True}
+
+    @app.get("/api/projects/{project_name}/scenes")
+    async def api_project_scenes(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            blueprint = pm.read_blueprint(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if blueprint is None:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+        return {"chapters": [ch.model_dump(mode="json") for ch in blueprint.chapters]}
+
+    @app.get("/api/projects/{project_name}/storymap")
+    async def api_project_storymap(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            blueprint = pm.read_blueprint(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if blueprint is None:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+
+        nodes: list[FlowNode] = []
+        edges: list[FlowEdge] = []
+
+        # Build a lookup for scene_id -> chapter_id
+        scene_to_chapter: dict[str, str] = {}
+        for ch in blueprint.chapters:
+            for scene in ch.scenes:
+                scene_to_chapter[scene.id] = ch.id
+
+        for ch in blueprint.chapters:
+            prev_scene = None
+            for scene in ch.scenes:
+                nodes.append(
+                    FlowNode(
+                        id=scene.id,
+                        chapter_id=ch.id,
+                        scene_id=scene.id,
+                        type=scene.type or "normal",
+                        label=scene.name,
+                    )
+                )
+                if prev_scene is not None:
+                    edges.append(
+                        FlowEdge(
+                            from_chapter_id=ch.id,
+                            from_scene_id=prev_scene.id,
+                            to_chapter_id=ch.id,
+                            to_scene_id=scene.id,
+                            type="main",
+                        )
+                    )
+                if scene.choices:
+                    for choice in scene.choices:
+                        if choice.next_scene_id not in scene_to_chapter:
+                            continue
+                        target_ch_id = scene_to_chapter[choice.next_scene_id]
+                        edges.append(
+                            FlowEdge(
+                                from_chapter_id=ch.id,
+                                from_scene_id=scene.id,
+                                to_chapter_id=target_ch_id,
+                                to_scene_id=choice.next_scene_id,
+                                type="branch",
+                                label=choice.text,
+                            )
+                        )
+                prev_scene = scene
+
+        return {
+            "nodes": [n.model_dump(mode="json") for n in nodes],
+            "edges": [e.model_dump(mode="json") for e in edges],
+        }
+
+    @app.get("/api/projects/{project_name}/scenes/{scene_id}/script")
+    async def api_project_scene_script(project_name: str, scene_id: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        index_path = project_dir / "meta" / "index.json"
+        if not index_path.exists():
+            raise HTTPException(status_code=404, detail="Scene index not found")
+        try:
+            index_data = json.loads(index_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Scene index is corrupt: {exc}"
+            )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Cannot read scene index: {exc}"
+            )
+
+        if not isinstance(index_data, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Scene index has invalid structure: top-level value is not an object",
+            )
+
+        scenes_map = index_data.get("scenes")
+        if not isinstance(scenes_map, dict):
+            raise HTTPException(
+                status_code=500, detail="Scene index has invalid structure: scenes is not an object"
+            )
+
+        if scene_id not in scenes_map:
+            raise HTTPException(status_code=404, detail="Scene not found")
+        mapping = scenes_map[scene_id]
+        if not isinstance(mapping, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scene index has invalid structure: scene {scene_id} mapping is not an object",
+            )
+
+        required = ("chapter_id", "label", "file_path")
+        missing = [k for k in required if not mapping.get(k)]
+        if missing:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scene index has incomplete mapping for {scene_id}: missing {missing}",
+            )
+
+        from pathlib import PurePosixPath
+
+        raw_file_path = mapping["file_path"]
+        if not isinstance(raw_file_path, str) or not raw_file_path:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scene index has invalid file_path for {scene_id}: must be a non-empty string",
+            )
+        normalized = raw_file_path.replace("\\", "/")
+        pp = PurePosixPath(normalized)
+        if not pp.parts or pp.parts[0] != "game" or not str(pp).endswith(".rpy"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scene index has invalid file_path for {scene_id}: must be a .rpy file under game/",
+            )
+
+        rpy_path = project_dir.joinpath(*pp.parts)
+        try:
+            resolved = rpy_path.resolve()
+            game_root = (project_dir / "game").resolve()
+            resolved.relative_to(game_root)
+        except ValueError:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Scene index has invalid file_path for {scene_id}: must stay under game/",
+            )
+
+        if not rpy_path.exists():
+            raise HTTPException(status_code=404, detail="Scene script file not found")
+
+        try:
+            content = rpy_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Cannot read scene script: {exc}"
+            )
+
+        script = SceneScript(
+            scene_id=scene_id,
+            chapter_id=mapping.get("chapter_id", ""),
+            label=mapping.get("label", ""),
+            content=content,
+            file_path=raw_file_path,
+        )
+        return script.model_dump(mode="json")
 
     @app.post("/api/projects/build")
     async def api_build_project(request: Request):

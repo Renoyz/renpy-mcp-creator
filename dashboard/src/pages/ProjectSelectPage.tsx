@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderPlus, FolderOpen, Loader2 } from "lucide-react";
 import { useProject } from "../context/ProjectContext";
@@ -10,6 +10,7 @@ interface Project {
 
 export function ProjectSelectPage() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -17,19 +18,28 @@ export function ProjectSelectPage() {
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
   const { selectProject } = useProject();
+  const requestIdRef = useRef(0);
 
   const fetchProjects = async () => {
+    const requestId = ++requestIdRef.current;
     try {
       setLoading(true);
       const resp = await fetch("/api/projects");
       if (!resp.ok) throw new Error("Failed to fetch projects");
       const data = await resp.json();
+      if (requestId !== requestIdRef.current) return;
       setProjects(data.projects || []);
+      setErrors(data.errors || []);
       setError(null);
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
+      setProjects([]);
+      setErrors([]);
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -83,7 +93,18 @@ export function ProjectSelectPage() {
         </div>
       )}
 
-      {!loading && !error && projects.length === 0 && (
+      {!loading && errors.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800">
+          <h4 className="mb-2 font-medium">部分项目元数据损坏</h4>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {errors.map((err, idx) => (
+              <li key={idx}>{err}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!loading && !error && projects.length === 0 && errors.length === 0 && (
         <div className="rounded-lg border bg-card p-8 text-center">
           <FolderOpen className="mx-auto h-10 w-10 text-muted-foreground" />
           <h3 className="mt-4 text-lg font-medium">还没有项目</h3>

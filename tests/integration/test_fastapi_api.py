@@ -571,6 +571,299 @@ class TestBuildAndPreview:
         assert "127.0.0.1:55555" in r.json()["url"]
 
 
+class TestProjectListErrors:
+    """Tests for corrupt-project error propagation in /api/projects."""
+
+    def test_api_projects_includes_errors_for_corrupt_meta(self, client: TestClient, tmp_path: Path):
+        """Valid, legacy, and corrupt projects must be distinguishable in the API response."""
+        workspace = tmp_path
+
+        # Valid project: create via API
+        client.post("/api/projects", json={"name": "valid_proj"})
+
+        # Legacy project: directory exists but has no meta/project.json
+        legacy_dir = workspace / "legacy_proj"
+        (legacy_dir / "game").mkdir(parents=True)
+        (legacy_dir / "game" / "script.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+
+        # Corrupt project: meta/project.json exists but is invalid
+        corrupt_dir = workspace / "corrupt_proj"
+        (corrupt_dir / "meta").mkdir(parents=True)
+        (corrupt_dir / "meta" / "project.json").write_text("not json", encoding="utf-8")
+
+        r = client.get("/api/projects")
+        assert r.status_code == 200
+        data = r.json()
+
+        project_names = {p["name"] for p in data["projects"]}
+        assert "valid_proj" in project_names
+        assert "legacy_proj" in project_names
+        assert "corrupt_proj" not in project_names
+
+        assert any("corrupt_proj" in err and "meta/project.json" in err for err in data["errors"])
+
+
+class TestProjectMetaApi:
+    """Tests for /api/projects/{project_name}/meta."""
+
+    def test_get_meta_returns_project_meta(self, client: TestClient):
+        project_name = "meta_get_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/meta")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["name"] == project_name
+        assert data["status"] == "draft"
+        assert data["pipeline_stage"] == "idle"
+
+    def test_put_meta_updates_and_refreshes_updated_at(self, client: TestClient):
+        from datetime import datetime
+
+        project_name = "meta_put_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/meta")
+        before = datetime.fromisoformat(r.json()["updated_at"])
+
+        payload = {
+            "name": project_name,
+            "status": "editing",
+            "pipeline_stage": "collecting",
+            "chapter_count": 3,
+            "scene_count": 12,
+            "confirmed_scenes": 5,
+            "description": "Updated description",
+        }
+        r = client.put(f"/api/projects/{project_name}/meta", json=payload)
+        assert r.status_code == 200
+
+        r = client.get(f"/api/projects/{project_name}/meta")
+        data = r.json()
+        assert data["status"] == "editing"
+        assert data["pipeline_stage"] == "collecting"
+        assert data["chapter_count"] == 3
+        assert data["scene_count"] == 12
+        assert data["confirmed_scenes"] == 5
+        assert data["description"] == "Updated description"
+        after = datetime.fromisoformat(data["updated_at"])
+        assert after > before
+
+    def test_get_meta_404_for_missing_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_project/meta")
+        assert r.status_code == 404
+
+    def test_put_meta_404_for_missing_project(self, client: TestClient):
+        r = client.put("/api/projects/nonexistent_project/meta", json={"name": "x"})
+        assert r.status_code == 404
+
+    def test_put_meta_does_not_allow_name_override(self, client: TestClient):
+        """The route-level project_name must always win over body.name."""
+        project_name = "name_lock_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/meta",
+            json={"name": "hijacked_name", "status": "editing"},
+        )
+        assert r.status_code == 200
+
+        r = client.get(f"/api/projects/{project_name}/meta")
+        data = r.json()
+        assert data["name"] == project_name
+        assert data["status"] == "editing"
+
+    def test_put_meta_returns_400_for_invalid_payload(self, client: TestClient):
+        """Validation errors in the meta payload must be 400, not 500."""
+        project_name = "meta_400_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/meta",
+            json={"status": "not_a_status"},
+        )
+        assert r.status_code == 400
+        assert "invalid" in r.json()["detail"].lower() or "validation" in r.json()["detail"].lower()
+
+    def test_put_meta_returns_400_for_non_object_payload(self, client: TestClient):
+        """Non-object JSON bodies must be rejected as 400."""
+        project_name = "meta_non_object_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/meta",
+            json=["not", "an", "object"],
+        )
+        assert r.status_code == 400
+        assert "object" in r.json()["detail"].lower()
+
+    def test_put_meta_returns_400_for_unknown_fields(self, client: TestClient):
+        """Unknown or misspelled fields must be rejected as 400, not silently ignored."""
+        project_name = "meta_unknown_field_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/meta",
+            json={"stauts": "editing", "bogus": 123},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"].lower()
+        assert "invalid" in detail or "unknown" in detail or "unsupported" in detail
+
+        # Verify the misspelled field did NOT take effect
+        r2 = client.get(f"/api/projects/{project_name}/meta")
+        assert r2.json()["status"] != "editing"
+
+    def test_put_meta_returns_400_for_malformed_json(self, client: TestClient):
+        """Malformed JSON must be rejected as 400, not 500."""
+        project_name = "meta_malformed_json_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/meta",
+            data='{"status": ',
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"].lower()
+        assert "malformed" in detail or "invalid" in detail or "json" in detail
+
+    def test_put_meta_returns_500_for_unexpected_validation_runtime_error(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Non-validation exceptions during model_validate must NOT be disguised as 400."""
+        from renpy_mcp.blueprint.models import ProjectMeta
+        from renpy_mcp.web.fastapi_app import create_app
+
+        project_name = "meta_runtime_error_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        monkeypatch.setattr(
+            ProjectMeta, "model_validate", lambda obj: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        # Use a client that does not re-raise server exceptions so we can inspect the status code
+        raw_client = TestClient(create_app(), raise_server_exceptions=False)
+        r = raw_client.put(
+            f"/api/projects/{project_name}/meta",
+            json={"status": "editing"},
+        )
+        assert r.status_code == 500
+
+
+class TestProjectBlueprintApi:
+    """Tests for /api/projects/{project_name}/blueprint."""
+
+    def test_get_blueprint_returns_content(self, client: TestClient):
+        from renpy_mcp.blueprint.models import ProjectBlueprint
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "bp_get_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        pm = ProjectManager(get_settings())
+        bp = ProjectBlueprint(title="Test VN", genre="sci-fi", worldview="space")
+        pm.write_blueprint(project_name, bp)
+
+        r = client.get(f"/api/projects/{project_name}/blueprint")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["title"] == "Test VN"
+        assert data["genre"] == "sci-fi"
+        assert data["worldview"] == "space"
+
+    def test_put_blueprint_writes_yaml_and_roundtrips(self, client: TestClient):
+        project_name = "bp_put_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        payload = {
+            "title": "New VN",
+            "genre": "romance",
+            "worldview": "high school",
+            "themes": ["love", "friendship"],
+        }
+        r = client.put(f"/api/projects/{project_name}/blueprint", json=payload)
+        assert r.status_code == 200
+
+        r = client.get(f"/api/projects/{project_name}/blueprint")
+        data = r.json()
+        assert data["title"] == "New VN"
+        assert data["genre"] == "romance"
+        assert data["worldview"] == "high school"
+        assert data["themes"] == ["love", "friendship"]
+
+        # Verify the file is real YAML, not JSON
+        from renpy_mcp.config import get_settings
+        bp_path = get_settings().workspace / project_name / "meta" / "blueprint.yaml"
+        raw = bp_path.read_text(encoding="utf-8")
+        assert not raw.strip().startswith("{")
+        assert "title: New VN" in raw
+
+    def test_get_blueprint_404_when_missing(self, client: TestClient):
+        project_name = "bp_missing_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/blueprint")
+        assert r.status_code == 404
+
+    def test_get_blueprint_error_for_invalid_yaml(self, client: TestClient, tmp_path: Path):
+        project_name = "bp_bad_yaml_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        # Corrupt the blueprint.yaml directly
+        from renpy_mcp.config import get_settings
+        meta_dir = get_settings().workspace / project_name / "meta"
+        (meta_dir / "blueprint.yaml").write_text("not: [ valid yaml", encoding="utf-8")
+
+        r = client.get(f"/api/projects/{project_name}/blueprint")
+        assert r.status_code == 500
+        assert "blueprint" in r.json()["detail"].lower()
+
+    def test_get_blueprint_404_for_missing_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_project/blueprint")
+        assert r.status_code == 404
+
+    def test_put_blueprint_404_for_missing_project(self, client: TestClient):
+        r = client.put("/api/projects/nonexistent_project/blueprint", json={"title": "x", "genre": "x", "worldview": "x"})
+        assert r.status_code == 404
+
+    def test_put_blueprint_returns_400_for_malformed_json(self, client: TestClient):
+        """Malformed JSON must be rejected as 400, not 500."""
+        project_name = "bp_malformed_json_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.put(
+            f"/api/projects/{project_name}/blueprint",
+            data='{"title": ',
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"].lower()
+        assert "malformed" in detail or "invalid" in detail or "json" in detail
+
+    def test_put_blueprint_returns_500_for_unexpected_validation_runtime_error(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Non-validation exceptions during model_validate must NOT be disguised as 400."""
+        from renpy_mcp.blueprint.models import ProjectBlueprint
+        from renpy_mcp.web.fastapi_app import create_app
+
+        project_name = "bp_runtime_error_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        monkeypatch.setattr(
+            ProjectBlueprint,
+            "model_validate",
+            lambda obj: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        raw_client = TestClient(create_app(), raise_server_exceptions=False)
+        r = raw_client.put(
+            f"/api/projects/{project_name}/blueprint",
+            json={"title": "x", "genre": "y", "worldview": "z"},
+        )
+        assert r.status_code == 500
+
+
 class TestChatHistoryApi:
     """Tests for /api/projects/{project_name}/chat/history."""
 
@@ -627,3 +920,609 @@ class TestChatHistoryApi:
         r = client.get("/api/projects/hist_b/chat/history")
         assert r.status_code == 200
         assert r.json()["messages"][0]["content"] == "msg_for_hist_b"
+
+
+class TestProjectScenesApi:
+    """Tests for GET /api/projects/{name}/scenes."""
+
+    def _setup_project_with_blueprint(self, client: TestClient, project_name: str):
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.blueprint.models import ProjectBlueprint, ChapterSummary, SceneSummary
+
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        bp = ProjectBlueprint(
+            title="Test VN",
+            genre="romance",
+            worldview="high school",
+            chapters=[
+                ChapterSummary(
+                    id="ch1",
+                    name="Prologue",
+                    order=1,
+                    scenes=[
+                        SceneSummary(id="s1-1", name="Morning", order=1),
+                        SceneSummary(id="s1-2", name="Cafeteria", order=2),
+                    ],
+                ),
+                ChapterSummary(
+                    id="ch2",
+                    name="Act 1",
+                    order=2,
+                    scenes=[
+                        SceneSummary(id="s2-1", name="Classroom", order=1),
+                    ],
+                ),
+            ],
+        )
+        pm.write_blueprint(project_name, bp)
+        return bp
+
+    def test_get_scenes_returns_chapters(self, client: TestClient):
+        project_name = "scenes_test"
+        self._setup_project_with_blueprint(client, project_name)
+
+        r = client.get(f"/api/projects/{project_name}/scenes")
+        assert r.status_code == 200
+        data = r.json()
+        assert "chapters" in data
+        assert len(data["chapters"]) == 2
+        assert data["chapters"][0]["id"] == "ch1"
+        assert len(data["chapters"][0]["scenes"]) == 2
+        assert data["chapters"][0]["scenes"][0]["id"] == "s1-1"
+        assert data["chapters"][1]["id"] == "ch2"
+        assert len(data["chapters"][1]["scenes"]) == 1
+
+    def test_get_scenes_404_for_missing_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_project/scenes")
+        assert r.status_code == 404
+
+    def test_get_scenes_404_when_blueprint_missing(self, client: TestClient):
+        project_name = "scenes_no_bp"
+        client.post("/api/projects", json={"name": project_name})
+        r = client.get(f"/api/projects/{project_name}/scenes")
+        assert r.status_code == 404
+
+
+class TestProjectStorymapApi:
+    """Tests for GET /api/projects/{name}/storymap."""
+
+    def _setup_project_with_blueprint(self, client: TestClient, project_name: str):
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.blueprint.models import (
+            ProjectBlueprint,
+            ChapterSummary,
+            SceneSummary,
+            ChoiceItem,
+        )
+
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        bp = ProjectBlueprint(
+            title="Test VN",
+            genre="romance",
+            worldview="high school",
+            chapters=[
+                ChapterSummary(
+                    id="ch1",
+                    name="Prologue",
+                    order=1,
+                    scenes=[
+                        SceneSummary(id="s1-1", name="Morning", order=1),
+                        SceneSummary(
+                            id="s1-2",
+                            name="Choice",
+                            order=2,
+                            choices=[
+                                ChoiceItem(text="Go left", next_scene_id="s2-1"),
+                                ChoiceItem(text="Go right", next_scene_id="s2-2"),
+                            ],
+                        ),
+                    ],
+                ),
+                ChapterSummary(
+                    id="ch2",
+                    name="Act 1",
+                    order=2,
+                    scenes=[
+                        SceneSummary(id="s2-1", name="Left path", order=1),
+                        SceneSummary(id="s2-2", name="Right path", order=2),
+                    ],
+                ),
+            ],
+        )
+        pm.write_blueprint(project_name, bp)
+        return bp
+
+    def test_get_storymap_returns_nodes_and_edges(self, client: TestClient):
+        project_name = "storymap_test"
+        self._setup_project_with_blueprint(client, project_name)
+
+        r = client.get(f"/api/projects/{project_name}/storymap")
+        assert r.status_code == 200
+        data = r.json()
+        assert "nodes" in data
+        assert "edges" in data
+
+        # 4 scenes = 4 nodes
+        assert len(data["nodes"]) == 4
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert node_ids == {"s1-1", "s1-2", "s2-1", "s2-2"}
+
+        # Sequential main edge: s1-1 -> s1-2 within ch1
+        main_edges = [e for e in data["edges"] if e["type"] == "main"]
+        assert len(main_edges) == 2  # s1-1->s1-2 and s2-1->s2-2
+        assert any(
+            e["from_scene_id"] == "s1-1" and e["to_scene_id"] == "s1-2"
+            for e in main_edges
+        )
+
+        # Choice branch edges: s1-2 -> s2-1 and s1-2 -> s2-2
+        branch_edges = [e for e in data["edges"] if e["type"] == "branch"]
+        assert len(branch_edges) == 2
+        assert any(
+            e["from_scene_id"] == "s1-2"
+            and e["to_scene_id"] == "s2-1"
+            and e["label"] == "Go left"
+            for e in branch_edges
+        )
+        assert any(
+            e["from_scene_id"] == "s1-2"
+            and e["to_scene_id"] == "s2-2"
+            and e["label"] == "Go right"
+            for e in branch_edges
+        )
+
+    def test_get_storymap_404_for_missing_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_project/storymap")
+        assert r.status_code == 404
+
+    def test_get_storymap_404_when_blueprint_missing(self, client: TestClient):
+        project_name = "storymap_no_bp"
+        client.post("/api/projects", json={"name": project_name})
+        r = client.get(f"/api/projects/{project_name}/storymap")
+        assert r.status_code == 404
+
+    def test_get_storymap_handles_missing_choice_target(self, client: TestClient):
+        """Dangling branch edges to non-existent scenes must be skipped."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.blueprint.models import (
+            ProjectBlueprint,
+            ChapterSummary,
+            SceneSummary,
+            ChoiceItem,
+        )
+
+        project_name = "storymap_missing_choice_target"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        bp = ProjectBlueprint(
+            title="Test VN",
+            genre="romance",
+            worldview="high school",
+            chapters=[
+                ChapterSummary(
+                    id="ch1",
+                    name="Prologue",
+                    order=1,
+                    scenes=[
+                        SceneSummary(
+                            id="s1-1",
+                            name="Choice",
+                            order=1,
+                            choices=[
+                                ChoiceItem(text="Valid", next_scene_id="s1-2"),
+                                ChoiceItem(text="Invalid", next_scene_id="does_not_exist"),
+                            ],
+                        ),
+                        SceneSummary(id="s1-2", name="Next", order=2),
+                    ],
+                ),
+            ],
+        )
+        pm.write_blueprint(project_name, bp)
+
+        r = client.get(f"/api/projects/{project_name}/storymap")
+        assert r.status_code == 200
+        data = r.json()
+        branch_edges = [e for e in data["edges"] if e["type"] == "branch"]
+        # Only the valid choice should produce an edge
+        assert len(branch_edges) == 1
+        assert branch_edges[0]["to_scene_id"] == "s1-2"
+        assert branch_edges[0]["label"] == "Valid"
+
+
+class TestProjectSceneScriptApi:
+    """Tests for GET /api/projects/{name}/scenes/{scene_id}/script."""
+
+    def _setup_project_with_index(self, client: TestClient, project_name: str):
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        # Create a script file
+        game_dir = get_settings().workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        script_path = game_dir / "scene1.rpy"
+        script_path.write_text('label start:\n    "Hello world"\n    return\n', encoding="utf-8")
+
+        # Create index
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "game/scene1.rpy",
+                    }
+                }
+            },
+        )
+        return script_path
+
+    def test_get_scene_script_returns_structured_data(self, client: TestClient):
+        project_name = "script_test"
+        self._setup_project_with_index(client, project_name)
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["scene_id"] == "s1-1"
+        assert data["chapter_id"] == "ch1"
+        assert data["label"] == "start"
+        assert data["file_path"] == "game/scene1.rpy"
+        assert 'label start:' in data["content"]
+
+    def test_get_scene_script_404_for_missing_project(self, client: TestClient):
+        r = client.get("/api/projects/nonexistent_project/scenes/s1-1/script")
+        assert r.status_code == 404
+
+    def test_get_scene_script_404_when_index_missing(self, client: TestClient):
+        project_name = "script_no_index"
+        client.post("/api/projects", json={"name": project_name})
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 404
+
+    def test_get_scene_script_404_when_scene_id_not_in_index(self, client: TestClient):
+        project_name = "script_no_scene"
+        self._setup_project_with_index(client, project_name)
+        r = client.get(f"/api/projects/{project_name}/scenes/s99-99/script")
+        assert r.status_code == 404
+
+    def test_get_scene_script_404_when_file_missing(self, client: TestClient):
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_missing_file"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "game/nonexistent.rpy",
+                    }
+                }
+            },
+        )
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 404
+
+    def test_get_scene_script_500_when_index_corrupt(self, client: TestClient):
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_corrupt_index"
+        client.post("/api/projects", json={"name": project_name})
+        meta_dir = get_settings().workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "index.json").write_text("not valid json", encoding="utf-8")
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+
+    def test_get_scene_script_rejects_path_traversal_from_index(self, client: TestClient):
+        """file_path escaping the project directory must be rejected."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_traversal"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        # Write a secret file outside the project directory
+        secret_path = get_settings().workspace / "secret.txt"
+        secret_path.write_text("top secret", encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "../secret.txt",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "invalid" in detail.lower() or "file_path" in detail.lower() or "traversal" in detail.lower()
+        # Ensure the content was NOT returned
+        assert "top secret" not in r.text
+
+    def test_get_scene_script_500_when_index_structure_invalid(self, client: TestClient):
+        """scenes must be a dict/object, not a list."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_bad_index_struct"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        pm.write_project_index(project_name, {"scenes": ["not-a-map"]})
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "structure" in detail.lower() or "invalid" in detail.lower()
+
+    def test_get_scene_script_500_when_scene_mapping_structure_invalid(self, client: TestClient):
+        """scene mapping must be a dict, not a string or list."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_bad_scene_struct"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        pm.write_project_index(project_name, {"scenes": {"s1-1": "not-a-dict"}})
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "structure" in detail.lower() or "invalid" in detail.lower()
+
+    def test_get_scene_script_rejects_missing_required_mapping_fields(self, client: TestClient):
+        """Missing chapter_id or label must not silently succeed with empty strings."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_missing_fields"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        # Create the script file so only the mapping is bad
+        game_dir = get_settings().workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        (game_dir / "scene1.rpy").write_text('label start:\n    return\n', encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        # missing chapter_id and label on purpose
+                        "file_path": "game/scene1.rpy",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "incomplete" in detail.lower() or "missing" in detail.lower() or "invalid" in detail.lower()
+        # Ensure it did not return 200 with empty strings
+        assert r.status_code != 200
+
+
+    def test_get_scene_script_500_when_index_top_level_not_object(self, client: TestClient):
+        """Top-level index.json must be an object, not list/null/string."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_top_level_not_obj"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        pm.write_project_index(project_name, [])
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "structure" in detail.lower() or "object" in detail.lower()
+
+    def test_get_scene_script_500_when_scene_mapping_is_null(self, client: TestClient):
+        """scene_id present but mapping is null must be 500, not 404."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_scene_mapping_null"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": None,
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "structure" in detail.lower() or "mapping" in detail.lower()
+
+
+    def test_get_scene_script_500_when_file_path_is_not_rpy_script(self, client: TestClient):
+        """file_path pointing to non-rpy / non-game files must be rejected."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_not_rpy"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        # Write a meta/project.json so we can try to read it through the script endpoint
+        meta_dir = get_settings().workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "project.json").write_text('{"secret": true}', encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "meta/project.json",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "invalid" in detail.lower() or "file_path" in detail.lower() or "script" in detail.lower()
+        # Must NOT return the contents of project.json
+        assert '"secret": true' not in r.text
+
+    def test_get_scene_script_500_when_file_path_is_not_string(self, client: TestClient):
+        """Non-string file_path must not cause a raw 500."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_path_not_string"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": 123,
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "invalid" in detail.lower() or "file_path" in detail.lower() or "structure" in detail.lower()
+
+
+    def test_get_scene_script_rejects_path_that_escapes_game_subtree(self, client: TestClient):
+        """file_path using traversal to escape game/ must be rejected even if still inside project_dir."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_escapes_game"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        # Create a .rpy file outside game/ but still inside the project
+        meta_dir = get_settings().workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "secret.rpy").write_text('label leak:\n    "leaked"\n', encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "game/../meta/secret.rpy",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 500
+        detail = r.json().get("detail", "")
+        assert "game" in detail.lower() or "file_path" in detail.lower() or "invalid" in detail.lower()
+        # Must NOT return the contents of the file
+        assert '"leaked"' not in r.text
+
+
+    def test_get_scene_script_accepts_valid_windows_style_game_path(self, client: TestClient):
+        """Windows-style backslash separators in file_path must be accepted."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_windows_path"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        game_dir = get_settings().workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        (game_dir / "scene1.rpy").write_text('label start:\n    "Hello windows"\n    return\n', encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "game\\scene1.rpy",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["file_path"] == "game\\scene1.rpy"
+        assert 'label start:' in data["content"]
+        assert '"Hello windows"' in data["content"]
+
+
+    def test_get_scene_script_accepts_redundant_separator_game_path(self, client: TestClient):
+        """Redundant separators like game//scene1.rpy must work and use normalized path semantics."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "script_redundant_sep"
+        client.post("/api/projects", json={"name": project_name})
+        pm = ProjectManager(get_settings())
+
+        game_dir = get_settings().workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        (game_dir / "scene1.rpy").write_text('label start:\n    "Hello sep"\n    return\n', encoding="utf-8")
+
+        pm.write_project_index(
+            project_name,
+            {
+                "scenes": {
+                    "s1-1": {
+                        "chapter_id": "ch1",
+                        "label": "start",
+                        "file_path": "game//scene1.rpy",
+                    }
+                }
+            },
+        )
+
+        r = client.get(f"/api/projects/{project_name}/scenes/s1-1/script")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["file_path"] == "game//scene1.rpy"
+        assert 'label start:' in data["content"]
+        assert '"Hello sep"' in data["content"]
