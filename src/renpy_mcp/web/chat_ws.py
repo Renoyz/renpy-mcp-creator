@@ -249,6 +249,7 @@ class BlueprintOrchestrator:
                 {
                     "type": "message",
                     "role": "assistant",
+                    "message_kind": "text",
                     "content": assistant_content,
                     "pipeline_stage": self.phase.value,
                 }
@@ -280,6 +281,7 @@ class BlueprintOrchestrator:
                     {
                         "type": "message",
                         "role": "assistant",
+                        "message_kind": "text",
                         "content": assistant_content,
                         "pipeline_stage": self.phase.value,
                     }
@@ -301,11 +303,15 @@ class BlueprintOrchestrator:
                 {
                     "type": "message",
                     "role": "assistant",
+                    "message_kind": "text",
                     "content": assistant_content,
                     "pipeline_stage": self.phase.value,
                 },
                 {
-                    "type": "blueprint_draft",
+                    "type": "message",
+                    "role": "assistant",
+                    "message_kind": "blueprint_draft",
+                    "content": "蓝图草案已生成，请查看并确认。",
                     "draft": draft_dict,
                     "pipeline_stage": self.phase.value,
                 },
@@ -389,6 +395,7 @@ class BlueprintOrchestrator:
                 {
                     "type": "message",
                     "role": "assistant",
+                    "message_kind": "system",
                     "content": assistant_content,
                     "pipeline_stage": self.phase.value,
                 }
@@ -407,6 +414,7 @@ class BlueprintOrchestrator:
             {
                 "type": "message",
                 "role": "assistant",
+                "message_kind": "text",
                 "content": assistant_content,
                 "pipeline_stage": self.phase.value,
             }

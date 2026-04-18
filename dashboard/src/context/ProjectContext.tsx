@@ -135,9 +135,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [blueprintPhase, setBlueprintPhaseState] = useState<BlueprintPhase>("idle");
   const [blueprintDraft, setBlueprintDraft] = useState<Blueprint | null>(null);
   const [interviewMessages, setInterviewMessages] = useState<InterviewMessage[]>([]);
-  const interviewTurnRef = useRef(0);
-  const refinementRoundRef = useRef(0);
-  const activeProjectNameRef = useRef<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const blueprintConfirmationSenderRef = useRef<((approved: boolean) => boolean) | null>(null);
   const blueprintStartSenderRef = useRef<(() => void) | null>(null);
@@ -222,8 +219,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setScriptError(null);
     setBlueprintDraft(null);
     setInterviewMessages([]);
-    interviewTurnRef.current = 0;
-    refinementRoundRef.current = 0;
     setGenerationProgress(null);
     if (genTimerRef.current) {
       clearInterval(genTimerRef.current);
@@ -373,9 +368,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setInterviewMessages([]);
     setBlueprintDraft(null);
     setGenerationProgress(null);
-    interviewTurnRef.current = 0;
-    refinementRoundRef.current = 0;
-    activeProjectNameRef.current = currentProject?.name ?? null;
     requestBlueprintCollectionStart();
   }, [currentProject, requestBlueprintCollectionStart]);
 
@@ -391,21 +383,27 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     };
 
     if (event.type === "message") {
-      if (event.role === "user") {
+      if (event.message_kind === "blueprint_draft") {
+        if (event.draft) {
+          setBlueprintDraft(event.draft as Blueprint);
+        }
+        updatePhase(event.pipeline_stage ?? "reviewing");
+      } else if (event.role === "user") {
         setInterviewMessages((prev) => [
           ...prev,
           { id: `${Date.now()}_u`, role: "user", content: String(event.content ?? "") },
         ]);
+        if (event.pipeline_stage) updatePhase(event.pipeline_stage);
       } else if (event.role === "assistant") {
         setInterviewMessages((prev) => [
           ...prev,
           { id: `${Date.now()}_a`, role: "assistant", content: String(event.content ?? "") },
         ]);
-      }
-      if (event.pipeline_stage) {
-        updatePhase(event.pipeline_stage);
-        if (event.pipeline_stage === "editing" && currentProject?.name) {
-          loadProjectData(currentProject.name);
+        if (event.pipeline_stage) {
+          updatePhase(event.pipeline_stage);
+          if (event.pipeline_stage === "editing" && currentProject?.name) {
+            loadProjectData(currentProject.name);
+          }
         }
       }
     } else if (event.type === "blueprint_draft") {

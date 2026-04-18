@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2, CheckCircle, RefreshCw, Sparkles } from "lucide-react";
-import { useProject, type InterviewMessage } from "../context/ProjectContext";
+import { useProject } from "../context/ProjectContext";
 
 export type MessageType =
   | "user"
   | "assistant"
   | "tool_start"
   | "tool_result"
-  | "error";
+  | "error"
+  | "blueprint_draft"
+  | "confirmation_request"
+  | "progress";
 
 export interface ChatMessage {
   id: string;
@@ -15,6 +18,10 @@ export interface ChatMessage {
   content: string;
   toolName?: string;
   imageUrl?: string;
+  draft?: any;
+  confirmationId?: string;
+  step?: string;
+  percent?: number;
   timestamp: number;
 }
 
@@ -118,13 +125,96 @@ function convertHistoryToMessages(history: any[]): ChatMessage[] {
   return result;
 }
 
-function convertInterviewToMessages(interviewMessages: InterviewMessage[]): ChatMessage[] {
-  return interviewMessages.map((m) => ({
-    id: m.id,
-    type: (m.role === "user" ? "user" : "assistant") as MessageType,
-    content: m.content,
-    timestamp: Date.now(),
-  }));
+function convertEventToChatMessage(event: any): ChatMessage | null {
+  const id = `${Date.now()}_${Math.random()}`;
+  const ts = Date.now();
+
+  if (["message", "blueprint_draft", "confirmation_request", "progress", "error"].includes(event.type)) {
+    if (event.type === "message") {
+      const msgKind = event.message_kind;
+      if (msgKind === "blueprint_draft") {
+        return {
+          id,
+          type: "blueprint_draft",
+          content: event.content || "蓝图草案已生成，请查看并确认。",
+          draft: event.draft,
+          timestamp: ts,
+        };
+      }
+      return {
+        id,
+        type: event.role === "user" ? "user" : "assistant",
+        content: String(event.content ?? ""),
+        timestamp: ts,
+      };
+    }
+    if (event.type === "blueprint_draft") {
+      return {
+        id,
+        type: "blueprint_draft",
+        content: "蓝图草案已生成，请查看并确认。",
+        draft: event.draft,
+        timestamp: ts,
+      };
+    }
+    if (event.type === "confirmation_request") {
+      return {
+        id,
+        type: "confirmation_request",
+        content: event.message || "请确认以下蓝图草案。",
+        draft: event.draft,
+        confirmationId: event.confirmation_id,
+        timestamp: ts,
+      };
+    }
+    if (event.type === "progress") {
+      return {
+        id,
+        type: "progress",
+        content: event.step || "",
+        step: event.step,
+        percent: event.percent,
+        timestamp: ts,
+      };
+    }
+    if (event.type === "error") {
+      return { id, type: "error", content: event.message || "Error", timestamp: ts };
+    }
+  }
+
+  if (event.type === "assistant_delta") {
+    return { id, type: "assistant", content: event.content || event.delta || "", timestamp: ts };
+  }
+
+  if (event.type === "tool_start") {
+    return null; // tool_start is not displayed as a separate message
+  }
+
+  if (event.type === "tool_result") {
+    if (event.result?.success) {
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(event.result.content || "{}");
+      } catch {
+        parsed = null;
+      }
+      if (parsed?.primary_preview_url) {
+        const label =
+          parsed.image_type === "background"
+            ? "Background generated"
+            : "Character sprite generated";
+        return { id, type: "assistant", content: label, imageUrl: parsed.primary_preview_url, timestamp: ts };
+      } else {
+        const summary = summarizeToolResult(event.result.content || "");
+        if (summary) {
+          return { id, type: "assistant", content: summary, timestamp: ts };
+        }
+      }
+    }
+    return null;
+  }
+
+  return null;
 }
 
 export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawerProps) {
@@ -141,13 +231,11 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const historyRequestIdRef = useRef(0);
-  const { currentProject, blueprintPhase, interviewMessages, blueprintDraft, handleBlueprintEvent, sendBlueprintConfirmation, registerBlueprintConfirmationSender, registerBlueprintStartSender } = useProject();
+  const { currentProject, blueprintPhase, blueprintDraft, handleBlueprintEvent, sendBlueprintConfirmation, registerBlueprintConfirmationSender, registerBlueprintStartSender } = useProject();
   const isInterviewMode = blueprintPhase === "collecting" || blueprintPhase === "reviewing";
   const isReviewing = blueprintPhase === "reviewing";
 
-  const displayMessages = isInterviewMode
-    ? convertInterviewToMessages(interviewMessages)
-    : messages;
+  const displayMessages = messages;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -301,12 +389,14 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
       try {
         const data = JSON.parse(event.data);
 
-        // Blueprint orchestrator events
+        // Blueprint orchestrator events (also update context state)
         if (["message", "blueprint_draft", "confirmation_request", "progress", "error"].includes(data.type)) {
           if (data.type === "confirmation_request" && data.confirmation_id) {
             setBlueprintConfirmationId(data.confirmation_id);
           }
           handleBlueprintEvent(data);
+          const msg = convertEventToChatMessage(data);
+          if (msg) setMessages((prev) => [...prev, msg]);
           return;
         }
 
@@ -319,55 +409,23 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
           });
           return;
         }
-        if (data.type === "tool_start" || data.type === "tool_result") {
-          if (data.type === "tool_result" && data.result?.success) {
-            let parsed: any = null;
-            try {
-              parsed = JSON.parse(data.result.content || "{}");
-            } catch {
-              parsed = null;
-            }
-            if (parsed?.primary_preview_url) {
-              const label =
-                parsed.image_type === "background"
-                  ? "Background generated"
-                  : "Character sprite generated";
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: `${Date.now()}_${Math.random()}`,
-                  type: "assistant",
-                  content: label,
-                  imageUrl: parsed.primary_preview_url,
-                  timestamp: Date.now(),
-                },
-              ]);
-            } else {
-              const summary = summarizeToolResult(data.result.content || "");
-              if (summary) {
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    id: `${Date.now()}_${Math.random()}`,
-                    type: "assistant",
-                    content: summary,
-                    timestamp: Date.now(),
-                  },
-                ]);
-              }
-            }
-          }
+
+        const msg = convertEventToChatMessage(data);
+        if (msg) {
+          setMessages((prev) => [...prev, msg]);
           return;
         }
-        const msg: ChatMessage = {
-          id: `${Date.now()}_${Math.random()}`,
-          type: data.type || "assistant",
-          content:
-            data.content || data.delta || data.result?.content || data.message || "",
-          toolName: data.tool_name,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, msg]);
+
+        // Fallback
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}_${Math.random()}`,
+            type: "assistant",
+            content: data.content || data.delta || data.result?.content || data.message || "",
+            timestamp: Date.now(),
+          },
+        ]);
       } catch {
         setMessages((prev) => [
           ...prev,
@@ -410,8 +468,14 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     if (!text) return;
 
     if (isInterviewMode && !isReviewing) {
-      // Blueprint interview mode: send over WS and add locally for immediate feedback
       handleBlueprintEvent({ type: "message", role: "user", content: text });
+      const msg: ChatMessage = {
+        id: `${Date.now()}_${Math.random()}`,
+        type: "user",
+        content: text,
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, msg]);
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "user_message", content: text, project_name: currentProject?.name ?? null }));
       }
@@ -510,17 +574,29 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
                       ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-100"
                       : msg.type === "tool_result"
                       ? "bg-green-100 text-green-900 dark:bg-green-900/30 dark:text-green-100"
+                      : msg.type === "blueprint_draft"
+                      ? "bg-purple-100 text-purple-900 dark:bg-purple-900/30 dark:text-purple-100"
+                      : msg.type === "confirmation_request"
+                      ? "bg-blue-100 text-blue-900 dark:bg-blue-900/30 dark:text-blue-100"
+                      : msg.type === "progress"
+                      ? "bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                       : "bg-muted"
                   }`}
                 >
                   <div className="flex items-center gap-1.5 pb-1 text-xs opacity-80">
                     {msg.type === "user" && <User className="h-3 w-3" />}
                     {msg.type === "assistant" && <Bot className="h-3 w-3" />}
+                    {msg.type === "blueprint_draft" && <Sparkles className="h-3 w-3" />}
+                    {msg.type === "confirmation_request" && <CheckCircle className="h-3 w-3" />}
+                    {msg.type === "progress" && <Loader2 className="h-3 w-3 animate-spin" />}
                     {msg.type === "tool_start" && <Wrench className="h-3 w-3" />}
                     {msg.type === "tool_result" && <CheckCircle2 className="h-3 w-3" />}
                     {msg.type === "error" && <span>!</span>}
                     <span className="capitalize">{msg.type.replace("_", " ")}</span>
                     {msg.toolName && <span className="font-medium">({msg.toolName})</span>}
+                    {msg.percent !== undefined && (
+                      <span className="font-medium">{msg.percent}%</span>
+                    )}
                   </div>
                   <div className="whitespace-pre-wrap">{msg.content}</div>
                   {msg.imageUrl && (

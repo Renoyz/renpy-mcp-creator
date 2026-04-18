@@ -68,6 +68,7 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         events = _drain_events(websocket, 1)
         assert events[0]["type"] == "message"
         assert events[0]["role"] == "assistant"
+        assert events[0].get("message_kind") == "text"
         assert "太棒了" in events[0]["content"]
         assert events[0]["pipeline_stage"] == "collecting"
 
@@ -79,16 +80,15 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         assert events[0]["role"] == "assistant"
         assert events[0]["pipeline_stage"] == "collecting"
 
-        # Turn 2 -> reviewing (message + blueprint_draft + confirmation_request)
+        # Turn 2 -> reviewing (text message + blueprint_draft message + confirmation_request)
         websocket.send_json({"type": "user_message", "content": "final info", "project_name": project_name})
         events = _drain_events(websocket, 3)
 
         types = [e["type"] for e in events]
-        assert "message" in types
-        assert "blueprint_draft" in types
+        assert types.count("message") == 2
         assert "confirmation_request" in types
 
-        draft_event = next(e for e in events if e["type"] == "blueprint_draft")
+        draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
         assert draft_event["draft"]["title"] == project_name
         assert draft_event["pipeline_stage"] == "reviewing"
 

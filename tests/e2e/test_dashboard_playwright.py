@@ -1558,32 +1558,6 @@ def test_workspace_shows_persistent_ai_panel(
     expect(ai_panel.locator("text=AI 助手")).to_be_visible(timeout=5000)
 
 
-def test_workspace_shows_persistent_ai_panel(
-    page: Page, server_url: str, e2e_workspace: Path
-) -> None:
-    """Workspace editing view should show both main content and persistent right AI panel."""
-    assert wait_for_server(server_url), "Server not ready"
-
-    project_name = f"playwright_ai_ws_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
-    _seed_project_blueprint(e2e_workspace, project_name)
-
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
-    expect(page.locator("[data-testid='workspace-project-title']")).to_have_text(
-        project_name, timeout=30000
-    )
-
-    # Main workspace content visible
-    expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
-
-    # Right AI panel visible simultaneously
-    ai_panel = page.locator("[data-testid='chat-panel-docked']")
-    expect(ai_panel).to_be_visible(timeout=10000)
-    # It should contain the Bot header
-    expect(ai_panel.locator("text=AI 助手")).to_be_visible(timeout=5000)
-
-
 def test_onboarding_uses_existing_right_ai_panel(page: Page, server_url: str) -> None:
     """Clicking '让 AI 生成蓝图' should use the already-visible right panel, not open an overlay."""
     assert wait_for_server(server_url), "Server not ready"
@@ -1798,7 +1772,7 @@ def test_reviewing_shows_confirmation_in_chat_drawer(
     expect(confirmation_panel.locator("button", has_text="继续调整")).to_be_visible(timeout=15000)
 
     # Main content should also show reviewing
-    expect(page.locator("text=蓝图草案已生成")).to_be_visible(timeout=10000)
+    expect(page.locator("h2", has_text="蓝图草案已生成")).to_be_visible(timeout=10000)
 
     # Click "继续调整" from chat drawer should return to collecting
     confirmation_panel.locator("button", has_text="继续调整").click()

@@ -53,5 +53,13 @@ workspace/
 builds/
 *.log
 
+# Debug artifacts
+debug_*.png
+debug_*.html
+leak_*.png
+.tmp-rembg-check/
+scripts/verify_real_flow.py
+uv.lock
+
 # Secrets
 .env
