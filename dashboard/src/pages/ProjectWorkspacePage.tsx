@@ -1,15 +1,41 @@
-import { useEffect, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { CurrentProject, useProject } from "../context/ProjectContext";
-import { Loader2, Play, Hammer, Map, FileCode, Images } from "lucide-react";
+import { WorkspaceSidebar } from "../components/workspace/WorkspaceSidebar";
+import { WorkspaceTabs, type WorkspaceTab } from "../components/workspace/WorkspaceTabs";
+import { BlueprintWorkspaceView } from "../components/workspace/BlueprintWorkspaceView";
+import { StoryMapWorkspaceView } from "../components/workspace/StoryMapWorkspaceView";
+import { SceneWorkspaceView } from "../components/workspace/SceneWorkspaceView";
+import { WorkspaceOnboardingView } from "../components/workspace/WorkspaceOnboardingView";
+import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
 
 type Status = "idle" | "running" | "success" | "failed";
 
 export function ProjectWorkspacePage() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
-  const { currentProject, loading, selectProject } = useProject();
+  const {
+    currentProject,
+    meta,
+    blueprint,
+    chapters,
+    storymap,
+    selectedSceneId,
+    selectedSceneScript,
+    scriptError,
+    error,
+    blueprintPhase,
+    generationProgress,
+    selectProject,
+    loadProjectData,
+    selectScene,
+    startBlueprintCollection,
+  } = useProject();
+
   const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
+  const snapshotLoadTokenRef = useRef(0);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("blueprint");
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
@@ -18,32 +44,64 @@ export function ProjectWorkspacePage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewAvailable, setPreviewAvailable] = useState(false);
 
-  const activeProject =
-    currentProject?.name === name
-      ? currentProject
-      : resolvedProject?.name === name
-      ? resolvedProject
+  // Derive the active project name as a stable primitive.
+  // This prevents object-reference changes from re-triggering the load effect.
+  const activeProjectName =
+    currentProject != null && currentProject.name === name
+      ? currentProject.name
+      : resolvedProject != null && resolvedProject.name === name
+      ? resolvedProject.name
       : null;
 
+  // Resolve current project selection
   useEffect(() => {
     if (!name) return;
     if (currentProject?.name === name) {
       setResolvedProject(currentProject);
       return;
     }
-    if (currentProject?.name !== name) {
-      selectProject(name)
-        .then((project) => {
-          setResolvedProject(project);
-        })
-        .catch(() => {
-          navigate("/projects");
-        });
-    }
+    selectProject(name)
+      .then((project) => {
+        setResolvedProject(project);
+      })
+      .catch(() => {
+        navigate("/projects");
+      });
   }, [name, currentProject, selectProject, navigate]);
 
+  // Load project snapshot data
   useEffect(() => {
-    if (!activeProject) return;
+    if (!name || !activeProjectName) {
+      setSnapshotLoading(true);
+      return;
+    }
+
+    const token = ++snapshotLoadTokenRef.current;
+    setSnapshotLoading(true);
+
+    loadProjectData(name).finally(() => {
+      if (token === snapshotLoadTokenRef.current) {
+        setSnapshotLoading(false);
+      }
+    });
+  }, [name, activeProjectName, loadProjectData]);
+
+  const isOnboarding = blueprintPhase !== "editing";
+
+  // Reset build/preview local state and active tab when project changes
+  useEffect(() => {
+    setBuildStatus("idle");
+    setBuildMessage("");
+    setPreviewStatus("idle");
+    setPreviewMessage("");
+    setPreviewUrl(null);
+    setPreviewAvailable(false);
+    setActiveTab("blueprint");
+  }, [name]);
+
+  // Poll build status
+  useEffect(() => {
+    if (!activeProjectName) return;
     fetch("/api/projects/build/status")
       .then((r) => r.json())
       .then((data) => {
@@ -53,13 +111,11 @@ export function ProjectWorkspacePage() {
           setPreviewAvailable(!!data.previewable);
         }
       })
-      .catch(() => {
-        // ignore
-      });
-  }, [activeProject]);
+      .catch(() => {});
+  }, [activeProjectName]);
 
   const handleBuild = async () => {
-    if (!activeProject) return;
+    if (!activeProjectName) return;
     setBuildStatus("running");
     setBuildMessage("");
     setPreviewUrl(null);
@@ -86,7 +142,7 @@ export function ProjectWorkspacePage() {
   };
 
   const handlePreview = async () => {
-    if (!activeProject) return;
+    if (!activeProjectName) return;
     setPreviewLoading(true);
     setPreviewStatus("running");
     setPreviewMessage("");
@@ -114,11 +170,16 @@ export function ProjectWorkspacePage() {
     }
   };
 
+  const handleSelectScene = async (sceneId: string) => {
+    await selectScene(sceneId, activeProjectName || undefined);
+    setActiveTab("scene");
+  };
+
   if (!name) {
     return null;
   }
 
-  if (loading || !activeProject) {
+  if (snapshotLoading || !activeProjectName) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -127,139 +188,166 @@ export function ProjectWorkspacePage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-4">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">{activeProject.name}</h1>
-        <p className="text-sm text-muted-foreground">{activeProject.path}</p>
-      </header>
+    <div className="h-full flex flex-col -m-4">
+      {/* Top header */}
+      <div className="shrink-0 border-b bg-white px-4 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 data-testid="workspace-project-title" className="text-xl font-bold tracking-tight text-gray-900">{activeProjectName}</h1>
+            {meta && (
+              <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-medium">
+                  {meta.status}
+                </span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-xs">
+                  {meta.pipeline_stage}
+                </span>
+                {meta.description && <span className="truncate max-w-md">{meta.description}</span>}
+              </div>
+            )}
+          </div>
+          {!isOnboarding && (
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleBuild}
+                disabled={buildStatus === "running"}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed ${
+                  buildStatus === "failed"
+                    ? "bg-red-600 text-white"
+                    : buildStatus === "success"
+                    ? "bg-green-600 text-white"
+                    : "bg-gray-900 text-white"
+                }`}
+              >
+                {buildStatus === "running" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Hammer className="h-3.5 w-3.5" />
+                )}
+                {buildStatus === "running"
+                  ? "Building..."
+                  : buildStatus === "success"
+                  ? "Build OK"
+                  : buildStatus === "failed"
+                  ? "Build Failed"
+                  : "Build"}
+              </button>
+              <button
+                onClick={handlePreview}
+                disabled={previewLoading}
+                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed"
+              >
+                {previewLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                {previewLoading ? "Starting..." : "Preview"}
+              </button>
+            </div>
+          )}
+        </div>
 
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={handleBuild}
-          disabled={buildStatus === "running"}
-          className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed ${
-            buildStatus === "failed"
-              ? "bg-destructive"
-              : buildStatus === "success"
-              ? "bg-green-600"
-              : "bg-primary"
-          }`}
-        >
-          {buildStatus === "running" ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Hammer className="h-4 w-4" />
-          )}
-          {buildStatus === "running"
-            ? "Building..."
-            : buildStatus === "success"
-            ? "Build Success"
-            : buildStatus === "failed"
-            ? "Build Failed"
-            : "Build"}
-        </button>
-        <button
-          onClick={handlePreview}
-          disabled={previewLoading}
-          className="inline-flex items-center gap-2 rounded-md border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-accent disabled:cursor-not-allowed"
-        >
-          {previewLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Play className="h-4 w-4" />
-          )}
-          {previewLoading ? "Starting..." : "Preview"}
-        </button>
+        {!isOnboarding && buildMessage && (
+          <div
+            data-testid="build-status"
+            className={`mt-2 rounded-md p-2 text-xs ${
+              buildStatus === "failed"
+                ? "bg-red-50 text-red-700"
+                : buildStatus === "success"
+                ? "bg-green-50 text-green-700"
+                : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            {buildMessage}
+            {previewAvailable && (
+              <span className="ml-2 text-green-600">Preview available</span>
+            )}
+          </div>
+        )}
+        {!isOnboarding && previewMessage && (
+          <div
+            className={`mt-2 rounded-md p-2 text-xs ${
+              previewStatus === "failed"
+                ? "bg-red-50 text-red-700"
+                : "bg-gray-100 text-gray-600"
+            }`}
+          >
+            {previewMessage}
+          </div>
+        )}
+        {!isOnboarding && previewUrl && (
+          <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-xs">
+            <span className="text-gray-500">Preview: </span>
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-blue-600 underline"
+            >
+              {previewUrl}
+            </a>
+          </div>
+        )}
       </div>
 
-      {buildMessage && (
-        <div
-          className={`rounded-md p-3 text-sm ${
-            buildStatus === "failed"
-              ? "bg-destructive/10 text-destructive"
-              : buildStatus === "success"
-              ? "bg-green-50 text-green-700"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          {buildMessage}
-          {previewAvailable && (
-            <div className="mt-1 text-xs text-green-600">Preview available</div>
+      {/* Error banner for critical snapshot failures */}
+      {error && (
+        <div className="shrink-0 mx-4 mt-3 rounded-md border border-red-200 bg-red-50 p-3 flex items-center gap-2 text-sm text-red-700">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Main workspace area */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Left: Chapter/Scene navigation — only in editing */}
+        {!isOnboarding && (
+          <div data-testid="workspace-sidebar" className="w-60 flex-shrink-0 bg-gray-50/50 border-r border-gray-200">
+            <WorkspaceSidebar
+              chapters={chapters}
+              selectedSceneId={selectedSceneId}
+              onSelectScene={handleSelectScene}
+            />
+          </div>
+        )}
+
+        {/* Main content */}
+        <div className={`flex-1 min-w-0 flex flex-col ${isOnboarding ? "bg-gray-50" : "bg-white"}`}>
+          {isOnboarding ? (
+            <div data-testid="workspace-onboarding-view" className="flex-1 overflow-hidden">
+              <WorkspaceOnboardingView
+                phase={blueprintPhase}
+                generationProgress={generationProgress}
+                onStartAI={() => {
+                  startBlueprintCollection();
+                  window.dispatchEvent(new CustomEvent("open-chat-drawer"));
+                }}
+
+              />
+            </div>
+          ) : (
+            <>
+              <WorkspaceTabs
+                activeTab={activeTab}
+                onChange={setActiveTab}
+                hasSceneSelected={!!selectedSceneId}
+                onBackToOverview={() => setActiveTab("blueprint")}
+              />
+              <div className="flex-1 overflow-hidden">
+                {activeTab === "blueprint" && <BlueprintWorkspaceView blueprint={blueprint} />}
+                {activeTab === "storymap" && <StoryMapWorkspaceView storymap={storymap} chapters={chapters} />}
+                {activeTab === "scene" && (
+                  <SceneWorkspaceView
+                    script={selectedSceneScript}
+                    scriptError={scriptError}
+                    chapters={chapters}
+                  />
+                )}
+              </div>
+            </>
           )}
         </div>
-      )}
-
-      {previewMessage && (
-        <div
-          className={`rounded-md p-3 text-sm ${
-            previewStatus === "failed"
-              ? "bg-destructive/10 text-destructive"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          {previewMessage}
-        </div>
-      )}
-
-      {previewUrl && (
-        <div className="rounded-md border bg-card p-3 text-sm">
-          <span className="text-muted-foreground">Preview URL: </span>
-          <a
-            href={previewUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-primary underline"
-          >
-            {previewUrl}
-          </a>
-        </div>
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Link
-          to="/story-map"
-          className="rounded-lg border bg-card p-4 transition-shadow hover:shadow-sm"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary">
-              <Map className="h-5 w-5 text-secondary-foreground" />
-            </div>
-            <div>
-              <h4 className="font-medium">Story Map</h4>
-              <p className="text-xs text-muted-foreground">查看故事流程图</p>
-            </div>
-          </div>
-        </Link>
-
-        <Link
-          to="/script-editor"
-          className="rounded-lg border bg-card p-4 transition-shadow hover:shadow-sm"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary">
-              <FileCode className="h-5 w-5 text-secondary-foreground" />
-            </div>
-            <div>
-              <h4 className="font-medium">脚本编辑</h4>
-              <p className="text-xs text-muted-foreground">编辑 Ren'Py 脚本</p>
-            </div>
-          </div>
-        </Link>
-
-        <Link
-          to="/assets"
-          className="rounded-lg border bg-card p-4 transition-shadow hover:shadow-sm"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary">
-              <Images className="h-5 w-5 text-secondary-foreground" />
-            </div>
-            <div>
-              <h4 className="font-medium">资源管理</h4>
-              <p className="text-xs text-muted-foreground">管理项目资源</p>
-            </div>
-          </div>
-        </Link>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2 } from "lucide-react";
-import { useProject } from "../context/ProjectContext";
+import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2, CheckCircle, RefreshCw, Sparkles } from "lucide-react";
+import { useProject, type InterviewMessage } from "../context/ProjectContext";
 
 export type MessageType =
   | "user"
@@ -26,9 +26,10 @@ export interface PendingConfirmation {
 }
 
 interface ChatDrawerProps {
-  open: boolean;
-  onClose: () => void;
+  open?: boolean;
+  onClose?: () => void;
   wsUrl?: string;
+  mode?: "overlay" | "docked";
 }
 
 const summarizeToolResult = (content: string): string | null => {
@@ -117,24 +118,43 @@ function convertHistoryToMessages(history: any[]): ChatMessage[] {
   return result;
 }
 
-export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
+function convertInterviewToMessages(interviewMessages: InterviewMessage[]): ChatMessage[] {
+  return interviewMessages.map((m) => ({
+    id: m.id,
+    type: (m.role === "user" ? "user" : "assistant") as MessageType,
+    content: m.content,
+    timestamp: Date.now(),
+  }));
+}
+
+export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawerProps) {
+  const isDocked = mode === "docked";
+  const effectiveOpen = isDocked ? true : (open ?? false);
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [blueprintConfirmationId, setBlueprintConfirmationId] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const historyRequestIdRef = useRef(0);
-  const { currentProject } = useProject();
+  const { currentProject, blueprintPhase, interviewMessages, blueprintDraft, handleBlueprintEvent, sendBlueprintConfirmation, registerBlueprintConfirmationSender, registerBlueprintStartSender } = useProject();
+  const isInterviewMode = blueprintPhase === "collecting" || blueprintPhase === "reviewing";
+  const isReviewing = blueprintPhase === "reviewing";
+
+  const displayMessages = isInterviewMode
+    ? convertInterviewToMessages(interviewMessages)
+    : messages;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [displayMessages]);
 
   useEffect(() => {
-    if (!open || !currentProject?.name) {
+    if (!effectiveOpen || !currentProject?.name) {
       if (!currentProject?.name) setMessages([]);
       return;
     }
@@ -163,7 +183,7 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
 
   useEffect(() => {
     const handleProjectChange = () => {
-      if (open && wsRef.current) {
+      if (effectiveOpen && wsRef.current) {
         wsRef.current.close();
         setReconnectKey((k) => k + 1);
       }
@@ -172,10 +192,79 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
     return () => {
       window.removeEventListener("project-changed", handleProjectChange);
     };
-  }, [open]);
+  }, [effectiveOpen]);
+
+  const pendingWsConfirmationRef = useRef<boolean | null>(null);
+  const blueprintConfirmationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open) {
+    blueprintConfirmationIdRef.current = blueprintConfirmationId;
+  }, [blueprintConfirmationId]);
+
+  const flushPendingConfirmationRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    flushPendingConfirmationRef.current = () => {
+      if (pendingWsConfirmationRef.current === null) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      if (!blueprintConfirmationIdRef.current) return;
+      const approved = pendingWsConfirmationRef.current;
+      pendingWsConfirmationRef.current = null;
+      wsRef.current.send(
+        JSON.stringify({
+          type: "confirmation_response",
+          confirmation_id: blueprintConfirmationIdRef.current,
+          approved,
+          project_name: currentProject?.name ?? null,
+        })
+      );
+    };
+  }, [currentProject?.name]);
+
+  useEffect(() => {
+    flushPendingConfirmationRef.current?.();
+  }, [blueprintConfirmationId]);
+
+  useEffect(() => {
+    const sender = (approved: boolean) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && blueprintConfirmationIdRef.current) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "confirmation_response",
+            confirmation_id: blueprintConfirmationIdRef.current,
+            approved,
+            project_name: currentProject?.name ?? null,
+          })
+        );
+        return true;
+      }
+      pendingWsConfirmationRef.current = approved;
+      return false;
+    };
+    return registerBlueprintConfirmationSender(sender);
+  }, [registerBlueprintConfirmationSender, currentProject?.name]);
+
+  const pendingWsStartRef = useRef(false);
+
+  useEffect(() => {
+    const sender = () => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "user_message",
+            content: "start_blueprint_collection",
+            project_name: currentProject?.name ?? null,
+          })
+        );
+      } else {
+        pendingWsStartRef.current = true;
+      }
+    };
+    return registerBlueprintStartSender(sender);
+  }, [registerBlueprintStartSender, currentProject?.name]);
+
+  useEffect(() => {
+    if (!effectiveOpen) {
       wsRef.current?.close();
       wsRef.current = null;
       setConnected(false);
@@ -195,11 +284,32 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
     ws.onopen = () => {
       setConnected(true);
       setConnecting(false);
+      if (pendingWsStartRef.current) {
+        pendingWsStartRef.current = false;
+        ws.send(
+          JSON.stringify({
+            type: "user_message",
+            content: "start_blueprint_collection",
+            project_name: currentProject?.name ?? null,
+          })
+        );
+      }
+      flushPendingConfirmationRef.current?.();
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Blueprint orchestrator events
+        if (["message", "blueprint_draft", "confirmation_request", "progress", "error"].includes(data.type)) {
+          if (data.type === "confirmation_request" && data.confirmation_id) {
+            setBlueprintConfirmationId(data.confirmation_id);
+          }
+          handleBlueprintEvent(data);
+          return;
+        }
+
         if (data.type === "awaiting_confirmation") {
           setPendingConfirmation({
             confirmationId: data.confirmation_id,
@@ -293,11 +403,23 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
     return () => {
       ws.close();
     };
-  }, [open, wsUrl, reconnectKey]);
+  }, [open, wsUrl, reconnectKey, handleBlueprintEvent]);
 
   const handleSend = () => {
     const text = input.trim();
-    if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!text) return;
+
+    if (isInterviewMode && !isReviewing) {
+      // Blueprint interview mode: send over WS and add locally for immediate feedback
+      handleBlueprintEvent({ type: "message", role: "user", content: text });
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "user_message", content: text, project_name: currentProject?.name ?? null }));
+      }
+      setInput("");
+      return;
+    }
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     const msg: ChatMessage = {
       id: `${Date.now()}_${Math.random()}`,
@@ -325,16 +447,21 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
 
   return (
     <>
-      {open && (
+      {!isDocked && open && (
         <div
           className="fixed inset-0 z-40 bg-black/30 lg:hidden"
           onClick={onClose}
         />
       )}
       <div
-        className={`fixed inset-y-0 right-0 z-50 w-full max-w-md transform border-l bg-card shadow-xl transition-transform duration-200 ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
+        data-testid={isDocked ? "chat-panel-docked" : "chat-drawer"}
+        className={
+          isDocked
+            ? "flex h-full w-full flex-col"
+            : `fixed inset-y-0 right-0 z-50 w-full max-w-md transform border-l bg-card shadow-xl transition-transform duration-200 ${
+                effectiveOpen ? "translate-x-0" : "translate-x-full"
+              }`
+        }
       >
         <div className="flex h-full flex-col">
           {/* Header */}
@@ -352,19 +479,21 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
                 <Loader2 className="ml-2 h-4 w-4 animate-spin text-muted-foreground" />
               )}
             </div>
-            <button onClick={onClose} aria-label="Close chat">
-              <X className="h-5 w-5" />
-            </button>
+            {!isDocked && (
+              <button onClick={onClose} aria-label="Close chat">
+                <X className="h-5 w-5" />
+              </button>
+            )}
           </div>
 
           {/* Messages */}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {messages.length === 0 && (
+            {displayMessages.length === 0 && (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                发送消息开始对话
+                {isInterviewMode ? "发送消息继续对话" : "发送消息开始对话"}
               </div>
             )}
-            {messages.map((msg) => (
+            {displayMessages.map((msg) => (
               <div
                 key={msg.id}
                 className={`flex ${
@@ -440,6 +569,50 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
             </div>
           )}
 
+          {/* Blueprint draft confirmation panel in reviewing mode */}
+          {isReviewing && blueprintDraft && (
+            <div className="border-t bg-muted/50 p-3" data-testid="chat-blueprint-confirmation">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="w-4 h-4 text-purple-500" />
+                <span className="text-sm font-medium">蓝图草案确认</span>
+              </div>
+              <div className="rounded border bg-card p-2 mb-3 space-y-1.5">
+                <p className="text-sm font-semibold text-gray-900">{blueprintDraft.title || "未命名项目"}</p>
+                <div className="flex flex-wrap gap-2">
+                  {blueprintDraft.genre && (
+                    <span className="inline-flex items-center px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-100 text-purple-700">
+                      {blueprintDraft.genre}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-gray-500">
+                  {blueprintDraft.characters && (
+                    <span>{blueprintDraft.characters.length} 角色</span>
+                  )}
+                  {blueprintDraft.chapters && (
+                    <span>{blueprintDraft.chapters.length} 章节</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => sendBlueprintConfirmation(false)}
+                  className="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-accent inline-flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  继续调整
+                </button>
+                <button
+                  onClick={() => sendBlueprintConfirmation(true)}
+                  className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-1.5"
+                >
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  确认并生成
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Input */}
           <div className="border-t p-3">
             <div className="flex items-end gap-2">
@@ -452,13 +625,14 @@ export function ChatDrawer({ open, onClose, wsUrl }: ChatDrawerProps) {
                     handleSend();
                   }
                 }}
-                placeholder="输入消息..."
+                placeholder={isReviewing ? "已生成蓝图草案，请在上方确认或调整" : "输入消息..."}
                 rows={1}
-                className="max-h-32 min-h-[2.5rem] flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+                disabled={isReviewing}
+                className="max-h-32 min-h-[2.5rem] flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || !connected || !!pendingConfirmation}
+                disabled={!input.trim() || isReviewing || (!isInterviewMode && (!connected || !!pendingConfirmation))}
                 className="inline-flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />

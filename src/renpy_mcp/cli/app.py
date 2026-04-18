@@ -1,7 +1,7 @@
 """CLI entry point for vn-creator."""
 
+import asyncio
 import os
-import subprocess
 import sys
 import webbrowser
 from pathlib import Path
@@ -11,8 +11,8 @@ from rich.console import Console
 from rich.table import Table
 
 from renpy_mcp.config import get_settings
+from renpy_mcp.main import run_http
 from renpy_mcp.services.sdk_provisioner import SdkProvisioner
-from renpy_mcp.web.standalone import main as web_main
 
 console = Console()
 
@@ -41,10 +41,9 @@ def start(port: int, no_browser: bool):
     else:
         console.print(f"[green]Dashboard will be available at {url}[/green]")
 
-    # Run the web server (blocks)
+    # Run the unified HTTP server (blocks)
     try:
-        sys.argv = [sys.argv[0], "--port", str(port)]
-        web_main()
+        asyncio.run(run_http("127.0.0.1", port, open_browser=False))
     except KeyboardInterrupt:
         console.print("\n[yellow]Server stopped.[/yellow]")
 

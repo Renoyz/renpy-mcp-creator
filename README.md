@@ -47,10 +47,10 @@ vn-creator start --port 8080
 #### 方式三：开发模式
 
 ```bash
-# 终端 1：启动后端
-python -m renpy_mcp.web.standalone --port 8080
+# 终端 1：启动统一服务（FastAPI + Dashboard）
+python -m renpy_mcp.main --transport http --port 8080
 
-# 终端 2：启动前端开发服务器
+# 终端 2：启动前端开发服务器（热更新）
 cd dashboard
 npm install
 npm run dev
@@ -72,9 +72,10 @@ vn-creator doctor
 
 1. 打开 `http://localhost:8080/dashboard`
 2. 在 **项目列表** 页面创建新项目
-3. 点击右上角 **AI 助手** 打开 Chat Drawer
-4. 用中文自然语言输入指令，例如：
-   - "创建项目叫 my_vn"
+3. 点击进入项目 **Workspace**
+4. 在 Workspace 中查看 Blueprint、Story Map、Scene 内容
+5. 点击右上角 **AI 助手** 打开 Chat Drawer
+6. 用中文自然语言输入指令，例如：
    - "写第一章：图书馆相遇"
    - "生成女主角艾米"
    - "构建项目并启动预览"
@@ -82,7 +83,7 @@ vn-creator doctor
 ## 主要功能
 
 - **统一对话引擎**：基于 LLM function calling，支持 Kimi Code（Anthropic 兼容）、DeepSeek、通义千问
-- **Dashboard 面板**：React + Vite + Tailwind，包含项目列表、Chat Drawer、Story Map / 脚本编辑器 iframe
+- **Dashboard 面板**：React + Vite + Tailwind，包含项目列表、Workspace（Blueprint / Story Map / Scene）、Chat Drawer
 - **70+ MCP 工具**：项目创建、脚本生成、AST 分析、资源管理、构建预览、实时调试
 - **SDK 自动下载**：首次启动自动从镜像下载 Ren'Py SDK，无需手动配置
 - **候选图确认**：生成角色/背景时支持确认/取消交互
@@ -112,7 +113,7 @@ renpy-mcp-unified-design/
 # 运行全部测试
 pytest
 
-# 当前测试状态：103/103 通过
+# 当前测试状态：243/243 通过（含 E2E）
 ```
 
 ## 许可证

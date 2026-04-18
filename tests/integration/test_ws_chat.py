@@ -281,13 +281,15 @@ def test_ws_chat_does_not_block_http_routes(monkeypatch, client: TestClient, tmp
 
 
 def test_ws_chat_no_provider(client: TestClient) -> None:
-    """Test that WS closes immediately when no provider is configured."""
+    """Test that WS returns error when no provider is configured and a message is sent."""
     import renpy_mcp.web.chat_ws as chat_ws
 
     original = chat_ws._get_provider
     chat_ws._get_provider = lambda: None
     try:
         with client.websocket_connect("/ws/chat") as websocket:
+            # Must send a message that requires a provider (non-whitelist, with project)
+            websocket.send_json({"type": "user_message", "content": "build"})
             data = websocket.receive_json()
             assert data["type"] == "error"
     finally:
