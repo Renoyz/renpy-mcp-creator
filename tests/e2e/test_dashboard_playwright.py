@@ -798,6 +798,139 @@ def _seed_project_blueprint(workspace: Path, project_name: str, title: str = "Ca
     (meta_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
 
 
+def _seed_project_prototype(workspace: Path, project_name: str) -> None:
+    """Write prototype artifacts so the project has a playable prototype chapter."""
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    game_dir = workspace / project_name / "game"
+    game_dir.mkdir(parents=True, exist_ok=True)
+
+    # Prototype script
+    proto_script = (
+        '# Prototype chapter: 第一章\n\n'
+        'label prototype_ch1_start:\n'
+        '    scene black\n'
+        '    "【地点：library】"\n'
+        '    "【登场角色：主角、配角】"\n'
+        '    "主角在图书馆遇到配角。"\n'
+        '    jump prototype_ch1_scene2\n\n'
+        'label prototype_ch1_scene2:\n'
+        '    scene black\n'
+        '    "【地点：cafe】"\n'
+        '    "End of prototype."\n'
+        '    return\n'
+    )
+    (game_dir / "prototype_ch1_第一章.rpy").write_text(proto_script, encoding="utf-8")
+
+    # Wired main script
+    (game_dir / "script.rpy").write_text(
+        "label start:\n"
+        "    # PROTOTYPE START (managed)\n"
+        "    call prototype_ch1_start\n"
+        "    return\n"
+        "    # PROTOTYPE END (managed)\n",
+        encoding="utf-8",
+    )
+
+    # Prototype index
+    index = {
+        "scenes": {
+            "proto-ch1-s1": {
+                "chapter_id": "ch1",
+                "scene_id": "proto-ch1-s1",
+                "title": "初次相遇",
+                "summary": "主角在图书馆遇到配角。",
+                "location": "library",
+                "next_scene_id": "proto-ch1-s2",
+                "label": "prototype_ch1_start",
+                "file_path": "game/prototype_ch1_第一章.rpy",
+                "source": "prototype",
+                "order": 1,
+            },
+            "proto-ch1-s2": {
+                "chapter_id": "ch1",
+                "scene_id": "proto-ch1-s2",
+                "title": "深夜对话",
+                "summary": "两人在咖啡厅讨论。",
+                "location": "cafe",
+                "next_scene_id": None,
+                "label": "prototype_ch1_scene2",
+                "file_path": "game/prototype_ch1_第一章.rpy",
+                "source": "prototype",
+                "order": 2,
+            },
+        }
+    }
+    (meta_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+    # Blueprint (so /scenes and /storymap have fallback data)
+    blueprint = {
+        "title": "Prototype Test",
+        "genre": "测试",
+        "worldview": "测试世界",
+        "themes": ["测试主题"],
+        "target_audience": "测试用户",
+        "estimated_play_time": "1小时",
+        "art_style": "测试风格",
+        "audio_style": "测试音乐",
+        "characters": [
+            {"name": "主角", "role": "主角", "personality": "勇敢", "appearance": "高大"},
+        ],
+        "chapters": [
+            {
+                "id": "ch1",
+                "name": "第一章",
+                "order": 1,
+                "scenes": [
+                    {"id": "proto-ch1-s1", "name": "初次相遇", "order": 1},
+                    {"id": "proto-ch1-s2", "name": "深夜对话", "order": 2},
+                ],
+            },
+        ],
+    }
+    import yaml
+    (meta_dir / "blueprint.yaml").write_text(
+        yaml.safe_dump(blueprint, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def test_workspace_prototype_build_and_preview(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """A project with prototype artifacts should build via the prototype endpoint and become previewable."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_proto_build_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_prototype(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Click Build and wait for terminal state
+    build_button = page.locator("button", has_text=re.compile("Build|Building"))
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+    expect(build_button).not_to_contain_text("Building", timeout=30000)
+
+    # Build status should indicate success (mock build produces output)
+    status_locator = page.locator("[data-testid='build-status']")
+    expect(status_locator).to_be_visible(timeout=10000)
+    status_text = status_locator.text_content() or ""
+    assert (
+        "Built" in status_text
+        or "succeeded" in status_text.lower()
+        or "mock" in status_text.lower()
+    ), f"Unexpected build status: {status_text}"
+
+    # Preview should be available
+    preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
+    preview_button.click()
+    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+
+
 def test_workspace_shows_blueprint_chapters_and_scenes(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:

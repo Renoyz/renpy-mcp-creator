@@ -995,3 +995,239 @@ async def test_commit_does_not_cleanup_old_artifacts_after_promotion_failure(
     index = pm.read_project_index(project_name)
     assert "old-s1" in index.get("scenes", {}), "Old index entry old-s1 should survive"
     assert "old-s2" in index.get("scenes", {}), "Old index entry old-s2 should survive"
+
+
+# ---------------------------------------------------------------------------
+# Prototype build endpoint tests (Phase 5 Round 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prototype_build_requires_existing_prototype_artifacts(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /api/projects/{name}/prototype/build must reject projects without prototype artifacts."""
+    project_name = "proto_build_no_proto"
+    _create_project(client, tmp_path, project_name)
+
+    r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+    assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+    detail = r.json().get("detail", "")
+    assert "prototype" in detail.lower(), f"Expected prototype-related error, got: {detail}"
+
+
+@pytest.mark.asyncio
+async def test_prototype_build_invokes_existing_build_pipeline(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When prototype artifacts exist, the build endpoint must invoke BuildManager.build."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import BuildResult
+    from renpy_mcp.services import build_manager as bm
+
+    project_name = "proto_build_invoke"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    final_path = service._final_path_from_staging(staging_path)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+    service.update_index(project_name, chapter, scenes, final_path)
+    service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    called = {"times": 0}
+
+    async def _mock_build(self, request):
+        called["times"] += 1
+        return BuildResult(
+            project_name=request.project_name,
+            target=request.target,
+            success=True,
+            output_path=tmp_path / f"{request.project_name}-dists" / f"{request.project_name}-web",
+        )
+
+    monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+    r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    assert called["times"] == 1, f"BuildManager.build should have been called once, was {called['times']}"
+
+
+@pytest.mark.asyncio
+async def test_prototype_build_failure_does_not_remove_prototype(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If BuildManager.build fails, prototype script, index, and main script wiring must remain intact."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import BuildResult
+    from renpy_mcp.services import build_manager as bm
+
+    project_name = "proto_build_fail_safe"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    final_path = service._final_path_from_staging(staging_path)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+    service.update_index(project_name, chapter, scenes, final_path)
+    service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    async def _mock_build(self, request):
+        return BuildResult(
+            project_name=request.project_name,
+            target=request.target,
+            success=False,
+            error="Simulated build failure",
+        )
+
+    monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+    # Snapshot prototype state before build
+    proto_file = tmp_path / project_name / final_path
+    proto_content_before = proto_file.read_text(encoding="utf-8")
+    index_before = pm.read_project_index(project_name)
+    script_before = (tmp_path / project_name / "game" / "script.rpy").read_text(encoding="utf-8")
+
+    r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+    assert r.status_code == 200, f"Expected 200 (build result returned), got {r.status_code}: {r.text}"
+    data = r.json()
+    assert data["success"] is False
+
+    # Prototype artifacts must survive
+    assert proto_file.exists(), "Prototype script should survive build failure"
+    assert proto_file.read_text(encoding="utf-8") == proto_content_before
+
+    index_after = pm.read_project_index(project_name)
+    for sid in new_scene_ids:
+        assert sid in index_after.get("scenes", {}), f"Prototype index entry {sid} should survive build failure"
+
+    script_after = (tmp_path / project_name / "game" / "script.rpy").read_text(encoding="utf-8")
+    assert script_after == script_before, "Main script wiring should survive build failure"
+
+
+@pytest.mark.asyncio
+async def test_prototype_build_success_marks_preview_ready(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After successful prototype build, build status must indicate previewable=True."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import BuildResult
+    from renpy_mcp.services import build_manager as bm
+
+    project_name = "proto_build_success"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    final_path = service._final_path_from_staging(staging_path)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+    service.update_index(project_name, chapter, scenes, final_path)
+    service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    build_output = tmp_path / f"{project_name}-dists" / f"{project_name}-web"
+    build_output.mkdir(parents=True, exist_ok=True)
+    (build_output / "index.html").write_text("<html>mock</html>", encoding="utf-8")
+
+    async def _mock_build(self, request):
+        return BuildResult(
+            project_name=request.project_name,
+            target=request.target,
+            success=True,
+            output_path=build_output,
+        )
+
+    monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+    r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    data = r.json()
+    assert data["success"] is True
+
+    # Build status must show previewable
+    status_r = client.get(f"/api/projects/{project_name}/build/status")
+    # Note: existing /build/status is session-based; we need to select project first
+    client.post("/api/projects/select", json={"name": project_name})
+    status_r = client.get("/api/projects/build/status")
+    assert status_r.status_code == 200
+    status_data = status_r.json()
+    assert status_data.get("previewable") is True, "Build status should be previewable after successful prototype build"
+    assert "prototype" in status_data.get("message", "").lower(), "Build status message should mention prototype"
+
+
+@pytest.mark.asyncio
+async def test_prototype_status_endpoint_reflects_prototype_presence(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """GET /api/projects/{name}/prototype/status must accurately reflect whether a prototype exists."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    # Case 1: Project without prototype
+    project_name_no_proto = "proto_status_none"
+    _create_project(client, tmp_path, project_name_no_proto)
+
+    r = client.get(f"/api/projects/{project_name_no_proto}/prototype/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["has_prototype"] is False
+    assert data["scene_count"] == 0
+    assert data["script_exists"] is False
+    assert data["wired"] is False
+
+    # Case 2: Project with prototype
+    project_name_with_proto = "proto_status_yes"
+    _create_project(client, tmp_path, project_name_with_proto)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name_with_proto, chapter, scenes)
+    final_path = service._final_path_from_staging(staging_path)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.wire_main_script_to_prototype(project_name_with_proto, scenes[0].entry_label)
+    service.update_index(project_name_with_proto, chapter, scenes, final_path)
+    service.commit_prototype_replacement(project_name_with_proto, new_scene_ids, staging_path)
+
+    r = client.get(f"/api/projects/{project_name_with_proto}/prototype/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["has_prototype"] is True
+    assert data["scene_count"] == len(scenes)
+    assert data["script_exists"] is True
+    assert data["wired"] is True

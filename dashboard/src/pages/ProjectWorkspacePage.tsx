@@ -127,11 +127,25 @@ export function ProjectWorkspacePage() {
     setBuildMessage("");
     setPreviewUrl(null);
     try {
-      const resp = await fetch("/api/projects/build", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: "web" }),
-      });
+      // Try prototype-aware build first; fall back to generic build if no prototype exists
+      let resp = await fetch(
+        `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/build`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target: "web" }),
+        }
+      );
+      if (!resp.ok && resp.status === 400) {
+        const errData = await resp.json().catch(() => ({}));
+        if (errData.detail?.includes("No prototype scenes found")) {
+          resp = await fetch("/api/projects/build", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ target: "web" }),
+          });
+        }
+      }
       const data = await resp.json();
       if (resp.ok && data.success) {
         setBuildStatus("success");

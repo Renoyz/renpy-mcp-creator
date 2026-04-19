@@ -677,6 +677,147 @@ def create_app() -> FastAPI:
         )
         return script.model_dump(mode="json")
 
+    # ---------------------------------------------------------------------------
+    # Prototype build endpoints (Phase 5 Round 2)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/api/projects/{project_name}/prototype/status")
+    async def api_prototype_status(project_name: str):
+        """Return whether the project has a generated prototype and its readiness."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        index = pm.read_project_index(project_name)
+        proto_scenes = []
+        if index and isinstance(index.get("scenes"), dict):
+            proto_scenes = [
+                s for s in index["scenes"].values()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+
+        script_paths = {s.get("file_path") for s in proto_scenes if s.get("file_path")}
+        script_exists = all(
+            (project_dir / p).exists() for p in script_paths
+        ) if script_paths else False
+
+        wired = False
+        main_script = project_dir / "game" / "script.rpy"
+        if main_script.exists():
+            wired = "# PROTOTYPE START (managed)" in main_script.read_text(encoding="utf-8")
+
+        return {
+            "has_prototype": len(proto_scenes) > 0,
+            "scene_count": len(proto_scenes),
+            "script_exists": script_exists,
+            "wired": wired,
+        }
+
+    @app.post("/api/projects/{project_name}/prototype/build")
+    async def api_build_project_prototype(request: Request, project_name: str):
+        """Build a project that has a generated prototype.
+
+        Validates prototype artifacts before delegating to the existing build
+        pipeline.  On failure the prototype files are never touched.
+        """
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+
+        # 1. Validate prototype index entries
+        index = pm.read_project_index(project_name)
+        proto_scenes = []
+        if index and isinstance(index.get("scenes"), dict):
+            proto_scenes = [
+                s for s in index["scenes"].values()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+        if not proto_scenes:
+            raise HTTPException(
+                status_code=400,
+                detail="No prototype scenes found. Generate a prototype first.",
+            )
+
+        # 2. Validate prototype script files exist on disk
+        script_paths = {s.get("file_path") for s in proto_scenes if s.get("file_path")}
+        for rel_path in script_paths:
+            if not (project_dir / rel_path).exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Prototype script not found: {rel_path}",
+                )
+
+        # 3. Validate main script is wired to prototype
+        main_script = project_dir / "game" / "script.rpy"
+        if not main_script.exists():
+            raise HTTPException(
+                status_code=400,
+                detail="Main script (game/script.rpy) not found",
+            )
+        if "# PROTOTYPE START (managed)" not in main_script.read_text(encoding="utf-8"):
+            raise HTTPException(
+                status_code=400,
+                detail="Main script is not wired to a prototype",
+            )
+
+        target = "web"
+
+        # Test-only mock path
+        if os.environ.get("RENPY_MCP_MOCK_BUILD"):
+            build_dir = project_dir.parent / f"{project_name}-dists" / f"{project_name}-web"
+            build_dir.mkdir(parents=True, exist_ok=True)
+            (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
+            _store_previewable_build_result(project_name, build_dir)
+            _write_build_status(
+                project_name, "success",
+                f"Prototype built to {build_dir}", build_dir, target=target,
+            )
+            # Overwrite the status file to include kind
+            status_path = _build_status_path(project_name)
+            if status_path.exists():
+                data = json.loads(status_path.read_text(encoding="utf-8"))
+                data["kind"] = "prototype"
+                status_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return BuildResult(
+                project_name=project_name,
+                target=target,
+                success=True,
+                output_path=build_dir,
+            ).model_dump(mode="json")
+
+        manager = BuildManager(settings)
+        result = await manager.build(BuildRequest(project_name=project_name, target=target))
+        if result.success:
+            _store_previewable_build_result(project_name, result.output_path)
+            _write_build_status(
+                project_name,
+                "success",
+                f"Prototype built to {result.output_path}" if result.output_path else "Prototype build succeeded",
+                result.output_path,
+                target=target,
+            )
+        else:
+            _last_build_results.pop(project_name, None)
+            _write_build_status(
+                project_name,
+                "failed",
+                result.error or "Prototype build failed",
+                None,
+                target=target,
+            )
+        # Append kind to persisted status
+        status_path = _build_status_path(project_name)
+        if status_path.exists():
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+            data["kind"] = "prototype"
+            status_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return result.model_dump(mode="json")
+
     @app.post("/api/projects/build")
     async def api_build_project(request: Request):
         body = await request.json()
