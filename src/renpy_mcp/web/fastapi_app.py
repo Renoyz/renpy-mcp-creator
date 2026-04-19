@@ -656,6 +656,14 @@ def create_app() -> FastAPI:
         messages = _read_chat_history(name)
         return {"messages": messages}
 
+    @app.get("/api/projects/{project_name}/blueprint-session")
+    async def api_blueprint_session(project_name: str):
+        from .chat_ws import _load_blueprint_session
+        session = _load_blueprint_session(project_name)
+        if session is None:
+            return {"pipeline_stage": "idle", "awaiting_confirmation": False}
+        return session
+
     @app.post("/api/projects/preview")
     async def api_preview_project(request: Request):
         body = await request.json()

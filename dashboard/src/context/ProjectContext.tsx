@@ -226,11 +226,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const [metaResp, bpResp, scenesResp, mapResp] = await Promise.all([
+      const [metaResp, bpResp, scenesResp, mapResp, sessionResp] = await Promise.all([
         fetch(`/api/projects/${encodeURIComponent(name)}/meta`),
         fetch(`/api/projects/${encodeURIComponent(name)}/blueprint`),
         fetch(`/api/projects/${encodeURIComponent(name)}/scenes`),
         fetch(`/api/projects/${encodeURIComponent(name)}/storymap`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/blueprint-session`),
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
@@ -271,8 +272,24 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setStorymap(null);
       }
 
-      // Set phase based on whether blueprint exists
-      if (bpData) {
+      let sessionData: any = null;
+      if (sessionResp.ok) {
+        sessionData = await sessionResp.json();
+      }
+
+      // Restore session state if available; otherwise fall back to blueprint existence
+      if (sessionData && sessionData.pipeline_stage && sessionData.pipeline_stage !== "idle" && sessionData.pipeline_stage !== "editing") {
+        setBlueprintPhaseState(sessionData.pipeline_stage as BlueprintPhase);
+        if (sessionData.draft) {
+          setBlueprintDraft(sessionData.draft);
+        }
+        if (sessionData.latest_progress) {
+          setGenerationProgress({
+            step: sessionData.latest_progress.step,
+            percent: sessionData.latest_progress.percent,
+          });
+        }
+      } else if (bpData) {
         setBlueprintPhaseState("editing");
       } else {
         setBlueprintPhaseState("idle");

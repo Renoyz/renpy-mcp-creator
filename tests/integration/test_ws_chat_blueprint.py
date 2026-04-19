@@ -319,3 +319,194 @@ def test_blueprint_generating_history_persists_progress_incrementally(monkeypatc
     # - With incremental saves: +5 progress + 1 system = 9 total
     # - Without incremental saves: +1 system = 4 total
     assert save_call_count[0] >= 7, f"Expected incremental _save_history calls (>=7), got {save_call_count[0]}"
+
+
+# ---------------------------------------------------------------------------
+# Blueprint session state persistence tests
+# ---------------------------------------------------------------------------
+
+def test_blueprint_session_persisted_in_reviewing(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """After reaching reviewing, blueprint_session.json should contain recoverable state."""
+    project_name = "bp_session_review"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                _drain_events(websocket, 3)
+
+    session_path = tmp_path / project_name / "meta" / "blueprint_session.json"
+    assert session_path.exists(), f"Session file not found at {session_path}"
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    assert session["pipeline_stage"] == "reviewing"
+    assert session["awaiting_confirmation"] is True
+    assert session["confirmation_id"]
+    assert session["draft"]["title"] == project_name
+
+
+def test_blueprint_session_restores_orchestrator_state(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """After removing in-memory orchestrator, a new one should recover from session and handle confirmation."""
+    project_name = "bp_session_restore"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    confirmation_id = None
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req["confirmation_id"]
+
+    # Simulate service restart: remove in-memory orchestrator
+    import renpy_mcp.web.chat_ws as chat_ws
+    if project_name in chat_ws._orchestrators:
+        del chat_ws._orchestrators[project_name]
+
+    # Now send confirmation_response with a fresh connection
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+        events = []
+        while True:
+            data = websocket.receive_json()
+            events.append(data)
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    progress_events = [e for e in events if e["type"] == "progress"]
+    assert len(progress_events) >= 1
+
+
+def test_blueprint_session_updates_latest_progress(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """During generating, _save_blueprint_session should be called with latest_progress."""
+    project_name = "bp_session_progress"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    import renpy_mcp.web.chat_ws as chat_ws_module
+    saved_states: list[dict] = []
+    original_save_session = chat_ws_module._save_blueprint_session
+
+    def tracking_save_session(project_name_arg: str, state: dict) -> None:
+        saved_states.append(state)
+        original_save_session(project_name_arg, state)
+
+    monkeypatch.setattr(chat_ws_module, "_save_blueprint_session", tracking_save_session)
+
+    confirmation_id = None
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req["confirmation_id"]
+
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+        while True:
+            data = websocket.receive_json()
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    # At least one saved state should contain latest_progress during generating
+    progress_states = [s for s in saved_states if s.get("latest_progress")]
+    assert len(progress_states) >= 1, f"Expected at least one state with latest_progress, got {saved_states}"
+    assert progress_states[-1]["pipeline_stage"] == "generating"
+    assert progress_states[-1]["latest_progress"]["percent"] > 0
+
+
+def test_blueprint_session_cleared_on_editing(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """After editing completes, blueprint_session.json should be cleared."""
+    project_name = "bp_session_cleared"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    confirmation_id = None
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req["confirmation_id"]
+
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+        while True:
+            data = websocket.receive_json()
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    session_path = tmp_path / project_name / "meta" / "blueprint_session.json"
+    assert not session_path.exists(), f"Session file should be cleared after editing, but found {session_path.read_text()}"
+
+
+def test_blueprint_session_api_returns_state(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """GET /api/projects/{name}/blueprint-session should return current session state."""
+    project_name = "bp_session_api"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    # Before any activity, session should indicate idle
+    resp = client.get(f"/api/projects/{project_name}/blueprint-session")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pipeline_stage"] == "idle"
+    assert data["awaiting_confirmation"] is False
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                _drain_events(websocket, 3)
+
+    # After reviewing, API should reflect session
+    resp = client.get(f"/api/projects/{project_name}/blueprint-session")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["pipeline_stage"] == "reviewing"
+    assert data["awaiting_confirmation"] is True
+    assert data["confirmation_id"]
+    assert data["draft"]["title"] == project_name

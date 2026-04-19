@@ -1818,6 +1818,95 @@ def test_reviewing_refresh_restores_structured_messages(page: Page, server_url: 
     expect(chat_drawer.locator("text=请确认以下蓝图草案")).to_be_visible(timeout=15000)
 
 
+def test_reviewing_refresh_restores_confirmable_state(page: Page, server_url: str) -> None:
+    """After reaching reviewing and refreshing, both main content and ChatDrawer should show confirmable state."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_refresh_conf_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Start collecting
+    page.locator("button", has_text="让 AI 生成蓝图").click()
+    expect(page.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
+
+    # First user reply
+    page.locator("textarea").fill("我想写一个3章的校园恋爱故事，主角是高中生")
+    page.locator("button >> svg").last.click()
+    expect(page.locator("text=收到")).to_be_visible(timeout=10000)
+
+    # Second user reply
+    page.locator("textarea").fill("视觉风格是日系动漫，氛围轻松治愈")
+    page.locator("button >> svg").last.click()
+
+    # Wait for reviewing
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+    expect(page.locator("h2", has_text="蓝图草案已生成")).to_be_visible(timeout=10000)
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Re-open chat drawer
+    open_chat_drawer(page)
+
+    # Verify confirmation panel is restored in ChatDrawer
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+    expect(chat_drawer.locator("button", has_text="确认并生成")).to_be_visible(timeout=15000)
+    expect(chat_drawer.locator("button", has_text="继续调整")).to_be_visible(timeout=15000)
+
+    # Verify main content draft card is restored
+    expect(page.locator("h2", has_text="蓝图草案已生成")).to_be_visible(timeout=10000)
+
+
+def test_generating_refresh_restores_progress_state(page: Page, server_url: str) -> None:
+    """After approving and entering generating, refreshing should restore generating state."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_refresh_gen_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Start collecting
+    page.locator("button", has_text="让 AI 生成蓝图").click()
+    expect(page.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
+
+    # First user reply
+    page.locator("textarea").fill("我想写一个3章的校园恋爱故事，主角是高中生")
+    page.locator("button >> svg").last.click()
+    expect(page.locator("text=收到")).to_be_visible(timeout=10000)
+
+    # Second user reply
+    page.locator("textarea").fill("视觉风格是日系动漫，氛围轻松治愈")
+    page.locator("button >> svg").last.click()
+
+    # Wait for reviewing
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+
+    # Approve from chat drawer
+    confirmation_panel = chat_drawer.locator("[data-testid='chat-blueprint-confirmation']")
+    confirmation_panel.locator("button", has_text="确认并生成").click()
+
+    # Wait for first progress to appear, then immediately refresh
+    expect(chat_drawer.locator("text=正在分析创作意图")).to_be_visible(timeout=15000)
+
+    # Refresh page mid-generating
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Re-open chat drawer
+    open_chat_drawer(page)
+
+    # Verify generating-related content is restored (at least one progress message from history)
+    expect(chat_drawer.locator("text=正在分析创作意图")).to_be_visible(timeout=15000)
+
+
 def test_main_content_blueprint_confirm_from_draft_card(page: Page, server_url: str) -> None:
     """Clicking '确认并生成' from main content BlueprintDraftCard should drive generating -> editing."""
     assert wait_for_server(server_url), "Server not ready"

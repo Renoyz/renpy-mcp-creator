@@ -41,6 +41,37 @@ def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> No
     path.write_text(json.dumps({"messages": messages}, indent=2), encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Blueprint session state persistence
+# ---------------------------------------------------------------------------
+
+def _blueprint_session_path(project_name: str) -> Path:
+    settings = get_settings()
+    return settings.workspace / project_name / "meta" / "blueprint_session.json"
+
+
+def _load_blueprint_session(project_name: str) -> dict[str, Any] | None:
+    path = _blueprint_session_path(project_name)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _save_blueprint_session(project_name: str, state: dict[str, Any]) -> None:
+    path = _blueprint_session_path(project_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+
+
+def _clear_blueprint_session(project_name: str) -> None:
+    path = _blueprint_session_path(project_name)
+    if path.exists():
+        path.unlink()
+
+
 def _read_chat_history(project_name: str) -> list[dict[str, Any]]:
     path = _chat_history_path(project_name)
     if path.exists():
@@ -171,6 +202,46 @@ class BlueprintOrchestrator:
         self.draft: ProjectBlueprint | None = None
         self.confirmation_id: str | None = None
         self.messages: list[dict[str, Any]] = []
+        self._try_restore_session()
+
+    def _try_restore_session(self) -> None:
+        session = _load_blueprint_session(self.project_name)
+        if not session:
+            return
+        stage = session.get("pipeline_stage")
+        if stage in (PipelineStage.IDLE.value, PipelineStage.COLLECTING.value,
+                     PipelineStage.REVIEWING.value, PipelineStage.GENERATING.value):
+            self.phase = PipelineStage(stage)
+        self.turn_count = session.get("turn_count", 0)
+        self.confirmation_id = session.get("confirmation_id")
+        if session.get("draft"):
+            try:
+                self.draft = ProjectBlueprint(**session["draft"])
+            except Exception:
+                self.draft = None
+
+    def _save_session(self) -> None:
+        state: dict[str, Any] = {
+            "pipeline_stage": self.phase.value,
+            "turn_count": self.turn_count,
+            "awaiting_confirmation": self.phase == PipelineStage.REVIEWING and self.confirmation_id is not None,
+            "confirmation_id": self.confirmation_id,
+        }
+        if self.draft:
+            state["draft"] = self.draft.model_dump(mode="json")
+        _save_blueprint_session(self.project_name, state)
+
+    def _save_session_with_progress(self, step: str, percent: int) -> None:
+        state: dict[str, Any] = {
+            "pipeline_stage": self.phase.value,
+            "turn_count": self.turn_count,
+            "awaiting_confirmation": False,
+            "confirmation_id": None,
+            "latest_progress": {"step": step, "percent": percent},
+        }
+        if self.draft:
+            state["draft"] = self.draft.model_dump(mode="json")
+        _save_blueprint_session(self.project_name, state)
 
     def _load_history(self) -> None:
         self.messages = _read_chat_history(self.project_name)
@@ -245,6 +316,7 @@ class BlueprintOrchestrator:
             )
             self.messages.append({"role": "assistant", "content": assistant_content})
             self._save_history()
+            self._save_session()
             return [
                 {
                     "type": "message",
@@ -277,6 +349,7 @@ class BlueprintOrchestrator:
 
                 self.messages.append({"role": "assistant", "content": assistant_content})
                 self._save_history()
+                self._save_session()
                 return [
                     {
                         "type": "message",
@@ -311,6 +384,7 @@ class BlueprintOrchestrator:
                 "confirmation_id": self.confirmation_id,
             })
             self._save_history()
+            self._save_session()
 
             return [
                 {
@@ -390,6 +464,7 @@ class BlueprintOrchestrator:
                     "percent": step["percent"],
                 })
                 self._save_history()
+                self._save_session_with_progress(step["step"], step["percent"])
                 await asyncio.sleep(0.6)
 
             # Persist blueprint
@@ -415,6 +490,7 @@ class BlueprintOrchestrator:
                 "content": assistant_content,
             })
             self._save_history()
+            _clear_blueprint_session(self.project_name)
 
             events.append(
                 {
@@ -434,6 +510,7 @@ class BlueprintOrchestrator:
         assistant_content = "好的，我们继续调整蓝图。你希望优先修改角色、章节还是整体基调？"
         self.messages.append({"role": "assistant", "content": assistant_content})
         self._save_history()
+        self._save_session()
 
         return [
             {
@@ -470,19 +547,34 @@ def _should_use_orchestrator(project_name: str, content: str) -> bool:
         # Legacy project without meta: don't force orchestrator
         return False
 
-    return meta.pipeline_stage in (
+    if meta.pipeline_stage in (
         PipelineStage.IDLE,
         PipelineStage.COLLECTING,
         PipelineStage.REVIEWING,
         PipelineStage.GENERATING,
-    )
+    ):
+        return True
+
+    # Also check session file for in-progress states (e.g. after restart)
+    session = _load_blueprint_session(project_name)
+    if session:
+        stage = session.get("pipeline_stage")
+        if stage in (PipelineStage.IDLE.value, PipelineStage.COLLECTING.value,
+                     PipelineStage.REVIEWING.value, PipelineStage.GENERATING.value):
+            return True
+
+    return False
 
 
 def _orchestrator_has_confirmation(project_name: str, confirmation_id: str) -> bool:
     orch = _orchestrators.get(project_name)
-    if orch is None:
-        return False
-    return orch.confirmation_id == confirmation_id
+    if orch is not None:
+        return orch.confirmation_id == confirmation_id
+    # Check session file for recovery after restart
+    session = _load_blueprint_session(project_name)
+    if session:
+        return session.get("confirmation_id") == confirmation_id
+    return False
 
 
 # ---------------------------------------------------------------------------

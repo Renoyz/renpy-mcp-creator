@@ -289,6 +289,19 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [displayMessages]);
 
+  // Restore blueprint confirmation id from session when project changes
+  useEffect(() => {
+    if (!currentProject?.name) return;
+    fetch(`/api/projects/${encodeURIComponent(currentProject.name)}/blueprint-session`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.confirmation_id) {
+          setBlueprintConfirmationId(data.confirmation_id);
+        }
+      })
+      .catch(() => {});
+  }, [currentProject?.name]);
+
   useEffect(() => {
     if (!effectiveOpen || !currentProject?.name) {
       if (!currentProject?.name) setMessages([]);
