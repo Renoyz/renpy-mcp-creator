@@ -360,8 +360,8 @@ async def test_main_script_is_wired_to_prototype_entry(client: TestClient, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_update_index_writes_scene_mappings(client: TestClient, tmp_path: Path) -> None:
-    """update_index must write meta/index.json with scene_id -> chapter_id/label/file_path mappings."""
+async def test_update_index_writes_full_prototype_metadata(client: TestClient, tmp_path: Path) -> None:
+    """update_index must write full prototype scene metadata including title, summary, location, next_scene_id, source."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
     from renpy_mcp.services.project_manager import ProjectManager
@@ -389,8 +389,14 @@ async def test_update_index_writes_scene_mappings(client: TestClient, tmp_path: 
         mapping = index["scenes"].get(scene.scene_id)
         assert mapping is not None, f"Scene {scene.scene_id} missing from index"
         assert mapping["chapter_id"] == chapter.id
+        assert mapping["scene_id"] == scene.scene_id
+        assert mapping["title"] == scene.title
+        assert mapping["summary"] == scene.summary
+        assert mapping["location"] == scene.location
+        assert mapping.get("next_scene_id") == scene.next_scene_id
         assert mapping["label"] == scene.entry_label
         assert mapping["file_path"] == script_path
+        assert mapping["source"] == "prototype"
 
 
 @pytest.mark.asyncio

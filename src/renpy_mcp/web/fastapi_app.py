@@ -419,6 +419,56 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         settings = get_settings()
         pm = ProjectManager(settings)
+
+        # Prefer prototype scenes from index when available
+        index = pm.read_project_index(project_name)
+        if index and isinstance(index.get("scenes"), dict):
+            prototype_scenes = [
+                s for s in index["scenes"].values()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+            if prototype_scenes:
+                # Build chapter name lookup from blueprint if available
+                chapter_names: dict[str, str] = {}
+                try:
+                    blueprint = pm.read_blueprint(project_name)
+                    if blueprint:
+                        for ch in blueprint.chapters:
+                            chapter_names[ch.id] = ch.name
+                except ValueError:
+                    pass
+
+                from collections import defaultdict
+                chapters_map: dict[str, list[dict]] = defaultdict(list)
+                for scene in sorted(prototype_scenes, key=lambda s: s.get("order", 0)):
+                    chapters_map[scene["chapter_id"]].append(scene)
+
+                chapters = []
+                for ch_id, scenes in chapters_map.items():
+                    chapters.append({
+                        "id": ch_id,
+                        "name": chapter_names.get(ch_id, scenes[0].get("title", ch_id)),
+                        "order": 1,
+                        "scenes": [
+                            {
+                                "id": s["scene_id"],
+                                "name": s["title"],
+                                "order": s.get("order", 0),
+                                "characters": [],
+                                "backgrounds": [],
+                                "music": None,
+                                "choices": None,
+                                "ending_name": None,
+                                "status": "pending",
+                                "type": "normal",
+                                "is_ending": None,
+                            }
+                            for s in scenes
+                        ],
+                    })
+                return {"chapters": chapters}
+
+        # Fallback to blueprint
         try:
             blueprint = pm.read_blueprint(project_name)
         except ValueError as exc:
@@ -434,6 +484,44 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         settings = get_settings()
         pm = ProjectManager(settings)
+
+        # Prefer prototype scenes from index when available
+        index = pm.read_project_index(project_name)
+        if index and isinstance(index.get("scenes"), dict):
+            prototype_scenes = {
+                sid: s for sid, s in index["scenes"].items()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            }
+            if prototype_scenes:
+                nodes: list[FlowNode] = []
+                edges: list[FlowEdge] = []
+                for sid, scene in prototype_scenes.items():
+                    nodes.append(
+                        FlowNode(
+                            id=sid,
+                            chapter_id=scene["chapter_id"],
+                            scene_id=sid,
+                            type="normal",
+                            label=scene.get("title", sid),
+                        )
+                    )
+                    next_id = scene.get("next_scene_id")
+                    if next_id and next_id in prototype_scenes:
+                        edges.append(
+                            FlowEdge(
+                                from_chapter_id=scene["chapter_id"],
+                                from_scene_id=sid,
+                                to_chapter_id=prototype_scenes[next_id]["chapter_id"],
+                                to_scene_id=next_id,
+                                type="main",
+                            )
+                        )
+                return {
+                    "nodes": [n.model_dump(mode="json") for n in nodes],
+                    "edges": [e.model_dump(mode="json") for e in edges],
+                }
+
+        # Fallback to blueprint
         try:
             blueprint = pm.read_blueprint(project_name)
         except ValueError as exc:

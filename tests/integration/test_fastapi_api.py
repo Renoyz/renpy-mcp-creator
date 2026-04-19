@@ -984,6 +984,60 @@ class TestProjectScenesApi:
         r = client.get(f"/api/projects/{project_name}/scenes")
         assert r.status_code == 404
 
+    def test_get_scenes_returns_prototype_scenes_when_index_has_prototype(self, client: TestClient):
+        """When prototype scenes exist in index, /scenes should return them instead of blueprint summary."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.blueprint.models import ProjectBlueprint, ChapterSummary, SceneSummary
+
+        project_name = "scenes_proto"
+        self._setup_project_with_blueprint(client, project_name)
+
+        # Inject prototype scene index
+        pm = ProjectManager(get_settings())
+        index = {
+            "scenes": {
+                "proto-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s1",
+                    "title": "Prototype Opening",
+                    "summary": "The real prototype opening scene.",
+                    "location": "classroom",
+                    "next_scene_id": "proto-s2",
+                    "label": "prototype_ch1_start",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                },
+                "proto-s2": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s2",
+                    "title": "Prototype Climax",
+                    "summary": "The real prototype climax scene.",
+                    "location": "roof",
+                    "next_scene_id": None,
+                    "label": "prototype_ch1_scene2",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 2,
+                },
+            }
+        }
+        pm.write_project_index(project_name, index)
+
+        r = client.get(f"/api/projects/{project_name}/scenes")
+        assert r.status_code == 200
+        data = r.json()
+        assert "chapters" in data
+        assert len(data["chapters"]) == 1
+        assert data["chapters"][0]["id"] == "ch1"
+        scenes = data["chapters"][0]["scenes"]
+        assert len(scenes) == 2
+        assert scenes[0]["id"] == "proto-s1"
+        assert scenes[0]["name"] == "Prototype Opening"
+        assert scenes[1]["id"] == "proto-s2"
+        assert scenes[1]["name"] == "Prototype Climax"
+
 
 class TestProjectStorymapApi:
     """Tests for GET /api/projects/{name}/storymap."""
@@ -1084,6 +1138,60 @@ class TestProjectStorymapApi:
         client.post("/api/projects", json={"name": project_name})
         r = client.get(f"/api/projects/{project_name}/storymap")
         assert r.status_code == 404
+
+    def test_get_storymap_returns_prototype_graph_when_index_has_prototype(self, client: TestClient):
+        """When prototype scenes exist in index, /storymap should use next_scene_id for edges."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.blueprint.models import ProjectBlueprint, ChapterSummary, SceneSummary
+
+        project_name = "storymap_proto"
+        self._setup_project_with_blueprint(client, project_name)
+
+        pm = ProjectManager(get_settings())
+        index = {
+            "scenes": {
+                "proto-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s1",
+                    "title": "Prototype Opening",
+                    "summary": "Opening scene.",
+                    "location": "classroom",
+                    "next_scene_id": "proto-s2",
+                    "label": "prototype_ch1_start",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                },
+                "proto-s2": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s2",
+                    "title": "Prototype End",
+                    "summary": "End scene.",
+                    "location": "roof",
+                    "next_scene_id": None,
+                    "label": "prototype_ch1_end",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 2,
+                },
+            }
+        }
+        pm.write_project_index(project_name, index)
+
+        r = client.get(f"/api/projects/{project_name}/storymap")
+        assert r.status_code == 200
+        data = r.json()
+        assert "nodes" in data
+        assert "edges" in data
+
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert node_ids == {"proto-s1", "proto-s2"}
+
+        main_edges = [e for e in data["edges"] if e["type"] == "main"]
+        assert len(main_edges) == 1
+        assert main_edges[0]["from_scene_id"] == "proto-s1"
+        assert main_edges[0]["to_scene_id"] == "proto-s2"
 
     def test_get_storymap_handles_missing_choice_target(self, client: TestClient):
         """Dangling branch edges to non-existent scenes must be skipped."""

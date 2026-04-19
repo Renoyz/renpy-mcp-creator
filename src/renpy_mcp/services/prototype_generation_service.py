@@ -294,7 +294,7 @@ Requirements:
         scenes: list[PrototypeScene],
         script_path: str,
     ) -> None:
-        """Update meta/index.json with prototype scene mappings."""
+        """Update meta/index.json with full prototype scene metadata."""
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for index writeback")
 
@@ -302,11 +302,18 @@ Requirements:
         if "scenes" not in index:
             index["scenes"] = {}
 
-        for scene in scenes:
+        for i, scene in enumerate(scenes):
             index["scenes"][scene.scene_id] = {
                 "chapter_id": chapter.id,
+                "scene_id": scene.scene_id,
+                "title": scene.title,
+                "summary": scene.summary,
+                "location": scene.location,
+                "next_scene_id": scene.next_scene_id,
                 "label": scene.entry_label,
                 "file_path": script_path,
+                "source": "prototype",
+                "order": i + 1,
             }
 
         self.pm.write_project_index(project_name, index)
