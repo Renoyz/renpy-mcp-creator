@@ -847,3 +847,151 @@ async def test_service_failure_does_not_corrupt_project(client: TestClient, tmp_
         index = json.loads(index_path.read_text(encoding="utf-8"))
         for scene_id in ("proto-ch1-s1", "proto-ch1-s2", "proto-ch1-s3"):
             assert scene_id not in index.get("scenes", {}), f"Partial scene {scene_id} leaked into index"
+
+
+@pytest.mark.asyncio
+async def test_commit_promotion_failure_preserves_previous_prototype_artifacts(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If staging->final promote fails, the old stable prototype must remain intact."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_commit_fail"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Seed old stable prototype
+    old_index = {
+        "scenes": {
+            "old-s1": {
+                "chapter_id": "ch1",
+                "scene_id": "old-s1",
+                "title": "Old Scene",
+                "summary": "Old stable scene.",
+                "location": "old_place",
+                "next_scene_id": None,
+                "label": "old_start",
+                "file_path": "game/prototype_old.rpy",
+                "source": "prototype",
+                "order": 1,
+            }
+        }
+    }
+    pm.write_project_index(project_name, old_index)
+    old_file = tmp_path / project_name / "game" / "prototype_old.rpy"
+    old_file.write_text("label old_start:\n    return\n", encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.update_index(
+        project_name, chapter, scenes, service._final_path_from_staging(staging_path)
+    )
+
+    # Monkeypatch Path.replace to simulate disk failure during promote
+    def _raise_replace(self, target):
+        raise OSError("Simulated disk full during replace")
+
+    monkeypatch.setattr(Path, "replace", _raise_replace)
+
+    # Commit must raise, not swallow the error
+    with pytest.raises(OSError, match="Simulated disk full"):
+        service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    # Old stable prototype file must survive
+    assert old_file.exists(), "Old stable prototype file should be preserved after commit failure"
+    assert "label old_start:" in old_file.read_text(encoding="utf-8")
+
+    # Old index entry must survive
+    index = pm.read_project_index(project_name)
+    assert "old-s1" in index.get("scenes", {}), "Old prototype index entry should be preserved after commit failure"
+
+
+@pytest.mark.asyncio
+async def test_commit_does_not_cleanup_old_artifacts_after_promotion_failure(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If promote fails, commit must NOT delete old prototype files or old index entries."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_commit_no_cleanup"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Seed multiple old prototype artifacts
+    old_index = {
+        "scenes": {
+            "old-s1": {
+                "chapter_id": "ch1",
+                "scene_id": "old-s1",
+                "title": "Old Scene 1",
+                "summary": "Old.",
+                "location": "old_place",
+                "next_scene_id": "old-s2",
+                "label": "old_start",
+                "file_path": "game/prototype_old.rpy",
+                "source": "prototype",
+                "order": 1,
+            },
+            "old-s2": {
+                "chapter_id": "ch1",
+                "scene_id": "old-s2",
+                "title": "Old Scene 2",
+                "summary": "Old 2.",
+                "location": "old_place2",
+                "next_scene_id": None,
+                "label": "old_end",
+                "file_path": "game/prototype_old.rpy",
+                "source": "prototype",
+                "order": 2,
+            }
+        }
+    }
+    pm.write_project_index(project_name, old_index)
+    old_file = tmp_path / project_name / "game" / "prototype_old.rpy"
+    old_file.write_text("label old_start:\n    return\n", encoding="utf-8")
+    another_old_file = tmp_path / project_name / "game" / "prototype_another.rpy"
+    another_old_file.write_text("label another:\n    return\n", encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    service.update_index(
+        project_name, chapter, scenes, service._final_path_from_staging(staging_path)
+    )
+
+    # Monkeypatch replace to fail
+    def _raise_replace(self, target):
+        raise PermissionError("Simulated permission denied")
+
+    monkeypatch.setattr(Path, "replace", _raise_replace)
+
+    with pytest.raises(PermissionError, match="Simulated permission denied"):
+        service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    # All old files must survive
+    assert old_file.exists(), "Old prototype file should survive commit failure"
+    assert another_old_file.exists(), "Another old prototype file should survive commit failure"
+
+    # All old index entries must survive
+    index = pm.read_project_index(project_name)
+    assert "old-s1" in index.get("scenes", {}), "Old index entry old-s1 should survive"
+    assert "old-s2" in index.get("scenes", {}), "Old index entry old-s2 should survive"

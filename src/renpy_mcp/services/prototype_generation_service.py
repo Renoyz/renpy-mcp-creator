@@ -345,6 +345,9 @@ Requirements:
 
         This must only be called after all new prototype steps
         (write_script, wire_main_script, update_index) have succeeded.
+
+        Raises:
+            OSError: If the staging file cannot be promoted to the final path.
         """
         if self.pm is None:
             return
@@ -354,14 +357,10 @@ Requirements:
         staging_file = project_dir / staging_script_path
         final_file = project_dir / final_script_path
 
-        # 1. Promote staging file to final path
+        # 1. Promote staging file to final path (fail-fast, atomic-ish replace)
+        #    If this raises, old stable prototype and index are untouched.
         if staging_file.exists():
-            try:
-                if final_file.exists():
-                    final_file.unlink()
-                staging_file.rename(final_file)
-            except OSError:
-                logger.warning("Failed to promote staging file: %s", staging_file)
+            staging_file.replace(final_file)
 
         # 2. Remove old prototype index entries (keep only new_scene_ids)
         index = self.pm.read_project_index(project_name)
