@@ -389,6 +389,7 @@ class BlueprintOrchestrator:
                     "step": step["step"],
                     "percent": step["percent"],
                 })
+                self._save_history()
                 await asyncio.sleep(0.6)
 
             # Persist blueprint

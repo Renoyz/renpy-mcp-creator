@@ -75,7 +75,7 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         # Turn 1 -> collecting
         websocket.send_json({"type": "user_message", "content": "hello", "project_name": project_name})
         events = _drain_events(websocket, 1)
-        print("DEBUG EVENT:", events[0])
+        # collecting message received
         assert events[0]["type"] == "message"
         assert events[0]["role"] == "assistant"
         assert events[0]["pipeline_stage"] == "collecting"
@@ -262,3 +262,60 @@ def test_blueprint_generating_history_contains_progress_and_completion(monkeypat
     assert len(progress_entries) >= 1, f"Expected at least one progress entry, got {messages}"
     assert len(system_entries) >= 1, f"Expected at least one system entry, got {messages}"
     assert any("蓝图生成完成" in (m.get("content", "") or "") for m in system_entries)
+
+
+def test_blueprint_generating_history_persists_progress_incrementally(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Progress entries should be written to history incrementally during generating, not just at completion."""
+    project_name = "bp_history_incr"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    import renpy_mcp.web.chat_ws as chat_ws_module
+    save_call_count = [0]
+    original_save = chat_ws_module.BlueprintOrchestrator._save_history
+
+    def counting_save(self):
+        save_call_count[0] += 1
+        original_save(self)
+
+    monkeypatch.setattr(chat_ws_module.BlueprintOrchestrator, "_save_history", counting_save)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        # Start + 2 turns to reviewing
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req_event = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req_event["confirmation_id"]
+
+        # Approve
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+
+        # Receive first progress event.
+        # At this point handle_confirmation_response has fully executed,
+        # so _save_history call count reveals whether saves were incremental.
+        first_progress = websocket.receive_json()
+        assert first_progress["type"] == "progress"
+
+        # Continue receiving remaining events so the server can finish cleanly
+        while True:
+            data = websocket.receive_json()
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    # After full generating cycle:
+    # - Before generating: _save_history called 3 times (start + 2 turns)
+    # - With incremental saves: +5 progress + 1 system = 9 total
+    # - Without incremental saves: +1 system = 4 total
+    assert save_call_count[0] >= 7, f"Expected incremental _save_history calls (>=7), got {save_call_count[0]}"
