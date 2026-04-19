@@ -47,6 +47,23 @@ def server_url(e2e_workspace: Path):
     env["RENPY_MCP_WORKSPACE"] = str(e2e_workspace)
     env["RENPY_MCP_MOCK_BUILD"] = "1"
 
+    # Strip real provider credentials so the default backend is hermetic.
+    # Only tests that explicitly opt-in to mock LLM (via start_mock_llm_server)
+    # should have a functional provider.
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "QWEN_API_KEY",
+        "GEMINI_API_KEY",
+        "JIMENG_API_KEY",
+        "TONGYI_API_KEY",
+        "RENPY_MCP_MOCK_LLM",
+    ):
+        env.pop(key, None)
+
     cmd = [sys.executable, "-m", "renpy_mcp.main", "--transport", "http", "--port", str(port)]
     proc = subprocess.Popen(
         cmd,

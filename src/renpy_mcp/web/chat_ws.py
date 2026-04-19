@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import ValidationError
 
 from ..blueprint.models import (
     BlueprintCharacter,
@@ -416,6 +417,10 @@ Requirements:
                     system=system_prompt,
                     max_tokens=4096,
                 )
+            except Exception as e:
+                raise RuntimeError(f"Blueprint generation provider error: {e}") from e
+
+            try:
                 text = response.text.strip()
 
                 # Extract JSON from markdown code blocks if present
@@ -428,15 +433,18 @@ Requirements:
                     text = "\n".join(lines).strip()
 
                 data = json.loads(text)
-                blueprint = ProjectBlueprint(**data)
-                return blueprint
-
             except json.JSONDecodeError as e:
                 last_error = f"JSON parse error: {e}"
                 prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
-            except Exception as e:
+                continue
+
+            try:
+                blueprint = ProjectBlueprint(**data)
+                return blueprint
+            except ValidationError as e:
                 last_error = f"Schema validation error: {e}"
                 prompt += f"\n\nERROR: Your previous response did not match the required schema ({e}). Fix and return valid JSON."
+                continue
 
         raise RuntimeError(
             f"Blueprint generation failed after {max_retries + 1} attempts. {last_error}"

@@ -562,6 +562,43 @@ def test_blueprint_session_api_returns_404_for_missing_project(client: TestClien
 # ---------------------------------------------------------------------------
 
 
+def test_blueprint_draft_generation_provider_error_not_misclassified(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Provider.chat raising an exception must produce a provider error, not a schema error, and must not retry."""
+    project_name = "bp_provider_err"
+    _create_project(client, tmp_path, project_name)
+
+    class ExplodingProvider:
+        tool_format = "anthropic"
+        _call_count = 0
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            self._call_count += 1
+            raise RuntimeError("Simulated provider SDK failure (e.g. 401/model not found)")
+
+    provider = ExplodingProvider()
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 1)
+
+    assert provider._call_count == 1, f"Provider error must NOT retry, but chat was called {provider._call_count} times"
+    assert events[0]["type"] == "error"
+    assert "collecting" in events[0].get("pipeline_stage", "")
+    error_msg = events[0].get("message", "")
+    # Must contain provider error semantics, NOT schema validation semantics
+    assert "provider error" in error_msg.lower() or "蓝图生成失败" in error_msg
+    assert "schema validation" not in error_msg.lower()
+    # Must NOT have entered reviewing
+    assert "reviewing" not in str(events)
+
+
 def test_blueprint_draft_is_generated_from_provider_not_hardcoded(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """Reviewing draft must come from the LLM provider, not hardcoded defaults."""
     project_name = "bp_llm_real"
