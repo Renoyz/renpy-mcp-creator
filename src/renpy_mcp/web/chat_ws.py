@@ -789,18 +789,33 @@ Requirements:
 
             # Generate prototype scenes and script
             prototype_error: str | None = None
+            script_path: str | None = None
+            new_scene_ids: list[str] = []
             if self.draft:
                 try:
                     provider = _get_provider()
                     service = PrototypeGenerationService(self.pm, provider)
                     chapter = service.select_prototype_chapter(self.draft)
+                    service.remove_existing_prototype_artifacts(self.project_name)
                     scenes = await service.generate_scenes(chapter, self.draft)
+                    new_scene_ids = [s.scene_id for s in scenes]
                     script_path = service.write_script(self.project_name, chapter, scenes)
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
                     service.update_index(self.project_name, chapter, scenes, script_path)
                 except Exception as e:
                     prototype_error = str(e)
                     logger.exception("Prototype generation failed for project %s", self.project_name)
+                    # Clean up partial artifacts from this failed round
+                    try:
+                        if self.pm is not None:
+                            cleanup_service = PrototypeGenerationService(self.pm, None)
+                            cleanup_service.cleanup_failed_prototype_artifacts(
+                                self.project_name, script_path, new_scene_ids
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Prototype cleanup also failed for project %s", self.project_name
+                        )
 
             self.phase = PipelineStage.EDITING
 

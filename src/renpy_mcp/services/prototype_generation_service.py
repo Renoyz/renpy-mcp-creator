@@ -284,6 +284,78 @@ Requirements:
         )
 
     # ------------------------------------------------------------------
+    # Artifact cleanup
+    # ------------------------------------------------------------------
+
+    def remove_existing_prototype_artifacts(self, project_name: str) -> None:
+        """Remove all existing prototype artifacts: files and index entries.
+
+        This ensures idempotency by clearing out the previous prototype
+        generation before a new one is written.
+        """
+        if self.pm is None:
+            return
+
+        project_dir = self.pm._project_dir(project_name)
+
+        # 1. Remove prototype entries from index
+        index = self.pm.read_project_index(project_name)
+        if index and "scenes" in index:
+            prototype_ids = [
+                sid for sid, s in index["scenes"].items()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+            if prototype_ids:
+                for sid in prototype_ids:
+                    del index["scenes"][sid]
+                self.pm.write_project_index(project_name, index)
+
+        # 2. Remove prototype script files
+        game_dir = project_dir / "game"
+        if game_dir.exists():
+            for proto_file in game_dir.glob("prototype_*.rpy"):
+                try:
+                    proto_file.unlink()
+                except OSError:
+                    logger.warning("Failed to remove old prototype file: %s", proto_file)
+
+    def cleanup_failed_prototype_artifacts(
+        self,
+        project_name: str,
+        script_path: str | None,
+        new_scene_ids: list[str],
+    ) -> None:
+        """Clean up partial artifacts from a failed prototype generation round.
+
+        This is called from the orchestrator when any step after
+        write_script fails, to prevent leaving the project in a
+        half-generated state.
+        """
+        if self.pm is None:
+            return
+
+        # 1. Remove newly written script file
+        if script_path:
+            project_dir = self.pm._project_dir(project_name)
+            file_path = project_dir / script_path
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except OSError:
+                logger.warning("Failed to remove partial prototype file: %s", file_path)
+
+        # 2. Remove newly written index entries
+        index = self.pm.read_project_index(project_name)
+        if index and "scenes" in index:
+            changed = False
+            for sid in new_scene_ids:
+                if sid in index["scenes"]:
+                    del index["scenes"][sid]
+                    changed = True
+            if changed:
+                self.pm.write_project_index(project_name, index)
+
+    # ------------------------------------------------------------------
     # Index writeback
     # ------------------------------------------------------------------
 
@@ -294,13 +366,25 @@ Requirements:
         scenes: list[PrototypeScene],
         script_path: str,
     ) -> None:
-        """Update meta/index.json with full prototype scene metadata."""
+        """Update meta/index.json with full prototype scene metadata.
+
+        Old prototype entries are removed first so that the index
+        always contains exactly one generation of prototype scenes.
+        """
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for index writeback")
 
         index = self.pm.read_project_index(project_name) or {"scenes": {}}
         if "scenes" not in index:
             index["scenes"] = {}
+
+        # Remove old prototype entries first
+        old_prototype_ids = [
+            sid for sid, s in index["scenes"].items()
+            if isinstance(s, dict) and s.get("source") == "prototype"
+        ]
+        for sid in old_prototype_ids:
+            del index["scenes"][sid]
 
         for i, scene in enumerate(scenes):
             index["scenes"][scene.scene_id] = {
