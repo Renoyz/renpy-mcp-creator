@@ -187,7 +187,7 @@ def test_dashboard_chat_generates_background_into_project(
     img_src = page.locator("img[alt='Generated asset']").get_attribute("src")
     assert "/api/projects/" in img_src
     assert project_name in img_src
-    expect(page.locator("text=tool start")).to_have_count(0)
+    expect(page.locator("text=tool start")).to_be_visible(timeout=10000)
     expect(page.locator("text=tool result")).to_have_count(0)
 
     generated_file = (
@@ -1777,6 +1777,45 @@ def test_reviewing_shows_confirmation_in_chat_drawer(
     # Click "继续调整" from chat drawer should return to collecting
     confirmation_panel.locator("button", has_text="继续调整").click()
     expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
+
+
+def test_reviewing_refresh_restores_structured_messages(page: Page, server_url: str) -> None:
+    """After reaching reviewing and refreshing, ChatDrawer should still show blueprint draft and confirmation request messages."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_refresh_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Start collecting
+    page.locator("button", has_text="让 AI 生成蓝图").click()
+    expect(page.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
+
+    # First user reply
+    page.locator("textarea").fill("我想写一个3章的校园恋爱故事，主角是高中生")
+    page.locator("button >> svg").last.click()
+    expect(page.locator("text=收到")).to_be_visible(timeout=10000)
+
+    # Second user reply
+    page.locator("textarea").fill("视觉风格是日系动漫，氛围轻松治愈")
+    page.locator("button >> svg").last.click()
+
+    # Wait for reviewing state
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Re-open chat drawer (overlay on desktop may need re-opening)
+    open_chat_drawer(page)
+
+    # Verify structured messages are restored from history
+    expect(chat_drawer.locator("text=蓝图草案已生成")).to_be_visible(timeout=15000)
+    expect(chat_drawer.locator("text=请确认以下蓝图草案")).to_be_visible(timeout=15000)
 
 
 def test_main_content_blueprint_confirm_from_draft_card(page: Page, server_url: str) -> None:

@@ -295,10 +295,23 @@ class BlueprintOrchestrator:
             assistant_content = (
                 "信息已经足够丰富了。我现在为你整理一份蓝图草案，你可以在右侧查看。"
             )
+            draft_dict = self.draft.model_dump(mode="json")
             self.messages.append({"role": "assistant", "content": assistant_content})
+            self.messages.append({
+                "role": "assistant",
+                "message_kind": "blueprint_draft",
+                "content": "蓝图草案已生成，请查看并确认。",
+                "draft": draft_dict,
+            })
+            self.messages.append({
+                "role": "assistant",
+                "message_kind": "confirmation_request",
+                "content": "请确认以下蓝图草案，确认后我们将开始正式生成。",
+                "draft": draft_dict,
+                "confirmation_id": self.confirmation_id,
+            })
             self._save_history()
 
-            draft_dict = self.draft.model_dump(mode="json")
             return [
                 {
                     "type": "message",
@@ -369,6 +382,13 @@ class BlueprintOrchestrator:
                 events.append(
                     {"type": "progress", **step, "pipeline_stage": self.phase.value}
                 )
+                self.messages.append({
+                    "role": "assistant",
+                    "message_kind": "progress",
+                    "content": step["step"],
+                    "step": step["step"],
+                    "percent": step["percent"],
+                })
                 await asyncio.sleep(0.6)
 
             # Persist blueprint
@@ -388,7 +408,11 @@ class BlueprintOrchestrator:
             self.phase = PipelineStage.EDITING
 
             assistant_content = "蓝图生成完成！你现在可以在工作区中查看和编辑。"
-            self.messages.append({"role": "assistant", "content": assistant_content})
+            self.messages.append({
+                "role": "assistant",
+                "message_kind": "system",
+                "content": assistant_content,
+            })
             self._save_history()
 
             events.append(

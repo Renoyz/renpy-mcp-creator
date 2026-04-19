@@ -106,6 +106,48 @@ function convertHistoryToMessages(history: any[]): ChatMessage[] {
         }
       }
     } else if (role === "assistant") {
+      const msgKind = msg.message_kind;
+      if (msgKind === "blueprint_draft") {
+        result.push({
+          id: genId(),
+          type: "blueprint_draft",
+          content: msg.content || "蓝图草案已生成，请查看并确认。",
+          draft: msg.draft,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      if (msgKind === "confirmation_request") {
+        result.push({
+          id: genId(),
+          type: "confirmation_request",
+          content: msg.content || "请确认以下蓝图草案。",
+          draft: msg.draft,
+          confirmationId: msg.confirmation_id,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      if (msgKind === "progress") {
+        result.push({
+          id: genId(),
+          type: "progress",
+          content: msg.content || "",
+          step: msg.step,
+          percent: msg.percent,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
+      if (msgKind === "system") {
+        result.push({
+          id: genId(),
+          type: "assistant",
+          content: msg.content || "",
+          timestamp: Date.now(),
+        });
+        continue;
+      }
       if (Array.isArray(content)) {
         const textParts: string[] = [];
         for (const block of content) {
@@ -187,7 +229,13 @@ function convertEventToChatMessage(event: any): ChatMessage | null {
   }
 
   if (event.type === "tool_start") {
-    return null; // tool_start is not displayed as a separate message
+    return {
+      id,
+      type: "tool_start",
+      content: event.content || `正在调用 ${event.tool_name || "工具"}...`,
+      toolName: event.tool_name,
+      timestamp: ts,
+    };
   }
 
   if (event.type === "tool_result") {

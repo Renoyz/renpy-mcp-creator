@@ -188,3 +188,77 @@ def test_blueprint_confirmation_reject_returns_to_collecting(monkeypatch, client
         events = _drain_events(websocket, 1)
         assert events[0]["type"] == "message"
         assert events[0]["pipeline_stage"] == "collecting"
+
+
+def test_blueprint_history_contains_structured_entries(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """After reaching reviewing, chat_history.json should contain blueprint_draft and confirmation_request entries."""
+    project_name = "bp_history_struct"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                _drain_events(websocket, 3)
+
+    history_path = tmp_path / project_name / "meta" / "chat_history.json"
+    assert history_path.exists(), f"History file not found at {history_path}"
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    messages = history.get("messages", [])
+
+    draft_entries = [m for m in messages if m.get("message_kind") == "blueprint_draft"]
+    confirm_entries = [m for m in messages if m.get("message_kind") == "confirmation_request"]
+    assert len(draft_entries) >= 1, f"Expected at least one blueprint_draft entry, got {messages}"
+    assert len(confirm_entries) >= 1, f"Expected at least one confirmation_request entry, got {messages}"
+    assert draft_entries[0].get("draft", {}).get("title") == project_name
+    assert confirm_entries[0].get("confirmation_id")
+
+
+def test_blueprint_generating_history_contains_progress_and_completion(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """After approving, chat_history.json should contain progress and system completion entries."""
+    project_name = "bp_history_gen"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req_event = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req_event["confirmation_id"]
+
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+        events = []
+        while True:
+            data = websocket.receive_json()
+            events.append(data)
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    history_path = tmp_path / project_name / "meta" / "chat_history.json"
+    assert history_path.exists()
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    messages = history.get("messages", [])
+
+    progress_entries = [m for m in messages if m.get("message_kind") == "progress"]
+    system_entries = [m for m in messages if m.get("message_kind") == "system"]
+    assert len(progress_entries) >= 1, f"Expected at least one progress entry, got {messages}"
+    assert len(system_entries) >= 1, f"Expected at least one system entry, got {messages}"
+    assert any("蓝图生成完成" in (m.get("content", "") or "") for m in system_entries)
