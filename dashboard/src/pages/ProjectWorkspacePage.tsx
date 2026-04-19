@@ -64,8 +64,14 @@ export function ProjectWorkspacePage() {
       .then((project) => {
         setResolvedProject(project);
       })
-      .catch(() => {
-        navigate("/projects");
+      .catch((err) => {
+        const status = err instanceof Error && "status" in err ? (err as Error & { status?: number }).status : undefined;
+        if (status === 404) {
+          // Keep the route alive so loadProjectData can surface the error state
+          setResolvedProject({ name, path: "" } as CurrentProject);
+        } else {
+          navigate("/projects");
+        }
       });
   }, [name, currentProject, selectProject, navigate]);
 
@@ -183,6 +189,18 @@ export function ProjectWorkspacePage() {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-gray-900">{error}</h2>
+          <p className="text-muted-foreground mt-2">项目不存在或无法访问</p>
+        </div>
       </div>
     );
   }

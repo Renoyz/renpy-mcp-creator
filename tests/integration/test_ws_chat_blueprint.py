@@ -404,13 +404,13 @@ def test_blueprint_session_updates_latest_progress(monkeypatch, client: TestClie
 
     import renpy_mcp.web.chat_ws as chat_ws_module
     saved_states: list[dict] = []
-    original_save_session = chat_ws_module._save_blueprint_session
+    original_save_session = chat_ws_module._save_runtime_session
 
     def tracking_save_session(project_name_arg: str, state: dict) -> None:
         saved_states.append(state)
         original_save_session(project_name_arg, state)
 
-    monkeypatch.setattr(chat_ws_module, "_save_blueprint_session", tracking_save_session)
+    monkeypatch.setattr(chat_ws_module, "_save_runtime_session", tracking_save_session)
 
     confirmation_id = None
     with client.websocket_connect("/ws/chat") as websocket:
@@ -510,3 +510,11 @@ def test_blueprint_session_api_returns_state(monkeypatch, client: TestClient, tm
     assert data["awaiting_confirmation"] is True
     assert data["confirmation_id"]
     assert data["draft"]["title"] == project_name
+
+
+def test_blueprint_session_api_returns_404_for_missing_project(client: TestClient) -> None:
+    """GET /api/projects/{name}/blueprint-session for a non-existent project should return 404."""
+    resp = client.get("/api/projects/nonexistent_project/blueprint-session")
+    assert resp.status_code == 404
+    data = resp.json()
+    assert data["detail"] == "Project not found"

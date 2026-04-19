@@ -658,8 +658,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/projects/{project_name}/blueprint-session")
     async def api_blueprint_session(project_name: str):
-        from .chat_ws import _load_blueprint_session
-        session = _load_blueprint_session(project_name)
+        from .chat_ws import _load_runtime_session
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        session = _load_runtime_session(project_name)
         if session is None:
             return {"pipeline_stage": "idle", "awaiting_confirmation": False}
         return session

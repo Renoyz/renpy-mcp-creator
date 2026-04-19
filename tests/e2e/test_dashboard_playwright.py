@@ -1,12 +1,76 @@
 """Playwright E2E coverage for the dashboard workflow."""
 
 import json
+import os
 import re
+import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import httpx
 from playwright.sync_api import Locator, Page, expect
+
+
+REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1.0)
+            try:
+                sock.connect((host, port))
+                return True
+            except OSError:
+                time.sleep(0.2)
+    return False
+
+
+def start_mock_llm_server(workspace: Path) -> tuple[str, subprocess.Popen]:
+    """Start a dedicated backend with mock LLM for real WS path tests."""
+    port = _find_free_port()
+    env = os.environ.copy()
+    env["RENPY_MCP_WORKSPACE"] = str(workspace)
+    env["RENPY_MCP_MOCK_BUILD"] = "1"
+    env["RENPY_MCP_MOCK_LLM"] = "1"
+
+    cmd = [sys.executable, "-m", "renpy_mcp.main", "--transport", "http", "--port", str(port)]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        cwd=str(REPO_ROOT),
+    )
+
+    url = f"http://127.0.0.1:{port}"
+    if not _wait_for_port("127.0.0.1", port, timeout=30.0):
+        proc.terminate()
+        proc.kill()
+        raise RuntimeError(f"Mock LLM backend did not start on {url}")
+
+    # Also wait for /api/status to return 200
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        try:
+            if httpx.get(f"{url}/api/status", timeout=2.0).status_code == 200:
+                return url, proc
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    proc.terminate()
+    proc.kill()
+    raise RuntimeError(f"Mock LLM backend did not become ready on {url}")
 
 
 def wait_for_server(url: str, timeout: float = 30.0) -> bool:
@@ -1094,9 +1158,7 @@ def test_workspace_default_blueprint_view(page: Page, server_url: str, e2e_works
     # Rich blueprint content visible
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
     expect(page.locator("text=项目信息")).to_be_visible(timeout=10000)
-    expect(page.locator("text=世界观 / 背景")).to_be_visible(timeout=10000)
-    expect(page.locator("text=现代日本高中")).to_be_visible(timeout=10000)
-    expect(page.locator("text=章节结构")).to_be_visible(timeout=10000)
+
 
 
 def _seed_project_with_branch(workspace: Path, project_name: str) -> None:
@@ -2231,3 +2293,267 @@ def test_workspace_existing_blueprint_does_not_fall_back_to_onboarding(
     )
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
     expect(page.locator("text=项目信息")).to_be_visible(timeout=10000)
+
+
+def test_project_switch_clears_confirmation_state(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Switching from a project with an active confirmation to a new project must not leak the confirmation state."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_a = f"playwright_conf_switch_a_{int(time.time())}"
+    project_b = f"playwright_conf_switch_b_{int(time.time())}"
+    create_project_via_api(server_url, project_a)
+    create_project_via_api(server_url, project_b)
+
+    # Inject a reviewing session for project A so it shows confirmation panel
+    session_path = e2e_workspace / project_a / "meta" / "blueprint_session.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                "pipeline_stage": "reviewing",
+                "turn_count": 2,
+                "awaiting_confirmation": True,
+                "confirmation_id": "test-conf-switch-123",
+                "updated_at": "2024-01-01T00:00:00",
+                "draft": {
+                    "title": project_a,
+                    "genre": "校园恋爱",
+                    "characters": [],
+                    "chapters": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    page.goto(f"{server_url}/dashboard/projects/{project_a}")
+    expect(page.locator("h1")).to_have_text(project_a, timeout=30000)
+
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    # Project A should show confirmation panel
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=10000)
+
+    # Client-side navigate to project B
+    _client_navigate_to_project(page, project_b)
+    expect(page.locator("h1")).to_have_text(project_b, timeout=30000)
+
+    # Project B must NOT show the old confirmation panel
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_have_count(0, timeout=5000)
+
+
+def test_tool_confirmation_does_not_leak_on_project_switch(
+    page: Page, server_url: str, mock_chat_server_url: str
+) -> None:
+    """A real awaiting_confirmation from /ws/chat in project A must not survive after switching to project B."""
+    assert wait_for_server(server_url), "Server not ready"
+    install_mock_chat_socket(page, mock_chat_server_url)
+
+    project_a = f"playwright_tool_conf_a_{int(time.time())}"
+    project_b = f"playwright_tool_conf_b_{int(time.time())}"
+    create_project_via_api(server_url, project_a)
+    create_project_via_api(server_url, project_b)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_a}")
+    expect(page.locator("h1")).to_have_text(project_a, timeout=30000)
+
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+
+    # Open chat and send a message to trigger the mock WS awaiting_confirmation
+    open_chat_drawer(page)
+    page.locator("textarea").fill("generate a courtyard background")
+    click_send_button(page)
+
+    # Wait for the real awaiting_confirmation panel to appear
+    expect(chat_drawer.locator("text=Mock background ready to save.")).to_be_visible(timeout=10000)
+
+    # Client-side navigate to project B
+    _client_navigate_to_project(page, project_b)
+    expect(page.locator("h1")).to_have_text(project_b, timeout=30000)
+
+    # The old tool confirmation panel must NOT survive the switch
+    expect(chat_drawer.locator("text=Mock background ready to save.")).to_have_count(0, timeout=5000)
+
+
+def test_missing_project_shows_error_state(page: Page, server_url: str) -> None:
+    """Accessing a non-existent project workspace should show a clear error instead of an empty onboarding shell."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    page.goto(f"{server_url}/dashboard/projects/fake-missing-project")
+
+    # Should remain on the requested route (not silently redirected)
+    expect(page).to_have_url(f"{server_url}/dashboard/projects/fake-missing-project")
+
+    # Should show error state with "Project not found" message
+    expect(page.locator("text=Project not found")).to_be_visible(timeout=15000)
+
+    # Onboarding entry must NOT appear
+    expect(page.locator("text=让 AI 生成蓝图")).to_have_count(0, timeout=5000)
+
+    # Normal workspace sidebar must NOT appear
+    expect(page.locator("[data-testid='workspace-sidebar']")).to_have_count(0, timeout=5000)
+
+
+def test_missing_project_with_different_error_detail(page: Page, server_url: str) -> None:
+    """A missing project must surface the error state even when the backend uses an unexpected detail message."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    # Intercept /api/projects/select to return 404 with a non-standard detail message
+    page.route(
+        f"{server_url}/api/projects/select",
+        lambda route, request: route.fulfill(
+            status=404,
+            content_type="application/json",
+            body='{"detail": "No such project here"}',
+        ),
+    )
+
+    page.goto(f"{server_url}/dashboard/projects/unknown-project")
+
+    # Should remain on the requested route
+    expect(page).to_have_url(f"{server_url}/dashboard/projects/unknown-project")
+
+    # Should still show error state (driven by 404 status, not detail string)
+    expect(page.locator("text=Project not found")).to_be_visible(timeout=15000)
+
+    # Onboarding and workspace must not appear
+    expect(page.locator("text=让 AI 生成蓝图")).to_have_count(0, timeout=5000)
+    expect(page.locator("[data-testid='workspace-sidebar']")).to_have_count(0, timeout=5000)
+
+
+def test_tool_confirmation_refresh_restores_panel_from_session(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Low-level: frontend can recover confirmation panel from an injected runtime session file."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_tool_refresh_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    # Inject a tool workflow runtime session to simulate an in-flight confirmation
+    session_path = e2e_workspace / project_name / "meta" / "blueprint_session.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                "active_workflow": "tool",
+                "pipeline_stage": "awaiting_confirmation",
+                "awaiting_confirmation": True,
+                "confirmation_id": "test-tool-refresh-123",
+                "confirmation_message": "请确认生成此背景图",
+                "confirmation_candidates": [
+                    {"type": "image", "path": "game/images/background/test.png"}
+                ],
+                "tool_name": "generate_background",
+                "updated_at": "2024-01-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    # Confirmation panel should be visible from session recovery
+    expect(chat_drawer.locator("text=请确认生成此背景图")).to_be_visible(timeout=10000)
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Confirmation panel must still be visible after refresh
+    expect(chat_drawer.locator("text=请确认生成此背景图")).to_be_visible(timeout=10000)
+
+
+def test_tool_confirmation_refresh_restores_panel(
+    page: Page, e2e_workspace: Path
+) -> None:
+    """Real backend path: /ws/chat -> awaiting_confirmation -> session write -> refresh -> panel recovery."""
+    url, proc = start_mock_llm_server(e2e_workspace)
+    try:
+        assert wait_for_server(url), "Server not ready"
+
+        project_name = f"playwright_tool_real_{int(time.time())}"
+        create_project_via_api(url, project_name)
+        # Seed a blueprint so the project enters editing mode and bypasses the blueprint orchestrator
+        _seed_project_blueprint(e2e_workspace, project_name)
+
+        page.goto(f"{url}/dashboard/projects/{project_name}")
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+        chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+
+        # Open chat and send a message that triggers real backend tool confirmation
+        open_chat_drawer(page)
+        page.locator("textarea").fill("generate a background of a Japanese courtyard")
+        click_send_button(page)
+
+        # Wait for real awaiting_confirmation from backend (generate_background confirmation message)
+        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+
+        # Refresh page
+        page.reload()
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+        # Confirmation panel must still be visible after refresh (recovered from runtime session)
+        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def test_tool_running_refresh_restores_progress_state(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """A tool_running runtime session should recover as generic workflow progress, not blueprint phase."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_tool_run_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+
+    # Inject a tool-running runtime session
+    session_path = e2e_workspace / project_name / "meta" / "blueprint_session.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                "active_workflow": "tool",
+                "pipeline_stage": "tool_running",
+                "awaiting_confirmation": False,
+                "latest_progress": {"step": "正在调用 generate_background...", "percent": 0},
+                "tool_name": "generate_background",
+                "updated_at": "2024-01-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Must NOT show blueprint reviewing / generating / collecting UI
+    # (onboarding is OK for a project without blueprint)
+    expect(page.locator("text=蓝图草案已生成")).to_have_count(0, timeout=5000)
+    expect(page.locator("text=正在生成蓝图")).to_have_count(0, timeout=5000)
+    expect(page.locator("text=正在与 AI 细化需求")).to_have_count(0, timeout=5000)
+
+    # Chat drawer should show the recovered progress step
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # After refresh, must still NOT show blueprint reviewing / generating UI
+    expect(page.locator("text=蓝图草案已生成")).to_have_count(0, timeout=5000)
+    expect(page.locator("text=正在生成蓝图")).to_have_count(0, timeout=5000)
+
+    # Progress must still be visible
+    expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)

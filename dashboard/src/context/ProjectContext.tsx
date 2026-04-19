@@ -105,6 +105,13 @@ interface ProjectContextValue {
   error: string | null;
   blueprintPhase: BlueprintPhase;
   blueprintDraft: Blueprint | null;
+  blueprintConfirmationId: string | null;
+  workflowConfirmation: {
+    confirmationId: string;
+    message: string;
+    candidates: { type: string; path: string }[];
+    projectName?: string;
+  } | null;
   interviewMessages: InterviewMessage[];
   generationProgress: GenerationProgress | null;
   refresh: () => Promise<void>;
@@ -134,6 +141,13 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [blueprintPhase, setBlueprintPhaseState] = useState<BlueprintPhase>("idle");
   const [blueprintDraft, setBlueprintDraft] = useState<Blueprint | null>(null);
+  const [blueprintConfirmationId, setBlueprintConfirmationId] = useState<string | null>(null);
+  const [workflowConfirmation, setWorkflowConfirmation] = useState<{
+    confirmationId: string;
+    message: string;
+    candidates: { type: string; path: string }[];
+    projectName?: string;
+  } | null>(null);
   const [interviewMessages, setInterviewMessages] = useState<InterviewMessage[]>([]);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
   const blueprintConfirmationSenderRef = useRef<((approved: boolean) => boolean) | null>(null);
@@ -187,7 +201,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to select project");
+        const error = new Error(err.detail || "Failed to select project") as Error & { status?: number };
+        error.status = resp.status;
+        throw error;
       }
       const data = await resp.json();
       const selectedProject = data.current_project ?? null;
@@ -218,6 +234,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setSelectedSceneScript(null);
     setScriptError(null);
     setBlueprintDraft(null);
+    setBlueprintConfirmationId(null);
+    setWorkflowConfirmation(null);
     setInterviewMessages([]);
     setGenerationProgress(null);
     if (genTimerRef.current) {
@@ -235,6 +253,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
+
+      if (metaResp.status === 404 && sessionResp.status === 404) {
+        throw new Error("Project not found");
+      }
 
       let metaData: ProjectMeta | null = null;
       if (metaResp.ok) {
@@ -278,11 +300,36 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       }
 
       // Restore session state if available; otherwise fall back to blueprint existence
-      if (sessionData && sessionData.pipeline_stage && sessionData.pipeline_stage !== "idle" && sessionData.pipeline_stage !== "editing") {
+      // --- Tool workflow (any stage) takes priority over blueprint fallback ---
+      if (sessionData && sessionData.active_workflow === "tool") {
+        setBlueprintPhaseState("idle");
+        setBlueprintDraft(null);
+        setBlueprintConfirmationId(null);
+        if (sessionData.awaiting_confirmation) {
+          setWorkflowConfirmation({
+            confirmationId: sessionData.confirmation_id ?? "",
+            message: sessionData.confirmation_message ?? "",
+            candidates: sessionData.confirmation_candidates ?? [],
+            projectName: sessionData.project_name ?? undefined,
+          });
+        } else {
+          setWorkflowConfirmation(null);
+        }
+        if (sessionData.latest_progress) {
+          setGenerationProgress({
+            step: sessionData.latest_progress.step,
+            percent: sessionData.latest_progress.percent,
+          });
+        } else {
+          setGenerationProgress(null);
+        }
+      } else if (sessionData && sessionData.pipeline_stage && sessionData.pipeline_stage !== "idle" && sessionData.pipeline_stage !== "editing") {
         setBlueprintPhaseState(sessionData.pipeline_stage as BlueprintPhase);
         if (sessionData.draft) {
           setBlueprintDraft(sessionData.draft);
         }
+        setBlueprintConfirmationId(sessionData.confirmation_id ?? null);
+        setWorkflowConfirmation(null);
         if (sessionData.latest_progress) {
           setGenerationProgress({
             step: sessionData.latest_progress.step,
@@ -291,8 +338,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         }
       } else if (bpData) {
         setBlueprintPhaseState("editing");
+        setBlueprintConfirmationId(null);
+        setWorkflowConfirmation(null);
+        setGenerationProgress(null);
       } else {
         setBlueprintPhaseState("idle");
+        setBlueprintConfirmationId(null);
+        setWorkflowConfirmation(null);
+        setGenerationProgress(null);
       }
 
       // Auto-select first scene
@@ -384,6 +437,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setBlueprintPhaseState("collecting");
     setInterviewMessages([]);
     setBlueprintDraft(null);
+    setBlueprintConfirmationId(null);
     setGenerationProgress(null);
     requestBlueprintCollectionStart();
   }, [currentProject, requestBlueprintCollectionStart]);
@@ -431,6 +485,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     } else if (event.type === "confirmation_request") {
       if (event.draft) {
         setBlueprintDraft(event.draft as Blueprint);
+      }
+      if (event.confirmation_id) {
+        setBlueprintConfirmationId(event.confirmation_id);
       }
       updatePhase(event.pipeline_stage ?? "reviewing");
     } else if (event.type === "progress") {
@@ -482,6 +539,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         error,
         blueprintPhase,
         blueprintDraft,
+        blueprintConfirmationId,
+        workflowConfirmation,
         interviewMessages,
         generationProgress,
         refresh,

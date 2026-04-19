@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +46,13 @@ def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> No
 # Blueprint session state persistence
 # ---------------------------------------------------------------------------
 
-def _blueprint_session_path(project_name: str) -> Path:
+def _runtime_session_path(project_name: str) -> Path:
     settings = get_settings()
     return settings.workspace / project_name / "meta" / "blueprint_session.json"
 
 
-def _load_blueprint_session(project_name: str) -> dict[str, Any] | None:
-    path = _blueprint_session_path(project_name)
+def _load_runtime_session(project_name: str) -> dict[str, Any] | None:
+    path = _runtime_session_path(project_name)
     if not path.exists():
         return None
     try:
@@ -60,14 +61,14 @@ def _load_blueprint_session(project_name: str) -> dict[str, Any] | None:
         return None
 
 
-def _save_blueprint_session(project_name: str, state: dict[str, Any]) -> None:
-    path = _blueprint_session_path(project_name)
+def _save_runtime_session(project_name: str, state: dict[str, Any]) -> None:
+    path = _runtime_session_path(project_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
 
-def _clear_blueprint_session(project_name: str) -> None:
-    path = _blueprint_session_path(project_name)
+def _clear_runtime_session(project_name: str) -> None:
+    path = _runtime_session_path(project_name)
     if path.exists():
         path.unlink()
 
@@ -130,6 +131,32 @@ def _allowed_without_project(content: str) -> bool:
 
 def _get_provider():
     """Resolve LLM provider from settings/environment."""
+    if os.environ.get("RENPY_MCP_MOCK_LLM"):
+        from ..chat_engine.providers import BaseProvider, LLMResponse
+
+        class MockE2EProvider(BaseProvider):
+            tool_format = "anthropic"
+            _turn_count = 0
+
+            def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+                self._turn_count += 1
+                if self._turn_count == 1:
+                    return LLMResponse(
+                        content_blocks=[{
+                            "type": "tool_use",
+                            "id": "mock_tool_1",
+                            "name": "generate_background",
+                            "input": {"description": "courtyard", "image_type": "background", "style": "anime"},
+                        }],
+                        stop_reason="tool_use",
+                    )
+                return LLMResponse(
+                    content_blocks=[{"type": "text", "text": "Background generated successfully."}],
+                    stop_reason="end_turn",
+                )
+
+        return MockE2EProvider()
+
     settings = get_settings()
 
     # Primary: Anthropic-compatible (Kimi Code)
@@ -205,7 +232,7 @@ class BlueprintOrchestrator:
         self._try_restore_session()
 
     def _try_restore_session(self) -> None:
-        session = _load_blueprint_session(self.project_name)
+        session = _load_runtime_session(self.project_name)
         if not session:
             return
         stage = session.get("pipeline_stage")
@@ -222,6 +249,7 @@ class BlueprintOrchestrator:
 
     def _save_session(self) -> None:
         state: dict[str, Any] = {
+            "active_workflow": "blueprint",
             "pipeline_stage": self.phase.value,
             "turn_count": self.turn_count,
             "awaiting_confirmation": self.phase == PipelineStage.REVIEWING and self.confirmation_id is not None,
@@ -229,10 +257,11 @@ class BlueprintOrchestrator:
         }
         if self.draft:
             state["draft"] = self.draft.model_dump(mode="json")
-        _save_blueprint_session(self.project_name, state)
+        _save_runtime_session(self.project_name, state)
 
     def _save_session_with_progress(self, step: str, percent: int) -> None:
         state: dict[str, Any] = {
+            "active_workflow": "blueprint",
             "pipeline_stage": self.phase.value,
             "turn_count": self.turn_count,
             "awaiting_confirmation": False,
@@ -241,7 +270,7 @@ class BlueprintOrchestrator:
         }
         if self.draft:
             state["draft"] = self.draft.model_dump(mode="json")
-        _save_blueprint_session(self.project_name, state)
+        _save_runtime_session(self.project_name, state)
 
     def _load_history(self) -> None:
         self.messages = _read_chat_history(self.project_name)
@@ -490,7 +519,7 @@ class BlueprintOrchestrator:
                 "content": assistant_content,
             })
             self._save_history()
-            _clear_blueprint_session(self.project_name)
+            _clear_runtime_session(self.project_name)
 
             events.append(
                 {
@@ -556,7 +585,7 @@ def _should_use_orchestrator(project_name: str, content: str) -> bool:
         return True
 
     # Also check session file for in-progress states (e.g. after restart)
-    session = _load_blueprint_session(project_name)
+    session = _load_runtime_session(project_name)
     if session:
         stage = session.get("pipeline_stage")
         if stage in (PipelineStage.IDLE.value, PipelineStage.COLLECTING.value,
@@ -571,9 +600,12 @@ def _orchestrator_has_confirmation(project_name: str, confirmation_id: str) -> b
     if orch is not None:
         return orch.confirmation_id == confirmation_id
     # Check session file for recovery after restart
-    session = _load_blueprint_session(project_name)
+    session = _load_runtime_session(project_name)
     if session:
-        return session.get("confirmation_id") == confirmation_id
+        return (
+            session.get("active_workflow") == "blueprint"
+            and session.get("confirmation_id") == confirmation_id
+        )
     return False
 
 
@@ -647,6 +679,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     "project_name": confirmation.get("project_name"),
                 }
             )
+            # Persist runtime session for tool workflow recovery
+            active_project = _active_project_name(websocket, None)
+            if active_project:
+                tool_name = (
+                    engine.confirmation.pending.tool_name
+                    if engine and engine.confirmation.pending
+                    else None
+                )
+                _save_runtime_session(
+                    active_project,
+                    {
+                        "active_workflow": "tool",
+                        "pipeline_stage": "awaiting_confirmation",
+                        "awaiting_confirmation": True,
+                        "confirmation_id": confirmation.get("confirmation_id"),
+                        "confirmation_message": confirmation.get("message"),
+                        "confirmation_candidates": confirmation.get("candidates", []),
+                        "tool_name": tool_name,
+                        "project_name": confirmation.get("project_name"),
+                        "latest_progress": {
+                            "step": f"等待用户确认: {tool_name or '操作'}",
+                            "percent": 0,
+                        },
+                        "updated_at": datetime.utcnow().isoformat(),
+                    },
+                )
             return
 
         if result.get("error"):
@@ -671,12 +729,29 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                 {"type": "assistant_delta", "delta": block.get("text", "")}
                             )
                         elif isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_name = block.get("name", "")
                             await websocket.send_json(
                                 {
                                     "type": "tool_start",
-                                    "tool_name": block.get("name", ""),
+                                    "tool_name": tool_name,
                                 }
                             )
+                            active_project = _active_project_name(websocket, None)
+                            if active_project:
+                                _save_runtime_session(
+                                    active_project,
+                                    {
+                                        "active_workflow": "tool",
+                                        "pipeline_stage": "tool_running",
+                                        "awaiting_confirmation": False,
+                                        "latest_progress": {
+                                            "step": f"正在调用 {tool_name}...",
+                                            "percent": 0,
+                                        },
+                                        "tool_name": tool_name,
+                                        "updated_at": datetime.utcnow().isoformat(),
+                                    },
+                                )
             elif role == "user":
                 content = msg.get("content", [])
                 if isinstance(content, list):
@@ -691,6 +766,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                     },
                                 }
                             )
+                            active_project = _active_project_name(websocket, None)
+                            if active_project:
+                                _clear_runtime_session(active_project)
         sent_message_count = len(result_messages)
 
     try:
@@ -814,6 +892,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             ],
                         }
                     )
+
+                # Clear runtime session after confirmation is resolved
+                active_project = pending.project_name or _active_project_name(websocket, project_name)
+                if active_project:
+                    _clear_runtime_session(active_project)
 
                 engine.system_prompt = _system_prompt_for_current_project(engine)
                 result = await engine.run_turn(messages)

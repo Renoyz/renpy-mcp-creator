@@ -274,12 +274,11 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
-  const [blueprintConfirmationId, setBlueprintConfirmationId] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const historyRequestIdRef = useRef(0);
-  const { currentProject, blueprintPhase, blueprintDraft, handleBlueprintEvent, sendBlueprintConfirmation, registerBlueprintConfirmationSender, registerBlueprintStartSender } = useProject();
+  const { currentProject, blueprintPhase, blueprintDraft, blueprintConfirmationId, workflowConfirmation, generationProgress, handleBlueprintEvent, sendBlueprintConfirmation, registerBlueprintConfirmationSender, registerBlueprintStartSender } = useProject();
   const isInterviewMode = blueprintPhase === "collecting" || blueprintPhase === "reviewing";
   const isReviewing = blueprintPhase === "reviewing";
 
@@ -289,27 +288,18 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [displayMessages]);
 
-  // Restore blueprint confirmation id from session when project changes
-  useEffect(() => {
-    if (!currentProject?.name) return;
-    fetch(`/api/projects/${encodeURIComponent(currentProject.name)}/blueprint-session`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.confirmation_id) {
-          setBlueprintConfirmationId(data.confirmation_id);
-        }
-      })
-      .catch(() => {});
-  }, [currentProject?.name]);
-
   useEffect(() => {
     if (!effectiveOpen || !currentProject?.name) {
-      if (!currentProject?.name) setMessages([]);
+      if (!currentProject?.name) {
+        setMessages([]);
+        setPendingConfirmation(null);
+      }
       return;
     }
     historyRequestIdRef.current += 1;
     const requestId = historyRequestIdRef.current;
     setMessages([]);
+    setPendingConfirmation(null);
     const controller = new AbortController();
     fetch(`/api/projects/${encodeURIComponent(currentProject.name)}/chat/history`, {
       signal: controller.signal,
@@ -332,6 +322,7 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
 
   useEffect(() => {
     const handleProjectChange = () => {
+      setPendingConfirmation(null);
       if (effectiveOpen && wsRef.current) {
         wsRef.current.close();
         setReconnectKey((k) => k + 1);
@@ -342,6 +333,13 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
       window.removeEventListener("project-changed", handleProjectChange);
     };
   }, [effectiveOpen]);
+
+  // Sync workflow confirmation from context (restored from runtime session on page load)
+  useEffect(() => {
+    if (workflowConfirmation) {
+      setPendingConfirmation(workflowConfirmation);
+    }
+  }, [workflowConfirmation]);
 
   const pendingWsConfirmationRef = useRef<boolean | null>(null);
   const blueprintConfirmationIdRef = useRef<string | null>(null);
@@ -452,9 +450,6 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
 
         // Blueprint orchestrator events (also update context state)
         if (["message", "blueprint_draft", "confirmation_request", "progress", "error"].includes(data.type)) {
-          if (data.type === "confirmation_request" && data.confirmation_id) {
-            setBlueprintConfirmationId(data.confirmation_id);
-          }
           handleBlueprintEvent(data);
           const msg = convertEventToChatMessage(data);
           if (msg) setMessages((prev) => [...prev, msg]);
@@ -517,6 +512,7 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     ws.onclose = () => {
       setConnected(false);
       setConnecting(false);
+      setPendingConfirmation(null);
     };
 
     return () => {
@@ -610,6 +606,17 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
               </button>
             )}
           </div>
+
+          {/* Recovered progress from runtime session (tool workflow) */}
+          {generationProgress && blueprintPhase !== "generating" && (
+            <div className="border-b bg-muted/50 p-3 flex items-center gap-2 text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{generationProgress.step}</span>
+              {generationProgress.percent !== undefined && (
+                <span className="font-medium">{generationProgress.percent}%</span>
+              )}
+            </div>
+          )}
 
           {/* Messages */}
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
