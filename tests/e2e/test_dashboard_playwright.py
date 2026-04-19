@@ -2664,3 +2664,46 @@ def test_editing_project_with_tool_running_stays_in_editing_mode_after_refresh(
 
     # Progress must still be visible
     expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
+
+
+def test_blueprint_draft_from_real_provider_in_reviewing(page: Page, e2e_workspace: Path) -> None:
+    """Real backend path: collecting -> LLM generates draft -> reviewing shows provider draft content."""
+    url, proc = start_mock_llm_server(e2e_workspace)
+    try:
+        assert wait_for_server(url), "Server not ready"
+
+        project_name = f"playwright_bp_real_{int(time.time())}"
+        create_project_via_api(url, project_name)
+        # Do NOT seed blueprint — we want the orchestrator to drive the full flow
+
+        page.goto(f"{url}/dashboard/projects/{project_name}")
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+        # Start collecting
+        page.locator("button", has_text="让 AI 生成蓝图").click()
+        expect(page.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
+
+        # Turn 1
+        page.locator("textarea").fill("我想写一个3章的校园恋爱故事，主角是高中生")
+        page.locator("button >> svg").last.click()
+        expect(page.locator("text=收到")).to_be_visible(timeout=10000)
+
+        # Turn 2 — triggers LLM draft generation via mock provider
+        page.locator("textarea").fill("视觉风格是日系动漫，氛围轻松治愈")
+        page.locator("button >> svg").last.click()
+
+        # Wait for reviewing with the mock provider's specific content
+        chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+        expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+
+        # Assert the draft contains the mock provider's specific values (not old hardcoded defaults)
+        # Title is derived from project name by the mock provider; characters are mock-specific
+        expect(page.locator("[data-testid='workspace-onboarding-view']").locator("text=" + project_name).first).to_be_visible(timeout=15000)
+        expect(page.locator("text=Mock主角小明")).to_be_visible(timeout=15000)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()

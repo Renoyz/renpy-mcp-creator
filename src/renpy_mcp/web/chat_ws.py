@@ -138,8 +138,60 @@ def _get_provider():
             tool_format = "anthropic"
             _turn_count = 0
 
+            def _is_blueprint_prompt(self, messages):
+                for m in messages:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        if "Project Name:" in content and "Interview Transcript:" in content:
+                            return True
+                return False
+
+            def _extract_project_name(self, messages):
+                import re as _re
+                for m in messages:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        match = _re.search(r"Project Name:\s*(.+)", content)
+                        if match:
+                            return match.group(1).strip()
+                return "MockLLM校园恋爱"
+
             def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
                 self._turn_count += 1
+
+                # Blueprint generation mock
+                if self._is_blueprint_prompt(messages):
+                    project_name = self._extract_project_name(messages)
+                    blueprint = {
+                        "title": project_name,
+                        "genre": "校园恋爱",
+                        "worldview": "现代日本高中",
+                        "themes": ["初恋", "成长"],
+                        "target_audience": "18-25岁视觉小说爱好者",
+                        "estimated_play_time": "2-3小时",
+                        "art_style": "日系动漫风格",
+                        "audio_style": "治愈系钢琴配乐",
+                        "characters": [
+                            {"name": "Mock主角小明", "role": "男主角", "personality": "内向但善良", "appearance": "普通高中生"},
+                            {"name": "Mock女主小樱", "role": "女主角", "personality": "活泼开朗", "appearance": "短发，戴眼镜"},
+                        ],
+                        "chapters": [
+                            {"id": "ch1", "name": "图书馆相遇", "order": 1, "scenes": [
+                                {"id": "s1-1", "name": "初见", "order": 1},
+                                {"id": "s1-2", "name": "借书", "order": 2},
+                            ]},
+                            {"id": "ch2", "name": "社团活动", "order": 2, "scenes": [
+                                {"id": "s2-1", "name": "招募", "order": 1},
+                                {"id": "s2-2", "name": "合作", "order": 2},
+                            ]},
+                        ],
+                    }
+                    return LLMResponse(
+                        content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
+                        stop_reason="end_turn",
+                    )
+
+                # Tool workflow mock
                 if self._turn_count == 1:
                     return LLMResponse(
                         content_blocks=[{
@@ -278,62 +330,118 @@ class BlueprintOrchestrator:
     def _save_history(self) -> None:
         _write_chat_history(self.project_name, self.messages)
 
-    def _generate_draft(self) -> ProjectBlueprint:
-        return ProjectBlueprint(
-            title=self.project_name,
-            genre="校园恋爱",
-            worldview="现代日本高中",
-            themes=["初恋", "成长"],
-            target_audience="18-25岁视觉小说爱好者",
-            estimated_play_time="2-3小时",
-            art_style="日系动漫风格",
-            audio_style="治愈系钢琴配乐",
-            characters=[
-                BlueprintCharacter(
-                    name="小林",
-                    role="男主角",
-                    personality="内向但善良的高中生",
-                    appearance="普通高中生",
-                ),
-                BlueprintCharacter(
-                    name="樱",
-                    role="女主角",
-                    personality="活泼开朗的图书管理员",
-                    appearance="短发，戴眼镜",
-                ),
-            ],
-            chapters=[
-                ChapterSummary(
-                    id="ch1",
-                    name="图书馆相遇",
-                    order=1,
-                    scenes=[
-                        SceneSummary(id="s1-1", name="初见", order=1),
-                        SceneSummary(id="s1-2", name="借书", order=2),
-                    ],
-                ),
-                ChapterSummary(
-                    id="ch2",
-                    name="社团活动",
-                    order=2,
-                    scenes=[
-                        SceneSummary(id="s2-1", name="招募", order=1),
-                        SceneSummary(id="s2-2", name="合作", order=2),
-                    ],
-                ),
-                ChapterSummary(
-                    id="ch3",
-                    name="最终抉择",
-                    order=3,
-                    scenes=[
-                        SceneSummary(id="s3-1", name="犹豫", order=1),
-                        SceneSummary(id="s3-2", name="告白", order=2),
-                    ],
-                ),
-            ],
+    async def _generate_draft_via_llm(self) -> ProjectBlueprint:
+        """Generate a blueprint draft by calling the LLM provider.
+
+        Builds a prompt from the interview transcript, calls the provider,
+        extracts JSON, and validates against ProjectBlueprint schema.
+        Retries up to 2 times on parse/validation errors.
+        """
+        provider = _get_provider()
+        if provider is None:
+            raise RuntimeError("No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key.")
+
+        # Build transcript from string-content messages only
+        transcript_lines: list[str] = []
+        for m in self.messages:
+            content = m.get("content", "")
+            if isinstance(content, str) and content.strip():
+                role_label = "User" if m["role"] == "user" else "Assistant"
+                transcript_lines.append(f"{role_label}: {content}")
+        transcript = "\n".join(transcript_lines)
+
+        system_prompt = (
+            "You are an expert visual novel blueprint designer. "
+            "You create structured project blueprints based on user interviews. "
+            "You MUST respond with ONLY a valid JSON object. No markdown, no explanations."
         )
 
-    def handle_user_message(self, content: str) -> list[dict[str, Any]]:
+        prompt = f"""Based on the following interview, design a complete visual novel blueprint.
+
+Project Name: {self.project_name}
+
+Interview Transcript:
+{transcript}
+
+Respond with ONLY a JSON object matching this exact structure:
+{{
+  "title": "string (use project name or a creative title)",
+  "genre": "string",
+  "worldview": "string",
+  "themes": ["string"],
+  "target_audience": "string",
+  "estimated_play_time": "string",
+  "art_style": "string",
+  "audio_style": "string",
+  "characters": [
+    {{
+      "name": "string",
+      "role": "string",
+      "personality": "string",
+      "appearance": "string"
+    }}
+  ],
+  "chapters": [
+    {{
+      "id": "string",
+      "name": "string",
+      "order": 1,
+      "scenes": [
+        {{
+          "id": "string",
+          "name": "string",
+          "order": 1
+        }}
+      ]
+    }}
+  ]
+}}
+
+Requirements:
+- 2-4 chapters, each with 2-4 scenes
+- At least 2 well-defined characters
+- Themes must match the described tone
+- Output ONLY the JSON object, nothing else.
+"""
+
+        max_retries = 2
+        last_error: str | None = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = await asyncio.to_thread(
+                    provider.chat,
+                    messages=[{"role": "user", "content": prompt}],
+                    system=system_prompt,
+                    max_tokens=4096,
+                )
+                text = response.text.strip()
+
+                # Extract JSON from markdown code blocks if present
+                if text.startswith("```"):
+                    lines = text.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    text = "\n".join(lines).strip()
+
+                data = json.loads(text)
+                blueprint = ProjectBlueprint(**data)
+                return blueprint
+
+            except json.JSONDecodeError as e:
+                last_error = f"JSON parse error: {e}"
+                prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
+            except Exception as e:
+                last_error = f"Schema validation error: {e}"
+                prompt += f"\n\nERROR: Your previous response did not match the required schema ({e}). Fix and return valid JSON."
+
+        raise RuntimeError(
+            f"Blueprint generation failed after {max_retries + 1} attempts. {last_error}"
+        )
+
+    async def handle_user_message(self, content: str) -> list[dict[str, Any]]:
         self._load_history()
 
         # Handle explicit start trigger without consuming a turn
@@ -389,8 +497,23 @@ class BlueprintOrchestrator:
                     }
                 ]
 
-            # Second turn -> generate draft and transition to reviewing
-            self.draft = self._generate_draft()
+            # Second turn -> generate draft via LLM and transition to reviewing
+            try:
+                self.draft = await self._generate_draft_via_llm()
+            except Exception as exc:
+                self.phase = PipelineStage.COLLECTING
+                error_msg = f"蓝图生成失败：{exc}"
+                self.messages.append({"role": "assistant", "content": error_msg})
+                self._save_history()
+                self._save_session()
+                return [
+                    {
+                        "type": "error",
+                        "message": error_msg,
+                        "pipeline_stage": self.phase.value,
+                    }
+                ]
+
             self.phase = PipelineStage.REVIEWING
             self.confirmation_id = f"conf_{uuid.uuid4().hex[:8]}"
 
@@ -794,7 +917,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 # --- Blueprint orchestrator path --------------------------------
                 if active_project and _should_use_orchestrator(active_project, content):
                     orchestrator = _get_orchestrator(active_project)
-                    events = orchestrator.handle_user_message(content)
+                    events = await orchestrator.handle_user_message(content)
                     for event in events:
                         await websocket.send_json(event)
                     _write_chat_history(active_project, orchestrator.messages)

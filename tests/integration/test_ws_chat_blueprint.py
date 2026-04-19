@@ -21,6 +21,44 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app)
 
 
+def _make_mock_blueprint_provider(title: str = "DEFAULT", **overrides) -> object:
+    """Return a mock LLM provider that returns a fixed JSON blueprint."""
+    blueprint = {
+        "title": title,
+        "genre": "校园恋爱",
+        "worldview": "现代日本高中",
+        "themes": ["初恋", "成长"],
+        "target_audience": "18-25岁视觉小说爱好者",
+        "estimated_play_time": "2-3小时",
+        "art_style": "日系动漫风格",
+        "audio_style": "治愈系钢琴配乐",
+        "characters": [
+            {"name": "主角A", "role": "主角", "personality": "勇敢", "appearance": "高大"},
+        ],
+        "chapters": [
+            {
+                "id": "ch1",
+                "name": "第一章",
+                "order": 1,
+                "scenes": [{"id": "s1", "name": "场景1", "order": 1}],
+            }
+        ],
+    }
+    blueprint.update(overrides)
+
+    class MockProvider:
+        tool_format = "anthropic"
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            from renpy_mcp.chat_engine.providers import LLMResponse
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
+                stop_reason="end_turn",
+            )
+
+    return MockProvider()
+
+
 def _create_project(client: TestClient, tmp_path: Path, name: str) -> None:
     """Helper to create a project with minimal game structure."""
     game_dir = tmp_path / name / "game"
@@ -43,7 +81,7 @@ def test_blueprint_start_trigger_returns_first_collecting_message(monkeypatch, c
     project_name = "bp_start"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
@@ -59,8 +97,7 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
     project_name = "bp_collect"
     _create_project(client, tmp_path, project_name)
 
-    # Disable real ChatEngine so we only test orchestrator
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         # Start trigger -> first collecting message (does not consume a turn)
@@ -102,7 +139,7 @@ def test_blueprint_confirmation_approve_generates_and_edits(monkeypatch, client:
     project_name = "bp_approve"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         # Start trigger (1 event) + get to reviewing (2 turns, last turn emits 3 events)
@@ -155,7 +192,7 @@ def test_blueprint_confirmation_reject_returns_to_collecting(monkeypatch, client
     project_name = "bp_reject"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         # Start trigger + get to reviewing
@@ -195,7 +232,7 @@ def test_blueprint_history_contains_structured_entries(monkeypatch, client: Test
     project_name = "bp_history_struct"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
@@ -225,7 +262,7 @@ def test_blueprint_generating_history_contains_progress_and_completion(monkeypat
     project_name = "bp_history_gen"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
@@ -269,7 +306,7 @@ def test_blueprint_generating_history_persists_progress_incrementally(monkeypatc
     project_name = "bp_history_incr"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     import renpy_mcp.web.chat_ws as chat_ws_module
     save_call_count = [0]
@@ -330,7 +367,7 @@ def test_blueprint_session_persisted_in_reviewing(monkeypatch, client: TestClien
     project_name = "bp_session_review"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
@@ -356,7 +393,7 @@ def test_blueprint_session_restores_orchestrator_state(monkeypatch, client: Test
     project_name = "bp_session_restore"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     confirmation_id = None
     with client.websocket_connect("/ws/chat") as websocket:
@@ -400,7 +437,7 @@ def test_blueprint_session_updates_latest_progress(monkeypatch, client: TestClie
     project_name = "bp_session_progress"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     import renpy_mcp.web.chat_ws as chat_ws_module
     saved_states: list[dict] = []
@@ -448,7 +485,7 @@ def test_blueprint_session_cleared_on_editing(monkeypatch, client: TestClient, t
     project_name = "bp_session_cleared"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     confirmation_id = None
     with client.websocket_connect("/ws/chat") as websocket:
@@ -483,7 +520,7 @@ def test_blueprint_session_api_returns_state(monkeypatch, client: TestClient, tm
     project_name = "bp_session_api"
     _create_project(client, tmp_path, project_name)
 
-    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     # Before any activity, session should indicate idle
     resp = client.get(f"/api/projects/{project_name}/blueprint-session")
@@ -518,3 +555,171 @@ def test_blueprint_session_api_returns_404_for_missing_project(client: TestClien
     assert resp.status_code == 404
     data = resp.json()
     assert data["detail"] == "Project not found"
+
+
+# ---------------------------------------------------------------------------
+# Blueprint LLM draft generation tests
+# ---------------------------------------------------------------------------
+
+
+def test_blueprint_draft_is_generated_from_provider_not_hardcoded(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Reviewing draft must come from the LLM provider, not hardcoded defaults."""
+    project_name = "bp_llm_real"
+    _create_project(client, tmp_path, project_name)
+
+    provider = _make_mock_blueprint_provider(
+        title="LLM生成标题",
+        genre="科幻",
+        worldview="未来火星殖民地",
+        characters=[
+            {"name": "唯一角色名", "role": "主角", "personality": "冷静", "appearance": "机械臂"}
+        ],
+    )
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+
+    draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
+    draft = draft_event["draft"]
+    assert draft["title"] == "LLM生成标题"
+    assert draft["genre"] == "科幻"
+    assert draft["worldview"] == "未来火星殖民地"
+    assert len(draft["characters"]) == 1
+    assert draft["characters"][0]["name"] == "唯一角色名"
+    # Must NOT be the old hardcoded defaults
+    assert draft["genre"] != "校园恋爱"
+
+
+def test_blueprint_draft_generation_rejects_invalid_json(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Provider returning non-JSON must produce an error and not enter reviewing."""
+    project_name = "bp_bad_json"
+    _create_project(client, tmp_path, project_name)
+
+    class BadJsonProvider:
+        tool_format = "anthropic"
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            from renpy_mcp.chat_engine.providers import LLMResponse
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": "This is not JSON at all"}],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: BadJsonProvider())
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 1)
+
+    assert events[0]["type"] == "error"
+    assert "collecting" in events[0].get("pipeline_stage", "")
+    # Must NOT have entered reviewing
+    assert "reviewing" not in str(events)
+
+
+def test_blueprint_draft_generation_rejects_invalid_schema(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Provider returning JSON that fails ProjectBlueprint validation must produce an error."""
+    project_name = "bp_bad_schema"
+    _create_project(client, tmp_path, project_name)
+
+    class BadSchemaProvider:
+        tool_format = "anthropic"
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            from renpy_mcp.chat_engine.providers import LLMResponse
+            bad_data = {"title": "bad", "genre": "bad"}  # Missing required fields like worldview
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": json.dumps(bad_data, ensure_ascii=False)}],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: BadSchemaProvider())
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 1)
+
+    assert events[0]["type"] == "error"
+    assert "collecting" in events[0].get("pipeline_stage", "")
+    assert "reviewing" not in str(events)
+
+
+def test_blueprint_draft_generation_retries_then_succeeds(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """First attempt returns invalid JSON, second attempt returns valid blueprint."""
+    project_name = "bp_retry"
+    _create_project(client, tmp_path, project_name)
+
+    class RetryThenSuccessProvider:
+        tool_format = "anthropic"
+        _call_count = 0
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            self._call_count += 1
+            from renpy_mcp.chat_engine.providers import LLMResponse
+            if self._call_count == 1:
+                return LLMResponse(
+                    content_blocks=[{"type": "text", "text": "not valid json"}],
+                    stop_reason="end_turn",
+                )
+            blueprint = {
+                "title": "RetrySuccess",
+                "genre": "测试",
+                "worldview": "测试",
+                "themes": ["测试"],
+                "target_audience": "测试",
+                "estimated_play_time": "1小时",
+                "art_style": "测试",
+                "audio_style": "测试",
+                "characters": [
+                    {"name": "测试角色", "role": "主角", "personality": "测试", "appearance": "测试"}
+                ],
+                "chapters": [
+                    {
+                        "id": "ch1",
+                        "name": "第一章",
+                        "order": 1,
+                        "scenes": [{"id": "s1", "name": "场景1", "order": 1}],
+                    }
+                ],
+            }
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
+                stop_reason="end_turn",
+            )
+
+    provider = RetryThenSuccessProvider()
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+
+    assert provider._call_count == 2
+    draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
+    assert draft_event["draft"]["title"] == "RetrySuccess"
