@@ -165,14 +165,14 @@ async def test_generate_scenes_produces_2_to_4_structured_scenes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_script_creates_rpy_with_label_start(client: TestClient, tmp_path: Path) -> None:
-    """write_script must create an .rpy file with label start and scene labels."""
+async def test_write_script_does_not_define_second_start_label(client: TestClient, tmp_path: Path) -> None:
+    """write_script must NOT define label start in the prototype file (main script owns it)."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
     from renpy_mcp.services.project_manager import ProjectManager
     from renpy_mcp.config import get_settings
 
-    project_name = "proto_script"
+    project_name = "proto_no_start"
     _create_project(client, tmp_path, project_name)
 
     blueprint = ProjectBlueprint(**_make_blueprint())
@@ -189,9 +189,38 @@ async def test_write_script_creates_rpy_with_label_start(client: TestClient, tmp
     assert full_path.exists(), f"Script file not found at {full_path}"
 
     content = full_path.read_text(encoding="utf-8")
-    assert "label start:" in content
+    assert "label start:" not in content, "Prototype file must not define label start"
     for scene in scenes:
         assert f"label {scene.entry_label}:" in content
+
+
+@pytest.mark.asyncio
+async def test_main_script_is_wired_to_prototype_entry(client: TestClient, tmp_path: Path) -> None:
+    """wire_main_script_to_prototype must rewrite game/script.rpy to call the prototype entry label."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_wire"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    service.write_script(project_name, chapter, scenes)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    assert script_path.exists()
+    content = script_path.read_text(encoding="utf-8")
+    assert "label start:" in content
+    assert f"call {scenes[0].entry_label}" in content
+    assert "return" in content
 
 
 @pytest.mark.asyncio

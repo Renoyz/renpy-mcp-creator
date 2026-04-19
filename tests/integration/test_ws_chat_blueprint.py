@@ -88,7 +88,7 @@ def test_blueprint_start_trigger_returns_first_collecting_message(monkeypatch, c
         events = _drain_events(websocket, 1)
         assert events[0]["type"] == "message"
         assert events[0]["role"] == "assistant"
-        assert "太棒了" in events[0]["content"]
+        assert "让我来帮你把这个想法变成完整的蓝图" in events[0]["content"]
         assert events[0]["pipeline_stage"] == "collecting"
 
 
@@ -106,7 +106,7 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         assert events[0]["type"] == "message"
         assert events[0]["role"] == "assistant"
         assert events[0].get("message_kind") == "text"
-        assert "太棒了" in events[0]["content"]
+        assert "让我来帮你把这个想法变成完整的蓝图" in events[0]["content"]
         assert events[0]["pipeline_stage"] == "collecting"
 
         # Turn 1 -> collecting
@@ -185,6 +185,128 @@ def test_blueprint_confirmation_approve_generates_and_edits(monkeypatch, client:
         assert resp.status_code == 200
         meta = resp.json()
         assert meta["pipeline_stage"] == "editing"
+
+
+def test_confirmation_success_creates_prototype_artifacts(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Approving confirmation should generate prototype artifacts and wire main script."""
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene
+
+    project_name = "bp_proto_success"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    mock_scenes = [
+        PrototypeScene(
+            scene_id="proto-ch1-s1",
+            title="开场",
+            summary="主角登场。",
+            location="classroom",
+            characters_present=["主角"],
+            entry_label="prototype_ch1_start",
+            next_scene_id=None,
+        ),
+    ]
+
+    async def _mock_generate_scenes(self, chapter, blueprint):
+        return mock_scenes
+
+    monkeypatch.setattr(
+        "renpy_mcp.services.prototype_generation_service.PrototypeGenerationService.generate_scenes",
+        _mock_generate_scenes,
+    )
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req_event = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req_event["confirmation_id"]
+
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+
+        events = []
+        while True:
+            data = websocket.receive_json()
+            events.append(data)
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    # Verify prototype file exists
+    game_dir = tmp_path / project_name / "game"
+    proto_files = list(game_dir.glob("prototype*"))
+    assert len(proto_files) == 1, f"Expected exactly one prototype file, got {proto_files}"
+
+    # Verify main script is wired
+    script_path = game_dir / "script.rpy"
+    assert script_path.exists()
+    content = script_path.read_text(encoding="utf-8")
+    assert "call prototype_ch1_start" in content
+
+    # Verify index contains scene mapping
+    index_path = tmp_path / project_name / "meta" / "index.json"
+    assert index_path.exists()
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert "scenes" in index
+    assert "proto-ch1-s1" in index["scenes"]
+
+
+def test_confirmation_failure_surfaces_prototype_generation_error(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Prototype generation failure should be surfaced in the final editing message."""
+    project_name = "bp_proto_fail"
+    _create_project(client, tmp_path, project_name)
+
+    # Mock blueprint provider works for draft but returns dict instead of scenes list,
+    # causing prototype generation to fail
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                events = _drain_events(websocket, 3)
+                req_event = next(e for e in events if e["type"] == "confirmation_request")
+                confirmation_id = req_event["confirmation_id"]
+
+        websocket.send_json({
+            "type": "confirmation_response",
+            "confirmation_id": confirmation_id,
+            "approved": True,
+            "project_name": project_name,
+        })
+
+        events = []
+        while True:
+            data = websocket.receive_json()
+            events.append(data)
+            if data.get("pipeline_stage") == "editing" and data["type"] == "message":
+                break
+
+    final_message = next(e for e in events if e["type"] == "message" and e.get("pipeline_stage") == "editing")
+    content = final_message["content"]
+    assert "原型生成失败" in content or "prototype generation failed" in content.lower()
+
+    # Blueprint and meta should still be persisted
+    resp = client.get(f"/api/projects/{project_name}/blueprint")
+    assert resp.status_code == 200
+
+    resp = client.get(f"/api/projects/{project_name}/meta")
+    assert resp.status_code == 200
+    assert resp.json()["pipeline_stage"] == "editing"
 
 
 def test_blueprint_confirmation_reject_returns_to_collecting(monkeypatch, client: TestClient, tmp_path: Path) -> None:
@@ -298,7 +420,7 @@ def test_blueprint_generating_history_contains_progress_and_completion(monkeypat
     system_entries = [m for m in messages if m.get("message_kind") == "system"]
     assert len(progress_entries) >= 1, f"Expected at least one progress entry, got {messages}"
     assert len(system_entries) >= 1, f"Expected at least one system entry, got {messages}"
-    assert any("蓝图生成完成" in (m.get("content", "") or "") for m in system_entries)
+    assert any("蓝图" in (m.get("content", "") or "") for m in system_entries)
 
 
 def test_blueprint_generating_history_persists_progress_incrementally(monkeypatch, client: TestClient, tmp_path: Path) -> None:
@@ -789,3 +911,57 @@ def test_blueprint_draft_generation_retries_then_succeeds(monkeypatch, client: T
     assert provider._call_count == 2
     draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
     assert draft_event["draft"]["title"] == "RetrySuccess"
+
+
+def test_blueprint_draft_defaults_to_chinese_output_with_mock_provider(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Mock provider should default blueprint draft content to Chinese."""
+    project_name = "bp_lang_zh"
+    _create_project(client, tmp_path, project_name)
+    monkeypatch.setenv("RENPY_MCP_MOCK_LLM", "1")
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        websocket.send_json({"type": "user_message", "content": "中世纪王国，三位角色，一小时", "project_name": project_name})
+        _drain_events(websocket, 1)
+        websocket.send_json({"type": "user_message", "content": "整体氛围偏沉郁克制", "project_name": project_name})
+        events = _drain_events(websocket, 3)
+
+    draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
+    assert draft_event["draft"]["genre"] == "历史剧 / 中世纪骑士故事"
+    assert draft_event["draft"]["characters"][0]["name"] == "Mock主角小明"
+
+
+def test_blueprint_draft_uses_english_for_clearly_english_input_with_mock_provider(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Mock provider should switch blueprint draft content to English for clearly English input."""
+    project_name = "bp_lang_en"
+    _create_project(client, tmp_path, project_name)
+    monkeypatch.setenv("RENPY_MCP_MOCK_LLM", "1")
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        websocket.send_json(
+            {
+                "type": "user_message",
+                "content": "A medieval kingdom with three leads and about one hour of playtime.",
+                "project_name": project_name,
+            }
+        )
+        _drain_events(websocket, 1)
+        websocket.send_json(
+            {
+                "type": "user_message",
+                "content": "The tone should feel restrained, melancholic, and character-driven.",
+                "project_name": project_name,
+            }
+        )
+        events = _drain_events(websocket, 3)
+
+    draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
+    assert draft_event["draft"]["genre"] == "Historical Drama / Medieval Knight Story"
+    assert draft_event["draft"]["characters"][0]["name"] == "Mock Hero Liam"

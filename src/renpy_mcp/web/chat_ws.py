@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -27,6 +28,8 @@ from ..services.project_manager import ProjectManager
 from ..services.prototype_generation_service import PrototypeGenerationService
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 def _chat_history_path(project_name: str) -> Path:
@@ -784,7 +787,8 @@ Requirements:
                     meta.scene_count = sum(len(ch.scenes) for ch in self.draft.chapters)
                 await asyncio.to_thread(self.pm.write_project_meta, self.project_name, meta)
 
-            # Generate prototype scenes and script (best-effort)
+            # Generate prototype scenes and script
+            prototype_error: str | None = None
             if self.draft:
                 try:
                     provider = _get_provider()
@@ -792,17 +796,26 @@ Requirements:
                     chapter = service.select_prototype_chapter(self.draft)
                     scenes = await service.generate_scenes(chapter, self.draft)
                     script_path = service.write_script(self.project_name, chapter, scenes)
+                    service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
                     service.update_index(self.project_name, chapter, scenes, script_path)
                 except Exception as e:
-                    pass  # Best-effort: prototype generation failure should not break confirmation
+                    prototype_error = str(e)
+                    logger.exception("Prototype generation failed for project %s", self.project_name)
 
             self.phase = PipelineStage.EDITING
 
-            assistant_content = _localized_text(
-                lang,
-                "蓝图生成完成！你现在可以在工作区中查看和编辑。",
-                "Blueprint generation is complete. You can now review and edit it in the workspace.",
-            )
+            if prototype_error:
+                assistant_content = _localized_text(
+                    lang,
+                    f"蓝图已保存，但原型生成失败：{prototype_error}",
+                    f"Blueprint saved, but prototype generation failed: {prototype_error}",
+                )
+            else:
+                assistant_content = _localized_text(
+                    lang,
+                    "蓝图生成完成！原型也已就绪，你现在可以在工作区中查看和编辑。",
+                    "Blueprint generation is complete. The prototype is ready, and you can now review and edit it in the workspace.",
+                )
             self.messages.append({
                 "role": "assistant",
                 "message_kind": "system",

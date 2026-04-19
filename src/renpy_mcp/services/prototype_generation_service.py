@@ -174,13 +174,6 @@ Requirements:
         lines: list[str] = []
         lines.append(f"# Prototype chapter: {chapter.name}")
         lines.append("")
-        lines.append("label start:")
-        if scenes:
-            lines.append(f"    jump {scenes[0].entry_label}")
-        else:
-            lines.append('    "No prototype scenes available."')
-            lines.append("    return")
-        lines.append("")
 
         for i, scene in enumerate(scenes):
             lines.append(f"label {scene.entry_label}:")
@@ -206,6 +199,34 @@ Requirements:
 
         file_path.write_text("\n".join(lines), encoding="utf-8")
         return rel_path
+
+    # ------------------------------------------------------------------
+    # Main script wiring
+    # ------------------------------------------------------------------
+
+    def wire_main_script_to_prototype(self, project_name: str, entry_label: str) -> None:
+        """Rewrite game/script.rpy so label start calls the prototype entry label.
+
+        Args:
+            project_name: Target project name.
+            entry_label: The prototype scene label to call from label start.
+
+        Raises:
+            RuntimeError: If ProjectManager is not available.
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for script wiring")
+
+        project_dir = self.pm._project_dir(project_name)
+        script_path = project_dir / "game" / "script.rpy"
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+
+        content = f"""label start:
+    # Prototype entry point
+    call {entry_label}
+    return
+"""
+        script_path.write_text(content, encoding="utf-8")
 
     # ------------------------------------------------------------------
     # Index writeback
