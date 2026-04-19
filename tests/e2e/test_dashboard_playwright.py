@@ -2557,3 +2557,110 @@ def test_tool_running_refresh_restores_progress_state(
 
     # Progress must still be visible
     expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
+
+
+def test_editing_project_with_tool_confirmation_stays_in_editing_mode_after_refresh(
+    page: Page, e2e_workspace: Path
+) -> None:
+    """Editing project with active tool confirmation must stay in editing workspace after refresh."""
+    url, proc = start_mock_llm_server(e2e_workspace)
+    try:
+        assert wait_for_server(url), "Server not ready"
+
+        project_name = f"playwright_tool_edit_conf_{int(time.time())}"
+        create_project_via_api(url, project_name)
+        _seed_project_blueprint(e2e_workspace, project_name)
+
+        page.goto(f"{url}/dashboard/projects/{project_name}")
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+        # Must start in editing workspace (not onboarding)
+        expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
+        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
+
+        chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+
+        # Trigger real backend tool confirmation
+        open_chat_drawer(page)
+        page.locator("textarea").fill("generate a background of a Japanese courtyard")
+        click_send_button(page)
+
+        # Wait for confirmation panel
+        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+
+        # Must STAY in editing workspace while confirmation is active
+        expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
+        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
+
+        # Refresh page
+        page.reload()
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+        # After refresh, must STILL be in editing workspace
+        expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
+        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
+
+        # Confirmation panel must still be recovered
+        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def test_editing_project_with_tool_running_stays_in_editing_mode_after_refresh(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Editing project with tool_running session must stay in editing workspace after refresh."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_tool_edit_run_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_blueprint(e2e_workspace, project_name)
+
+    # Inject a tool-running runtime session
+    session_path = e2e_workspace / project_name / "meta" / "blueprint_session.json"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        json.dumps(
+            {
+                "active_workflow": "tool",
+                "pipeline_stage": "tool_running",
+                "awaiting_confirmation": False,
+                "latest_progress": {"step": "正在调用 generate_background...", "percent": 0},
+                "tool_name": "generate_background",
+                "updated_at": "2024-01-01T00:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Must stay in editing workspace (not onboarding)
+    expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
+    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
+
+    # Chat drawer should show the recovered progress step
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
+
+    # Refresh page
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # After refresh, must still stay in editing workspace
+    expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
+    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
+
+    # Progress must still be visible
+    expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)

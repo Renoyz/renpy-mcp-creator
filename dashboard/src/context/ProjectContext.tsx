@@ -299,12 +299,29 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         sessionData = await sessionResp.json();
       }
 
-      // Restore session state if available; otherwise fall back to blueprint existence
-      // --- Tool workflow (any stage) takes priority over blueprint fallback ---
-      if (sessionData && sessionData.active_workflow === "tool") {
+      // Restore state: blueprint data takes priority for workspace shell;
+      // side workflow state (tool confirmation / progress) is restored independently.
+      if (bpData) {
+        // Project has real blueprint data → always editing workspace,
+        // regardless of any side workflow session.
+        setBlueprintPhaseState("editing");
+        setBlueprintDraft(null);
+        setBlueprintConfirmationId(null);
+      } else if (sessionData && sessionData.pipeline_stage && sessionData.pipeline_stage !== "idle" && sessionData.pipeline_stage !== "editing") {
+        // Active blueprint workflow without real blueprint yet
+        setBlueprintPhaseState(sessionData.pipeline_stage as BlueprintPhase);
+        if (sessionData.draft) {
+          setBlueprintDraft(sessionData.draft);
+        }
+        setBlueprintConfirmationId(sessionData.confirmation_id ?? null);
+      } else {
         setBlueprintPhaseState("idle");
         setBlueprintDraft(null);
         setBlueprintConfirmationId(null);
+      }
+
+      // Restore side workflow state independently (tool workflow)
+      if (sessionData && sessionData.active_workflow === "tool") {
         if (sessionData.awaiting_confirmation) {
           setWorkflowConfirmation({
             confirmationId: sessionData.confirmation_id ?? "",
@@ -323,29 +340,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         } else {
           setGenerationProgress(null);
         }
-      } else if (sessionData && sessionData.pipeline_stage && sessionData.pipeline_stage !== "idle" && sessionData.pipeline_stage !== "editing") {
-        setBlueprintPhaseState(sessionData.pipeline_stage as BlueprintPhase);
-        if (sessionData.draft) {
-          setBlueprintDraft(sessionData.draft);
-        }
-        setBlueprintConfirmationId(sessionData.confirmation_id ?? null);
+      } else {
         setWorkflowConfirmation(null);
-        if (sessionData.latest_progress) {
+        if (sessionData && sessionData.latest_progress) {
           setGenerationProgress({
             step: sessionData.latest_progress.step,
             percent: sessionData.latest_progress.percent,
           });
+        } else {
+          setGenerationProgress(null);
         }
-      } else if (bpData) {
-        setBlueprintPhaseState("editing");
-        setBlueprintConfirmationId(null);
-        setWorkflowConfirmation(null);
-        setGenerationProgress(null);
-      } else {
-        setBlueprintPhaseState("idle");
-        setBlueprintConfirmationId(null);
-        setWorkflowConfirmation(null);
-        setGenerationProgress(null);
       }
 
       // Auto-select first scene

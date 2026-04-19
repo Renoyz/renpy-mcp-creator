@@ -92,7 +92,8 @@ export function ProjectWorkspacePage() {
     });
   }, [name, activeProjectName, loadProjectData]);
 
-  const isOnboarding = blueprintPhase !== "editing";
+  const hasEditingWorkspace = !!blueprint || blueprintPhase === "editing";
+  const isOnboarding = !hasEditingWorkspace;
 
   // Reset build/preview local state and active tab when project changes
   useEffect(() => {
