@@ -165,6 +165,135 @@ async def test_generate_scenes_produces_2_to_4_structured_scenes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_script_uses_safe_placeholder_commands_without_assets(client: TestClient, tmp_path: Path) -> None:
+    """write_script must use safe placeholders that work without any image assets."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_safe"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    script_path = service.write_script(project_name, chapter, scenes)
+
+    full_path = tmp_path / project_name / script_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must not use show commands without guaranteed image definitions
+    assert "show " not in content, f"Must not use show commands: {content}"
+
+    # Must use safe background
+    assert "scene black" in content, "Must use safe scene black placeholder"
+
+    # Must express location and characters via narration text
+    assert "【地点：" in content, "Must include location placeholder text"
+    assert "【登场角色：" in content, "Must include characters placeholder text"
+
+
+@pytest.mark.asyncio
+async def test_prototype_script_can_run_without_asset_references(client: TestClient, tmp_path: Path) -> None:
+    """Generated prototype script must not reference any asset names that require pre-existing files."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_no_assets"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    script_path = service.write_script(project_name, chapter, scenes)
+
+    full_path = tmp_path / project_name / script_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # No scene commands referencing specific locations as image names
+    for scene in scenes:
+        assert f"    scene {scene.location}" not in content, f"Unsafe scene {scene.location} found"
+
+    # No show commands
+    assert "show " not in content
+
+
+@pytest.mark.asyncio
+async def test_wire_main_script_preserves_non_template_content(client: TestClient, tmp_path: Path) -> None:
+    """wire_main_script_to_prototype must not overwrite non-template custom script.rpy content."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_preserve"
+    _create_project(client, tmp_path, project_name)
+
+    # Write custom non-template content
+    custom_content = 'label start:\n    "Custom user intro."\n    "More custom logic."\n    return\n'
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    script_path.write_text(custom_content, encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    with pytest.raises(RuntimeError, match="Cannot safely wire"):
+        service.wire_main_script_to_prototype(project_name, "prototype_ch1_start")
+
+    # Verify original content is preserved
+    assert script_path.read_text(encoding="utf-8") == custom_content
+
+
+@pytest.mark.asyncio
+async def test_wire_main_script_updates_managed_region_only(client: TestClient, tmp_path: Path) -> None:
+    """When script.rpy already has a managed region, only the entry label inside it should be updated."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_managed"
+    _create_project(client, tmp_path, project_name)
+
+    # Write script with managed region
+    managed_content = """label start:
+    "User intro."
+    # PROTOTYPE START (managed)
+    call old_label
+    return
+    # PROTOTYPE END (managed)
+    "User outro."
+    return
+"""
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    script_path.write_text(managed_content, encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    service.wire_main_script_to_prototype(project_name, "prototype_ch1_new")
+
+    content = script_path.read_text(encoding="utf-8")
+    assert "call prototype_ch1_new" in content
+    assert "call old_label" not in content
+    assert '"User intro."' in content
+    assert '"User outro."' in content
+
+
+@pytest.mark.asyncio
 async def test_write_script_does_not_define_second_start_label(client: TestClient, tmp_path: Path) -> None:
     """write_script must NOT define label start in the prototype file (main script owns it)."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
@@ -205,6 +334,13 @@ async def test_main_script_is_wired_to_prototype_entry(client: TestClient, tmp_p
     project_name = "proto_wire"
     _create_project(client, tmp_path, project_name)
 
+    # Use default template content so wiring is allowed
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    script_path.write_text(
+        'label start:\n    "Welcome to your new Ren\'Py project!"\n    return\n',
+        encoding="utf-8",
+    )
+
     blueprint = ProjectBlueprint(**_make_blueprint())
     provider = _make_mock_scene_provider()
     pm = ProjectManager(get_settings())
@@ -215,12 +351,12 @@ async def test_main_script_is_wired_to_prototype_entry(client: TestClient, tmp_p
     service.write_script(project_name, chapter, scenes)
     service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
 
-    script_path = tmp_path / project_name / "game" / "script.rpy"
-    assert script_path.exists()
     content = script_path.read_text(encoding="utf-8")
     assert "label start:" in content
     assert f"call {scenes[0].entry_label}" in content
     assert "return" in content
+    assert "# PROTOTYPE START (managed)" in content
+    assert "# PROTOTYPE END (managed)" in content
 
 
 @pytest.mark.asyncio
