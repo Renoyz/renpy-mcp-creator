@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvide
 from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
 from ..services.project_manager import ProjectManager
+from ..services.prototype_generation_service import PrototypeGenerationService
 
 router = APIRouter()
 
@@ -130,6 +132,67 @@ def _allowed_without_project(content: str) -> bool:
     return False
 
 
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+def _is_clearly_english(text: str) -> bool:
+    if not text.strip() or _contains_cjk(text):
+        return False
+    words = re.findall(r"[A-Za-z]{2,}", text)
+    letters = sum(len(word) for word in words)
+    return len(words) >= 3 or letters >= 18
+
+
+def _preferred_output_language_from_texts(texts: list[str]) -> str:
+    for text in reversed(texts):
+        stripped = text.strip()
+        if not stripped or stripped in _START_TRIGGERS:
+            continue
+        if _contains_cjk(stripped):
+            return "zh"
+        if _is_clearly_english(stripped):
+            return "en"
+    return "zh"
+
+
+def _preferred_output_language_from_messages(messages: list[dict[str, Any]]) -> str:
+    texts: list[str] = []
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+    return _preferred_output_language_from_texts(texts)
+
+
+def _localized_text(lang: str, zh: str, en: str) -> str:
+    return en if lang == "en" else zh
+
+
+def _language_instruction(lang: str) -> str:
+    return _localized_text(
+        lang,
+        "Preferred output language for all user-visible content: Simplified Chinese.",
+        "Preferred output language for all user-visible content: English.",
+    )
+
+
+def _localized_confirmation_message(tool_name: str | None, lang: str, fallback: str) -> str:
+    if lang != "en":
+        return fallback
+    if tool_name == "generate_background":
+        return "Generated a background image. Save it?"
+    if tool_name == "generate_character":
+        return "Generated a character image. Save it?"
+    if tool_name == "delete_project":
+        return "Delete this project?"
+    if tool_name == "build_project":
+        return "Build this project now?"
+    return f"Run {tool_name or 'this action'}?"
+
+
 def _get_provider():
     """Resolve LLM provider from settings/environment."""
     if os.environ.get("RENPY_MCP_MOCK_LLM"):
@@ -157,36 +220,76 @@ def _get_provider():
                             return match.group(1).strip()
                 return "MockLLM校园恋爱"
 
+            def _preferred_output_language(self, messages, system):
+                combined_parts: list[str] = []
+                if isinstance(system, str):
+                    combined_parts.append(system)
+                for m in messages:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        combined_parts.append(content)
+                combined = "\n".join(combined_parts)
+                if "Preferred output language for all user-visible content: English." in combined:
+                    return "en"
+                return "zh"
+
             def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
                 self._turn_count += 1
+                lang = self._preferred_output_language(messages, system)
 
                 # Blueprint generation mock
                 if self._is_blueprint_prompt(messages):
                     project_name = self._extract_project_name(messages)
-                    blueprint = {
-                        "title": project_name,
-                        "genre": "校园恋爱",
-                        "worldview": "现代日本高中",
-                        "themes": ["初恋", "成长"],
-                        "target_audience": "18-25岁视觉小说爱好者",
-                        "estimated_play_time": "2-3小时",
-                        "art_style": "日系动漫风格",
-                        "audio_style": "治愈系钢琴配乐",
-                        "characters": [
-                            {"name": "Mock主角小明", "role": "男主角", "personality": "内向但善良", "appearance": "普通高中生"},
-                            {"name": "Mock女主小樱", "role": "女主角", "personality": "活泼开朗", "appearance": "短发，戴眼镜"},
-                        ],
-                        "chapters": [
-                            {"id": "ch1", "name": "图书馆相遇", "order": 1, "scenes": [
-                                {"id": "s1-1", "name": "初见", "order": 1},
-                                {"id": "s1-2", "name": "借书", "order": 2},
-                            ]},
-                            {"id": "ch2", "name": "社团活动", "order": 2, "scenes": [
-                                {"id": "s2-1", "name": "招募", "order": 1},
-                                {"id": "s2-2", "name": "合作", "order": 2},
-                            ]},
-                        ],
-                    }
+                    if lang == "en":
+                        blueprint = {
+                            "title": project_name,
+                            "genre": "Historical Drama / Medieval Knight Story",
+                            "worldview": "A declining medieval kingdom torn by war and plague.",
+                            "themes": ["Honor", "Redemption"],
+                            "target_audience": "Players who enjoy character-driven visual novels",
+                            "estimated_play_time": "1 hour",
+                            "art_style": "Muted watercolor anime style",
+                            "audio_style": "Sparse orchestral and lute arrangements",
+                            "characters": [
+                                {"name": "Mock Hero Liam", "role": "Protagonist", "personality": "Quiet and determined", "appearance": "Worn knight armor"},
+                                {"name": "Mock Heroine Elara", "role": "Companion", "personality": "Warm and perceptive", "appearance": "Short hair and a scholar's cloak"},
+                            ],
+                            "chapters": [
+                                {"id": "ch1", "name": "The Fallen Oath", "order": 1, "scenes": [
+                                    {"id": "s1-1", "name": "Ruined Chapel", "order": 1},
+                                    {"id": "s1-2", "name": "A Roadside Promise", "order": 2},
+                                ]},
+                                {"id": "ch2", "name": "Ashes of the Keep", "order": 2, "scenes": [
+                                    {"id": "s2-1", "name": "Campfire Confession", "order": 1},
+                                    {"id": "s2-2", "name": "The Last Gate", "order": 2},
+                                ]},
+                            ],
+                        }
+                    else:
+                        blueprint = {
+                            "title": project_name,
+                            "genre": "历史剧 / 中世纪骑士故事",
+                            "worldview": "一个在战乱与瘟疫中走向衰败的中世纪王国。",
+                            "themes": ["荣誉", "救赎"],
+                            "target_audience": "喜欢角色驱动视觉小说的玩家",
+                            "estimated_play_time": "1小时",
+                            "art_style": "低饱和水彩日系风格",
+                            "audio_style": "稀疏的弦乐与鲁特琴配乐",
+                            "characters": [
+                                {"name": "Mock主角小明", "role": "主角", "personality": "沉默坚定", "appearance": "磨损的骑士铠甲"},
+                                {"name": "Mock女主小樱", "role": "同伴", "personality": "温和敏锐", "appearance": "短发与学者披风"},
+                            ],
+                            "chapters": [
+                                {"id": "ch1", "name": "坠落的誓言", "order": 1, "scenes": [
+                                    {"id": "s1-1", "name": "废弃礼拜堂", "order": 1},
+                                    {"id": "s1-2", "name": "路边约定", "order": 2},
+                                ]},
+                                {"id": "ch2", "name": "城堡余烬", "order": 2, "scenes": [
+                                    {"id": "s2-1", "name": "篝火告白", "order": 1},
+                                    {"id": "s2-2", "name": "最后的城门", "order": 2},
+                                ]},
+                            ],
+                        }
                     return LLMResponse(
                         content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
                         stop_reason="end_turn",
@@ -204,7 +307,10 @@ def _get_provider():
                         stop_reason="tool_use",
                     )
                 return LLMResponse(
-                    content_blocks=[{"type": "text", "text": "Background generated successfully."}],
+                    content_blocks=[{
+                        "type": "text",
+                        "text": _localized_text(lang, "背景图已生成成功。", "Background generated successfully."),
+                    }],
                     stop_reason="end_turn",
                 )
 
@@ -352,10 +458,13 @@ class BlueprintOrchestrator:
                 transcript_lines.append(f"{role_label}: {content}")
         transcript = "\n".join(transcript_lines)
 
+        lang = _preferred_output_language_from_messages(self.messages)
+
         system_prompt = (
             "You are an expert visual novel blueprint designer. "
             "You create structured project blueprints based on user interviews. "
-            "You MUST respond with ONLY a valid JSON object. No markdown, no explanations."
+            "You MUST respond with ONLY a valid JSON object. No markdown, no explanations. "
+            f"{_language_instruction(lang)}"
         )
 
         prompt = f"""Based on the following interview, design a complete visual novel blueprint.
@@ -403,6 +512,7 @@ Requirements:
 - 2-4 chapters, each with 2-4 scenes
 - At least 2 well-defined characters
 - Themes must match the described tone
+- All user-visible string values in the JSON must be written in {_localized_text(lang, "Simplified Chinese", "English")}
 - Output ONLY the JSON object, nothing else.
 """
 
@@ -452,13 +562,15 @@ Requirements:
 
     async def handle_user_message(self, content: str) -> list[dict[str, Any]]:
         self._load_history()
+        lang = _preferred_output_language_from_messages(self.messages)
 
         # Handle explicit start trigger without consuming a turn
         if content in _START_TRIGGERS and self.turn_count == 0:
             self.phase = PipelineStage.COLLECTING
-            assistant_content = (
-                "太棒了！让我来帮你把这个想法变成完整的蓝图。首先，你希望这个故事大概有几章？"
-                "有没有特别想设定的主角人设或故事基调？"
+            assistant_content = _localized_text(
+                lang,
+                "太好了！让我来帮你把这个想法变成完整的蓝图。首先，你希望这个故事大概有几章？有没有特别想设定的主角人设或故事基调？",
+                "Great. I'll help turn this idea into a complete blueprint. To start, roughly how many chapters do you want, and are there any specific protagonist traits or story tone you want to establish?",
             )
             self.messages.append({"role": "assistant", "content": assistant_content})
             self._save_history()
@@ -475,22 +587,23 @@ Requirements:
 
         self.messages.append({"role": "user", "content": content})
         self.turn_count += 1
+        lang = _preferred_output_language_from_messages(self.messages)
 
         if self.phase in (PipelineStage.IDLE, PipelineStage.COLLECTING):
             self.phase = PipelineStage.COLLECTING
 
             if self.turn_count < 2:
                 if self.turn_count == 1:
-                    assistant_content = (
-                        "收到。为了生成更准确的蓝图，请补充一下：\n"
-                        "1. 世界观或时代背景\n"
-                        "2. 核心角色（1-3位）\n"
-                        "3. 你希望的游戏时长"
+                    assistant_content = _localized_text(
+                        lang,
+                        "收到。为了生成更准确的蓝图，请补充一下：\n1. 世界观或时代背景\n2. 核心角色（1-3位）\n3. 你希望的游戏时长",
+                        "Got it. To generate a more accurate blueprint, please add:\n1. The setting or historical era\n2. The core cast (1-3 characters)\n3. The playtime you want for the game",
                     )
                 else:
-                    assistant_content = (
-                        "很好。接下来我会用这些信息为你生成一份结构化的项目蓝图。确认后，我们会进入分章生成。\n\n"
-                        "请再简单描述一下游戏的整体氛围（例如：轻松、悬疑、治愈）。"
+                    assistant_content = _localized_text(
+                        lang,
+                        "很好。接下来我会用这些信息为你生成一份结构化的项目蓝图。确认后，我们会进入分章生成。\n\n请再简单描述一下游戏的整体氛围（例如：轻松、悬疑、治愈）。",
+                        "Good. Next I will use this information to generate a structured project blueprint. After you confirm it, we'll move on to chapter generation.\n\nPlease briefly describe the overall mood of the game as well, for example: lighthearted, suspenseful, or healing.",
                     )
 
                 self.messages.append({"role": "assistant", "content": assistant_content})
@@ -511,7 +624,11 @@ Requirements:
                 self.draft = await self._generate_draft_via_llm()
             except Exception as exc:
                 self.phase = PipelineStage.COLLECTING
-                error_msg = f"蓝图生成失败：{exc}"
+                error_msg = _localized_text(
+                    lang,
+                    f"蓝图生成失败：{exc}",
+                    f"Blueprint generation failed: {exc}",
+                )
                 self.messages.append({"role": "assistant", "content": error_msg})
                 self._save_history()
                 self._save_session()
@@ -526,21 +643,33 @@ Requirements:
             self.phase = PipelineStage.REVIEWING
             self.confirmation_id = f"conf_{uuid.uuid4().hex[:8]}"
 
-            assistant_content = (
-                "信息已经足够丰富了。我现在为你整理一份蓝图草案，你可以在右侧查看。"
+            assistant_content = _localized_text(
+                lang,
+                "信息已经足够丰富了。我现在为你整理一份蓝图草案，你可以在右侧查看。",
+                "We have enough information now. I'm organizing a blueprint draft for you, and you can review it on the right.",
+            )
+            draft_notice = _localized_text(
+                lang,
+                "蓝图草案已生成，请查看并确认。",
+                "The blueprint draft is ready. Please review and confirm it.",
+            )
+            confirm_notice = _localized_text(
+                lang,
+                "请确认以下蓝图草案，确认后我们将开始正式生成。",
+                "Please confirm the blueprint draft below. Once confirmed, we'll begin full generation.",
             )
             draft_dict = self.draft.model_dump(mode="json")
             self.messages.append({"role": "assistant", "content": assistant_content})
             self.messages.append({
                 "role": "assistant",
                 "message_kind": "blueprint_draft",
-                "content": "蓝图草案已生成，请查看并确认。",
+                "content": draft_notice,
                 "draft": draft_dict,
             })
             self.messages.append({
                 "role": "assistant",
                 "message_kind": "confirmation_request",
-                "content": "请确认以下蓝图草案，确认后我们将开始正式生成。",
+                "content": confirm_notice,
                 "draft": draft_dict,
                 "confirmation_id": self.confirmation_id,
             })
@@ -559,14 +688,14 @@ Requirements:
                     "type": "message",
                     "role": "assistant",
                     "message_kind": "blueprint_draft",
-                    "content": "蓝图草案已生成，请查看并确认。",
+                    "content": draft_notice,
                     "draft": draft_dict,
                     "pipeline_stage": self.phase.value,
                 },
                 {
                     "type": "confirmation_request",
                     "confirmation_id": self.confirmation_id,
-                    "message": "请确认以下蓝图草案，确认后我们将开始正式生成。",
+                    "message": confirm_notice,
                     "draft": draft_dict,
                     "pipeline_stage": self.phase.value,
                 },
@@ -576,7 +705,11 @@ Requirements:
             return [
                 {
                     "type": "error",
-                    "message": "请先确认或拒绝当前蓝图草案。",
+                    "message": _localized_text(
+                        lang,
+                        "请先确认或拒绝当前蓝图草案。",
+                        "Please confirm or reject the current blueprint draft first.",
+                    ),
                     "pipeline_stage": self.phase.value,
                 }
             ]
@@ -584,19 +717,28 @@ Requirements:
         return [
             {
                 "type": "error",
-                "message": "当前阶段不支持此操作。",
+                "message": _localized_text(
+                    lang,
+                    "当前阶段不支持此操作。",
+                    "This action is not supported in the current stage.",
+                ),
                 "pipeline_stage": self.phase.value,
             }
         ]
 
     async def handle_confirmation_response(self, approved: bool) -> list[dict[str, Any]]:
         self._load_history()
+        lang = _preferred_output_language_from_messages(self.messages)
 
         if self.phase != PipelineStage.REVIEWING:
             return [
                 {
                     "type": "error",
-                    "message": "当前没有待确认的蓝图草案。",
+                    "message": _localized_text(
+                        lang,
+                        "当前没有待确认的蓝图草案。",
+                        "There is no blueprint draft waiting for confirmation right now.",
+                    ),
                     "pipeline_stage": self.phase.value,
                 }
             ]
@@ -605,11 +747,11 @@ Requirements:
             self.phase = PipelineStage.GENERATING
 
             steps = [
-                {"step": "正在分析创作意图...", "percent": 10},
-                {"step": "正在设计角色设定...", "percent": 30},
-                {"step": "正在构建章节大纲...", "percent": 55},
-                {"step": "正在编排场景结构...", "percent": 80},
-                {"step": "正在完善分支与结局...", "percent": 95},
+                {"step": _localized_text(lang, "正在分析创作意图...", "Analyzing your creative goals..."), "percent": 10},
+                {"step": _localized_text(lang, "正在设计角色设定...", "Designing the character roster..."), "percent": 30},
+                {"step": _localized_text(lang, "正在构建章节大纲...", "Building the chapter outline..."), "percent": 55},
+                {"step": _localized_text(lang, "正在编排场景结构...", "Structuring the scene flow..."), "percent": 80},
+                {"step": _localized_text(lang, "正在完善分支与结局...", "Polishing branches and endings..."), "percent": 95},
             ]
 
             events: list[dict[str, Any]] = []
@@ -642,9 +784,25 @@ Requirements:
                     meta.scene_count = sum(len(ch.scenes) for ch in self.draft.chapters)
                 await asyncio.to_thread(self.pm.write_project_meta, self.project_name, meta)
 
+            # Generate prototype scenes and script (best-effort)
+            if self.draft:
+                try:
+                    provider = _get_provider()
+                    service = PrototypeGenerationService(self.pm, provider)
+                    chapter = service.select_prototype_chapter(self.draft)
+                    scenes = await service.generate_scenes(chapter, self.draft)
+                    script_path = service.write_script(self.project_name, chapter, scenes)
+                    service.update_index(self.project_name, chapter, scenes, script_path)
+                except Exception as e:
+                    pass  # Best-effort: prototype generation failure should not break confirmation
+
             self.phase = PipelineStage.EDITING
 
-            assistant_content = "蓝图生成完成！你现在可以在工作区中查看和编辑。"
+            assistant_content = _localized_text(
+                lang,
+                "蓝图生成完成！你现在可以在工作区中查看和编辑。",
+                "Blueprint generation is complete. You can now review and edit it in the workspace.",
+            )
             self.messages.append({
                 "role": "assistant",
                 "message_kind": "system",
@@ -668,7 +826,11 @@ Requirements:
         self.phase = PipelineStage.COLLECTING
         self.turn_count = 0
 
-        assistant_content = "好的，我们继续调整蓝图。你希望优先修改角色、章节还是整体基调？"
+        assistant_content = _localized_text(
+            lang,
+            "好的，我们继续调整蓝图。你希望优先修改角色、章节还是整体基调？",
+            "Understood. Let's keep refining the blueprint. Would you like to adjust the characters, the chapter structure, or the overall tone first?",
+        )
         self.messages.append({"role": "assistant", "content": assistant_content})
         self._save_history()
         self._save_session()
@@ -745,7 +907,7 @@ def _orchestrator_has_confirmation(project_name: str, confirmation_id: str) -> b
 # System prompt helper
 # ---------------------------------------------------------------------------
 
-def _system_prompt_for_current_project(engine: ChatEngine) -> str:
+def _system_prompt_for_current_project(engine: ChatEngine, output_language: str = "zh") -> str:
     """Augment the base prompt with the currently selected project context."""
     base_prompt = getattr(
         engine,
@@ -755,6 +917,7 @@ def _system_prompt_for_current_project(engine: ChatEngine) -> str:
             "When the user asks about the current workspace, rely on the selected project context."
         ),
     )
+    base_prompt = f"{base_prompt}\n\n{_language_instruction(output_language)}"
     project_path = _current_project_path.get()
     if project_path is None:
         return base_prompt
@@ -802,11 +965,22 @@ async def chat_websocket(websocket: WebSocket) -> None:
         nonlocal sent_message_count
         if result.get("type") == "awaiting_confirmation":
             confirmation = result.get("confirmation", {})
+            lang = _preferred_output_language_from_messages(messages)
+            tool_name = (
+                engine.confirmation.pending.tool_name
+                if engine and engine.confirmation.pending
+                else None
+            )
+            confirmation_message = _localized_confirmation_message(
+                tool_name,
+                lang,
+                confirmation.get("message") or "",
+            )
             await websocket.send_json(
                 {
                     "type": "awaiting_confirmation",
                     "confirmation_id": confirmation.get("confirmation_id"),
-                    "message": confirmation.get("message"),
+                    "message": confirmation_message,
                     "candidates": confirmation.get("candidates", []),
                     "project_name": confirmation.get("project_name"),
                 }
@@ -814,11 +988,6 @@ async def chat_websocket(websocket: WebSocket) -> None:
             # Persist runtime session for tool workflow recovery
             active_project = _active_project_name(websocket, None)
             if active_project:
-                tool_name = (
-                    engine.confirmation.pending.tool_name
-                    if engine and engine.confirmation.pending
-                    else None
-                )
                 _save_runtime_session(
                     active_project,
                     {
@@ -826,12 +995,16 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         "pipeline_stage": "awaiting_confirmation",
                         "awaiting_confirmation": True,
                         "confirmation_id": confirmation.get("confirmation_id"),
-                        "confirmation_message": confirmation.get("message"),
+                        "confirmation_message": confirmation_message,
                         "confirmation_candidates": confirmation.get("candidates", []),
                         "tool_name": tool_name,
                         "project_name": confirmation.get("project_name"),
                         "latest_progress": {
-                            "step": f"等待用户确认: {tool_name or '操作'}",
+                            "step": _localized_text(
+                                lang,
+                                f"等待用户确认: {tool_name or '操作'}",
+                                f"Waiting for user confirmation: {tool_name or 'action'}",
+                            ),
                             "percent": 0,
                         },
                         "updated_at": datetime.utcnow().isoformat(),
@@ -862,6 +1035,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             )
                         elif isinstance(block, dict) and block.get("type") == "tool_use":
                             tool_name = block.get("name", "")
+                            lang = _preferred_output_language_from_messages(messages)
                             await websocket.send_json(
                                 {
                                     "type": "tool_start",
@@ -877,7 +1051,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                         "pipeline_stage": "tool_running",
                                         "awaiting_confirmation": False,
                                         "latest_progress": {
-                                            "step": f"正在调用 {tool_name}...",
+                                            "step": _localized_text(
+                                                lang,
+                                                f"正在调用 {tool_name}...",
+                                                f"Calling {tool_name}...",
+                                            ),
                                             "percent": 0,
                                         },
                                         "tool_name": tool_name,
@@ -909,7 +1087,16 @@ async def chat_websocket(websocket: WebSocket) -> None:
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": _localized_text(
+                            _preferred_output_language_from_messages(messages),
+                            "无效的 JSON。",
+                            "Invalid JSON.",
+                        ),
+                    }
+                )
                 continue
 
             msg_type = payload.get("type")
@@ -935,19 +1122,36 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 # --- Regular ChatEngine path ------------------------------------
                 if _current_project_path.get() is None and not _allowed_without_project(content):
                     await websocket.send_json(
-                        {"type": "error", "message": "No active project selected."}
+                        {
+                            "type": "error",
+                            "message": _localized_text(
+                                _preferred_output_language_from_texts([content]),
+                                "当前没有选中的项目。",
+                                "No active project selected.",
+                            ),
+                        }
                     )
                     continue
 
                 engine = await _ensure_engine()
                 if engine is None:
                     await websocket.send_json(
-                        {"type": "error", "message": "No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key."}
+                        {
+                            "type": "error",
+                            "message": _localized_text(
+                                _preferred_output_language_from_texts([content]),
+                                "未配置可用的 LLM provider。请设置 ANTHROPIC_API_KEY 或 DeepSeek/Qwen 的 API key。",
+                                "No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key.",
+                            ),
+                        }
                     )
                     continue
 
                 messages.append({"role": "user", "content": content})
-                engine.system_prompt = _system_prompt_for_current_project(engine)
+                engine.system_prompt = _system_prompt_for_current_project(
+                    engine,
+                    _preferred_output_language_from_messages(messages),
+                )
                 result = await engine.run_turn(messages)
                 await _send_turn_result(result)
                 messages = result.get("messages", messages)
@@ -974,14 +1178,28 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 engine = await _ensure_engine()
                 if engine is None:
                     await websocket.send_json(
-                        {"type": "error", "message": "No LLM provider configured."}
+                        {
+                            "type": "error",
+                            "message": _localized_text(
+                                _preferred_output_language_from_messages(messages),
+                                "未配置可用的 LLM provider。",
+                                "No LLM provider configured.",
+                            ),
+                        }
                     )
                     continue
 
                 pending = engine.confirmation.pending
                 if pending is None or pending.confirmation_id != confirmation_id:
                     await websocket.send_json(
-                        {"type": "error", "message": "No matching pending confirmation."}
+                        {
+                            "type": "error",
+                            "message": _localized_text(
+                                _preferred_output_language_from_messages(messages),
+                                "未找到匹配的待确认操作。",
+                                "No matching pending confirmation.",
+                            ),
+                        }
                     )
                     continue
 
@@ -1001,7 +1219,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                     "tool_use_id": pending.tool_use_id or confirmation_id,
                                     "content": approved_result.get(
                                         "content",
-                                        f"Tool {pending.tool_name} confirmed and executed.",
+                                        _localized_text(
+                                            _preferred_output_language_from_messages(messages),
+                                            f"已确认并执行工具 {pending.tool_name}。",
+                                            f"Tool {pending.tool_name} confirmed and executed.",
+                                        ),
                                     ),
                                     "success": approved_result.get("success", True),
                                 }
@@ -1018,7 +1240,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                                 {
                                     "type": "tool_result",
                                     "tool_use_id": confirmation_id,
-                                    "content": f"User cancelled {pending.tool_name}.",
+                                    "content": _localized_text(
+                                        _preferred_output_language_from_messages(messages),
+                                        f"用户已取消 {pending.tool_name}。",
+                                        f"User cancelled {pending.tool_name}.",
+                                    ),
                                     "success": False,
                                 }
                             ],
@@ -1030,7 +1256,10 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 if active_project:
                     _clear_runtime_session(active_project)
 
-                engine.system_prompt = _system_prompt_for_current_project(engine)
+                engine.system_prompt = _system_prompt_for_current_project(
+                    engine,
+                    _preferred_output_language_from_messages(messages),
+                )
                 result = await engine.run_turn(messages)
                 await _send_turn_result(result)
                 messages = result.get("messages", messages)
@@ -1038,13 +1267,31 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 if active_project:
                     _write_chat_history(active_project, messages)
             else:
-                await websocket.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": _localized_text(
+                            _preferred_output_language_from_messages(messages),
+                            f"未知的消息类型：{msg_type}",
+                            f"Unknown message type: {msg_type}",
+                        ),
+                    }
+                )
 
     except WebSocketDisconnect:
         pass
     except Exception as exc:
         try:
-            await websocket.send_json({"type": "error", "message": f"Server error: {exc}"})
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": _localized_text(
+                        _preferred_output_language_from_messages(messages),
+                        f"服务端错误：{exc}",
+                        f"Server error: {exc}",
+                    ),
+                }
+            )
             await websocket.close()
         except Exception:
             pass
