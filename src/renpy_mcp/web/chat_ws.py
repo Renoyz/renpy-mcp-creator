@@ -214,11 +214,12 @@ def _get_provider():
     # Primary: Anthropic-compatible (Kimi Code)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
     anthropic_base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+    anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet")
     if anthropic_key:
         return AnthropicProvider(
             api_key=anthropic_key,
             base_url=anthropic_base,
-            default_model="claude-3-5-sonnet",
+            default_model=anthropic_model,
         )
 
     # Fallback 1: DeepSeek (OpenAI-compatible)

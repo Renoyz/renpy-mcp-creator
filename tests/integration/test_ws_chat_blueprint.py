@@ -664,6 +664,35 @@ def test_blueprint_draft_generation_rejects_invalid_schema(monkeypatch, client: 
     assert "reviewing" not in str(events)
 
 
+def test_get_provider_uses_anthropic_model_env_var(monkeypatch) -> None:
+    """_get_provider() must read ANTHROPIC_MODEL and pass it to AnthropicProvider.default_model."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "kimi-k2.5")
+    # Ensure no mock override is active
+    monkeypatch.delenv("RENPY_MCP_MOCK_LLM", raising=False)
+
+    from renpy_mcp.web.chat_ws import _get_provider
+
+    provider = _get_provider()
+    assert provider is not None
+    assert provider.default_model == "kimi-k2.5"
+
+
+def test_get_provider_anthropic_model_fallback_to_default(monkeypatch) -> None:
+    """When ANTHROPIC_MODEL is not set, _get_provider() must fallback to the default model."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
+    monkeypatch.delenv("RENPY_MCP_MOCK_LLM", raising=False)
+
+    from renpy_mcp.web.chat_ws import _get_provider
+
+    provider = _get_provider()
+    assert provider is not None
+    assert provider.default_model == "claude-3-5-sonnet"
+
+
 def test_blueprint_draft_generation_retries_then_succeeds(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """First attempt returns invalid JSON, second attempt returns valid blueprint."""
     project_name = "bp_retry"

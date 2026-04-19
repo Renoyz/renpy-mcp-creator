@@ -46,7 +46,6 @@ def server_url(e2e_workspace: Path):
     env = os.environ.copy()
     env["RENPY_MCP_WORKSPACE"] = str(e2e_workspace)
     env["RENPY_MCP_MOCK_BUILD"] = "1"
-    env["RENPY_MCP_MOCK_LLM"] = "1"
 
     cmd = [sys.executable, "-m", "renpy_mcp.main", "--transport", "http", "--port", str(port)]
     proc = subprocess.Popen(

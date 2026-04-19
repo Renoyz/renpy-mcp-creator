@@ -1,4 +1,7 @@
-"""Tests for vn-creator CLI start command."""
+"""Tests for CLI startup wiring and dependency declarations."""
+
+from pathlib import Path
+import tomllib
 
 from unittest.mock import MagicMock, patch
 
@@ -28,3 +31,15 @@ def test_start_command_uses_unified_http_entry():
     call_args = mock_run_http.call_args
     assert call_args is not None
     assert call_args.kwargs.get("open_browser") is False
+
+
+def test_http_dashboard_declares_session_middleware_dependency():
+    """FastAPI HTTP startup imports SessionMiddleware, so itsdangerous must be a direct dependency."""
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    dependencies = data["project"]["dependencies"]
+
+    assert any(
+        dep.split(">=")[0].split("[")[0] == "itsdangerous"
+        for dep in dependencies
+    ), "pyproject.toml must declare itsdangerous for FastAPI SessionMiddleware startup"

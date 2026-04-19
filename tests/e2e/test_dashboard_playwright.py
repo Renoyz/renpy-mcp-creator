@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 from playwright.sync_api import Locator, Page, expect
 
 
@@ -36,7 +37,12 @@ def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
 
 
 def start_mock_llm_server(workspace: Path) -> tuple[str, subprocess.Popen]:
-    """Start a dedicated backend with mock LLM for real WS path tests."""
+    """Start a dedicated backend with mock LLM for WS path tests.
+
+    Forces RENPY_MCP_MOCK_LLM=1 so the backend uses MockE2EProvider instead of
+    a real external provider. Tests that call this helper must NOT claim they
+    test a "real provider" — they test the backend wiring with a mock provider.
+    """
     port = _find_free_port()
     env = os.environ.copy()
     env["RENPY_MCP_WORKSPACE"] = str(workspace)
@@ -71,6 +77,19 @@ def start_mock_llm_server(workspace: Path) -> tuple[str, subprocess.Popen]:
     proc.terminate()
     proc.kill()
     raise RuntimeError(f"Mock LLM backend did not become ready on {url}")
+
+
+@pytest.fixture
+def mock_llm_server_url(e2e_workspace: Path):
+    """Yield a backend URL with mock LLM enabled. Cleans up the subprocess on teardown."""
+    url, proc = start_mock_llm_server(e2e_workspace)
+    yield url
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 def wait_for_server(url: str, timeout: float = 30.0) -> bool:
@@ -1718,18 +1737,18 @@ def test_mobile_overlay_starts_collection_reliably(page: Page, server_url: str) 
 
 
 def test_interview_progresses_to_reviewing_and_confirms(
-    page: Page, server_url: str
+    page: Page, mock_llm_server_url: str
 ) -> None:
     """After a few interview exchanges, user should see blueprint draft and be able to confirm."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_rev_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
     console_logs = []
     page.on("console", lambda msg: console_logs.append(f"[{msg.type}] {msg.text}"))
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -1799,15 +1818,15 @@ def test_manual_yaml_placeholder_shows_correctly(
 
 
 def test_reviewing_shows_confirmation_in_chat_drawer(
-    page: Page, server_url: str
+    page: Page, mock_llm_server_url: str
 ) -> None:
     """Reviewing phase should show structured confirmation card inside Chat Drawer."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_chat_rev_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -1841,14 +1860,14 @@ def test_reviewing_shows_confirmation_in_chat_drawer(
     expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
 
 
-def test_reviewing_refresh_restores_structured_messages(page: Page, server_url: str) -> None:
+def test_reviewing_refresh_restores_structured_messages(page: Page, mock_llm_server_url: str) -> None:
     """After reaching reviewing and refreshing, ChatDrawer should still show blueprint draft and confirmation request messages."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_refresh_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -1880,14 +1899,14 @@ def test_reviewing_refresh_restores_structured_messages(page: Page, server_url: 
     expect(chat_drawer.locator("text=请确认以下蓝图草案")).to_be_visible(timeout=15000)
 
 
-def test_reviewing_refresh_restores_confirmable_state(page: Page, server_url: str) -> None:
+def test_reviewing_refresh_restores_confirmable_state(page: Page, mock_llm_server_url: str) -> None:
     """After reaching reviewing and refreshing, both main content and ChatDrawer should show confirmable state."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_refresh_conf_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -1924,14 +1943,14 @@ def test_reviewing_refresh_restores_confirmable_state(page: Page, server_url: st
     expect(page.locator("h2", has_text="蓝图草案已生成")).to_be_visible(timeout=10000)
 
 
-def test_generating_refresh_restores_progress_state(page: Page, server_url: str) -> None:
+def test_generating_refresh_restores_progress_state(page: Page, mock_llm_server_url: str) -> None:
     """After approving and entering generating, refreshing should restore generating state."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_refresh_gen_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -1969,14 +1988,14 @@ def test_generating_refresh_restores_progress_state(page: Page, server_url: str)
     expect(chat_drawer.locator("text=正在分析创作意图")).to_be_visible(timeout=15000)
 
 
-def test_main_content_blueprint_confirm_from_draft_card(page: Page, server_url: str) -> None:
+def test_main_content_blueprint_confirm_from_draft_card(page: Page, mock_llm_server_url: str) -> None:
     """Clicking '确认并生成' from main content BlueprintDraftCard should drive generating -> editing."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_main_conf_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -2007,14 +2026,14 @@ def test_main_content_blueprint_confirm_from_draft_card(page: Page, server_url: 
     expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
 
 
-def test_main_content_blueprint_reject_from_draft_card(page: Page, server_url: str) -> None:
+def test_main_content_blueprint_reject_from_draft_card(page: Page, mock_llm_server_url: str) -> None:
     """Clicking '继续调整' from main content BlueprintDraftCard should return to collecting."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_main_rej_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -2045,16 +2064,16 @@ def test_main_content_blueprint_reject_from_draft_card(page: Page, server_url: s
     expect(page.locator("text=好的，我们继续调整蓝图")).to_be_visible(timeout=10000)
 
 
-def test_mobile_main_content_confirm_works_when_chat_closed(page: Page, server_url: str) -> None:
+def test_mobile_main_content_confirm_works_when_chat_closed(page: Page, mock_llm_server_url: str) -> None:
     """On mobile with overlay drawer closed, clicking '确认并生成' from main content must still work."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_mob_conf_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
     page.set_viewport_size({"width": 375, "height": 667})
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -2090,16 +2109,16 @@ def test_mobile_main_content_confirm_works_when_chat_closed(page: Page, server_u
     expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
 
 
-def test_mobile_main_content_reject_works_when_chat_closed(page: Page, server_url: str) -> None:
+def test_mobile_main_content_reject_works_when_chat_closed(page: Page, mock_llm_server_url: str) -> None:
     """On mobile with overlay drawer closed, clicking '继续调整' from main content must still work."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_mob_rej_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
     page.set_viewport_size({"width": 375, "height": 667})
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -2136,15 +2155,15 @@ def test_mobile_main_content_reject_works_when_chat_closed(page: Page, server_ur
 
 
 def test_return_to_collecting_allows_real_followup_refinement(
-    page: Page, server_url: str
+    page: Page, mock_llm_server_url: str
 ) -> None:
     """Clicking '继续调整' must allow real follow-up refinement, not immediate reviewing."""
-    assert wait_for_server(server_url), "Server not ready"
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
 
     project_name = f"playwright_ref_{int(time.time())}"
-    create_project_via_api(server_url, project_name)
+    create_project_via_api(mock_llm_server_url, project_name)
 
-    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
     # Start collecting
@@ -2470,7 +2489,10 @@ def test_tool_confirmation_refresh_restores_panel_from_session(
 def test_tool_confirmation_refresh_restores_panel(
     page: Page, e2e_workspace: Path
 ) -> None:
-    """Real backend path: /ws/chat -> awaiting_confirmation -> session write -> refresh -> panel recovery."""
+    """Mock-provider backend path: /ws/chat -> awaiting_confirmation -> session write -> refresh -> panel recovery.
+
+    Uses start_mock_llm_server() which forces RENPY_MCP_MOCK_LLM=1.
+    """
     url, proc = start_mock_llm_server(e2e_workspace)
     try:
         assert wait_for_server(url), "Server not ready"
@@ -2562,7 +2584,10 @@ def test_tool_running_refresh_restores_progress_state(
 def test_editing_project_with_tool_confirmation_stays_in_editing_mode_after_refresh(
     page: Page, e2e_workspace: Path
 ) -> None:
-    """Editing project with active tool confirmation must stay in editing workspace after refresh."""
+    """Editing project with active tool confirmation must stay in editing workspace after refresh.
+
+    Uses start_mock_llm_server() which forces RENPY_MCP_MOCK_LLM=1.
+    """
     url, proc = start_mock_llm_server(e2e_workspace)
     try:
         assert wait_for_server(url), "Server not ready"
@@ -2666,8 +2691,12 @@ def test_editing_project_with_tool_running_stays_in_editing_mode_after_refresh(
     expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
 
 
-def test_blueprint_draft_from_real_provider_in_reviewing(page: Page, e2e_workspace: Path) -> None:
-    """Real backend path: collecting -> LLM generates draft -> reviewing shows provider draft content."""
+def test_blueprint_draft_from_mock_provider_in_reviewing(page: Page, e2e_workspace: Path) -> None:
+    """Mock-provider backend path: collecting -> LLM generates draft -> reviewing shows provider draft content.
+
+    Uses start_mock_llm_server() which forces RENPY_MCP_MOCK_LLM=1.
+    This verifies the blueprint orchestration wiring end-to-end, not a real external provider.
+    """
     url, proc = start_mock_llm_server(e2e_workspace)
     try:
         assert wait_for_server(url), "Server not ready"
