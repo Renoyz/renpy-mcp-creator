@@ -653,6 +653,163 @@ async def test_successful_regeneration_replaces_previous_prototype_only_after_co
 
 
 @pytest.mark.asyncio
+async def test_failed_regeneration_with_same_final_path_preserves_previous_prototype_file(client: TestClient, tmp_path: Path) -> None:
+    """When the new prototype uses the same final path as the old one, failure must not destroy the old stable file."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_same_path"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Seed an old stable prototype at the SAME final path that the new one will use
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    chapter = blueprint.chapters[0]
+    safe_name = "".join(c if c.isalnum() else "_" for c in chapter.name)
+    final_file_name = f"prototype_{chapter.id}_{safe_name}.rpy"
+    final_file = tmp_path / project_name / "game" / final_file_name
+    final_file.write_text("label old_stable:\n    return\n", encoding="utf-8")
+
+    old_index = {
+        "scenes": {
+            "old-s1": {
+                "chapter_id": chapter.id,
+                "scene_id": "old-s1",
+                "title": "Old",
+                "summary": "Old.",
+                "location": "old",
+                "next_scene_id": None,
+                "label": "old_stable",
+                "file_path": f"game/{final_file_name}",
+                "source": "prototype",
+                "order": 1,
+            }
+        }
+    }
+    pm.write_project_index(project_name, old_index)
+
+    script_file = tmp_path / project_name / "game" / "script.rpy"
+    script_file.write_text(
+        'label start:\n    "Hello from the Ren\'Py MCP server!"\n    call old_stable\n    return\n',
+        encoding="utf-8",
+    )
+
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    # Simulate post-wire failure
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
+
+    try:
+        service.update_index(project_name, chapter, scenes, staging_path)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, staging_path, new_scene_ids, old_script_content
+        )
+
+    # Old stable final file MUST still exist with its original content
+    assert final_file.exists(), "Old stable prototype file should have been preserved"
+    assert "label old_stable:" in final_file.read_text(encoding="utf-8")
+
+    # Staging file must be gone
+    staging_file = tmp_path / project_name / staging_path
+    assert not staging_file.exists(), "Staging file should have been removed"
+
+    # Old index entry must survive
+    index = pm.read_project_index(project_name)
+    assert "old-s1" in index.get("scenes", {})
+
+    # Main script restored
+    assert "call old_stable" in script_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_successful_regeneration_promotes_staging_script_to_final_path(client: TestClient, tmp_path: Path) -> None:
+    """After commit, the staging file must be promoted to the final path."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_promote"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+
+    # Before commit: staging exists, final does not
+    staging_file = tmp_path / project_name / staging_path
+    final_path = service._final_path_from_staging(staging_path)
+    final_file = tmp_path / project_name / final_path
+    assert staging_file.exists(), "Staging file should exist before commit"
+    assert not final_file.exists(), "Final file should not exist before commit"
+
+    service.commit_prototype_replacement(project_name, new_scene_ids, staging_path)
+
+    # After commit: staging gone, final exists
+    assert not staging_file.exists(), "Staging file should be gone after commit"
+    assert final_file.exists(), "Final file should exist after commit"
+    assert "label prototype_ch1_start:" in final_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_rollback_removes_only_staging_script_not_stable_final_script(client: TestClient, tmp_path: Path) -> None:
+    """rollback_prototype_generation must delete the staging file but never a stable final prototype file."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_rollback_staging"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    chapter = blueprint.chapters[0]
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+
+    final_path = service._final_path_from_staging(staging_path)
+    final_file = tmp_path / project_name / final_path
+    # Simulate a pre-existing stable final file at the same path
+    final_file.write_text("label stable:\n    return\n", encoding="utf-8")
+
+    service.rollback_prototype_generation(project_name, staging_path, new_scene_ids, None)
+
+    # Staging file must be gone
+    staging_file = tmp_path / project_name / staging_path
+    assert not staging_file.exists(), "Staging file should be removed by rollback"
+
+    # Stable final file must survive
+    assert final_file.exists(), "Stable final prototype file should NOT be removed by rollback"
+    assert "label stable:" in final_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_service_failure_does_not_corrupt_project(client: TestClient, tmp_path: Path) -> None:
     """If prototype generation fails, the project must not be left with partial script or corrupt index."""
     from renpy_mcp.blueprint.models import ProjectBlueprint

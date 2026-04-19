@@ -151,25 +151,39 @@ Requirements:
     # Script writeback
     # ------------------------------------------------------------------
 
+    def _staging_path_from_final(self, final_path: str) -> str:
+        """Derive the staging path from a final prototype script path."""
+        p = Path(final_path)
+        return str(p.with_name(f"{p.stem}.__staging__{p.suffix}"))
+
+    def _final_path_from_staging(self, staging_path: str) -> str:
+        """Derive the final path from a staging prototype script path."""
+        return staging_path.replace(".__staging__", "")
+
     def write_script(
         self, project_name: str, chapter: ChapterSummary, scenes: list[PrototypeScene]
     ) -> str:
-        """Generate and write a minimal executable .rpy script skeleton.
+        """Generate and write a minimal executable .rpy script skeleton to a staging file.
+
+        The script is written to a staging path (e.g.
+        "game/prototype_ch1.__staging__.rpy").  Callers must invoke
+        commit_prototype_replacement() to promote it to the final path.
 
         Returns:
-            The relative file path (e.g., "game/prototype_ch1.rpy").
+            The staging relative file path.
         """
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for script writeback")
 
         safe_name = "".join(c if c.isalnum() else "_" for c in chapter.name)
         file_name = f"prototype_{chapter.id}_{safe_name}.rpy"
-        rel_path = f"game/{file_name}"
+        final_path = f"game/{file_name}"
+        staging_path = self._staging_path_from_final(final_path)
 
         project_dir = self.pm._project_dir(project_name)
         game_dir = project_dir / "game"
         game_dir.mkdir(parents=True, exist_ok=True)
-        file_path = game_dir / file_name
+        staging_file = game_dir / Path(staging_path).name
 
         lines: list[str] = []
         lines.append(f"# Prototype chapter: {chapter.name}")
@@ -201,8 +215,8 @@ Requirements:
                 lines.append("    return")
             lines.append("")
 
-        file_path.write_text("\n".join(lines), encoding="utf-8")
-        return rel_path
+        staging_file.write_text("\n".join(lines), encoding="utf-8")
+        return staging_path
 
     # ------------------------------------------------------------------
     # Main script wiring
@@ -325,9 +339,9 @@ Requirements:
         self,
         project_name: str,
         new_scene_ids: list[str],
-        new_script_path: str,
+        staging_script_path: str,
     ) -> None:
-        """Finalize prototype replacement by removing old artifacts.
+        """Finalize prototype replacement by promoting the staging script and removing old artifacts.
 
         This must only be called after all new prototype steps
         (write_script, wire_main_script, update_index) have succeeded.
@@ -336,8 +350,20 @@ Requirements:
             return
 
         project_dir = self.pm._project_dir(project_name)
+        final_script_path = self._final_path_from_staging(staging_script_path)
+        staging_file = project_dir / staging_script_path
+        final_file = project_dir / final_script_path
 
-        # 1. Remove old prototype index entries (keep only new_scene_ids)
+        # 1. Promote staging file to final path
+        if staging_file.exists():
+            try:
+                if final_file.exists():
+                    final_file.unlink()
+                staging_file.rename(final_file)
+            except OSError:
+                logger.warning("Failed to promote staging file: %s", staging_file)
+
+        # 2. Remove old prototype index entries (keep only new_scene_ids)
         index = self.pm.read_project_index(project_name)
         if index and "scenes" in index:
             old_ids = [
@@ -349,29 +375,35 @@ Requirements:
                     del index["scenes"][sid]
                 self.pm.write_project_index(project_name, index)
 
-        # 2. Remove old prototype files (keep only the new one)
+        # 3. Remove old prototype files (keep only the new final file)
         game_dir = project_dir / "game"
         if game_dir.exists():
-            new_file_name = Path(new_script_path).name
+            new_file_name = Path(final_script_path).name
             for proto_file in game_dir.glob("prototype_*.rpy"):
                 if proto_file.name != new_file_name:
                     try:
                         proto_file.unlink()
                     except OSError:
                         logger.warning("Failed to remove old prototype file: %s", proto_file)
+            # Also clean up any leftover staging files
+            for leftover in game_dir.glob("prototype_*.__staging__.rpy"):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
 
     def rollback_prototype_generation(
         self,
         project_name: str,
-        new_script_path: str | None,
+        staging_script_path: str | None,
         new_scene_ids: list[str],
         old_script_content: str | None,
     ) -> None:
         """Rollback a failed prototype generation round.
 
-        Restores the main script, removes the newly written prototype file,
+        Restores the main script, removes the staging prototype file,
         and removes newly written index entries.  The previous stable
-        prototype (if any) is left untouched.
+        prototype file (if any) is left untouched.
         """
         if self.pm is None:
             return
@@ -379,15 +411,15 @@ Requirements:
         # 1. Restore main script.rpy
         self.restore_main_script(project_name, old_script_content)
 
-        # 2. Remove newly written prototype file
-        if new_script_path:
+        # 2. Remove staging file only — never touch the stable final file
+        if staging_script_path:
             project_dir = self.pm._project_dir(project_name)
-            file_path = project_dir / new_script_path
+            staging_file = project_dir / staging_script_path
             try:
-                if file_path.exists():
-                    file_path.unlink()
+                if staging_file.exists():
+                    staging_file.unlink()
             except OSError:
-                logger.warning("Failed to remove partial prototype file: %s", file_path)
+                logger.warning("Failed to remove staging file: %s", staging_file)
 
         # 3. Remove newly written index entries
         index = self.pm.read_project_index(project_name)

@@ -789,7 +789,8 @@ Requirements:
 
             # Generate prototype scenes and script (staged replace)
             prototype_error: str | None = None
-            script_path: str | None = None
+            staging_path: str | None = None
+            final_path: str | None = None
             new_scene_ids: list[str] = []
             old_script_content: str | None = None
             if self.draft:
@@ -802,8 +803,9 @@ Requirements:
                     scenes = await service.generate_scenes(chapter, self.draft)
                     new_scene_ids = [s.scene_id for s in scenes]
 
-                    # Step 2: write new prototype script
-                    script_path = service.write_script(self.project_name, chapter, scenes)
+                    # Step 2: write new prototype script to staging file
+                    staging_path = service.write_script(self.project_name, chapter, scenes)
+                    final_path = service._final_path_from_staging(staging_path)
 
                     # Step 3: backup main script before rewiring
                     old_script_content = service.backup_main_script(self.project_name)
@@ -811,11 +813,11 @@ Requirements:
                     # Step 4: wire main script to new prototype entry
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
 
-                    # Step 5: write new prototype index entries
-                    service.update_index(self.project_name, chapter, scenes, script_path)
+                    # Step 5: write new prototype index entries (pointing to final path)
+                    service.update_index(self.project_name, chapter, scenes, final_path)
 
-                    # Step 6: commit — remove old artifacts now that everything succeeded
-                    service.commit_prototype_replacement(self.project_name, new_scene_ids, script_path)
+                    # Step 6: commit — promote staging file and remove old artifacts
+                    service.commit_prototype_replacement(self.project_name, new_scene_ids, staging_path)
 
                 except Exception as e:
                     prototype_error = str(e)
@@ -825,7 +827,7 @@ Requirements:
                         if self.pm is not None:
                             rollback_service = PrototypeGenerationService(self.pm, None)
                             rollback_service.rollback_prototype_generation(
-                                self.project_name, script_path, new_scene_ids, old_script_content
+                                self.project_name, staging_path, new_scene_ids, old_script_content
                             )
                     except Exception:
                         logger.exception(
