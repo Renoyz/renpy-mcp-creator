@@ -787,34 +787,49 @@ Requirements:
                     meta.scene_count = sum(len(ch.scenes) for ch in self.draft.chapters)
                 await asyncio.to_thread(self.pm.write_project_meta, self.project_name, meta)
 
-            # Generate prototype scenes and script
+            # Generate prototype scenes and script (staged replace)
             prototype_error: str | None = None
             script_path: str | None = None
             new_scene_ids: list[str] = []
+            old_script_content: str | None = None
             if self.draft:
                 try:
                     provider = _get_provider()
                     service = PrototypeGenerationService(self.pm, provider)
                     chapter = service.select_prototype_chapter(self.draft)
-                    service.remove_existing_prototype_artifacts(self.project_name)
+
+                    # Step 1: generate scenes (memory only)
                     scenes = await service.generate_scenes(chapter, self.draft)
                     new_scene_ids = [s.scene_id for s in scenes]
+
+                    # Step 2: write new prototype script
                     script_path = service.write_script(self.project_name, chapter, scenes)
+
+                    # Step 3: backup main script before rewiring
+                    old_script_content = service.backup_main_script(self.project_name)
+
+                    # Step 4: wire main script to new prototype entry
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
+
+                    # Step 5: write new prototype index entries
                     service.update_index(self.project_name, chapter, scenes, script_path)
+
+                    # Step 6: commit — remove old artifacts now that everything succeeded
+                    service.commit_prototype_replacement(self.project_name, new_scene_ids, script_path)
+
                 except Exception as e:
                     prototype_error = str(e)
                     logger.exception("Prototype generation failed for project %s", self.project_name)
-                    # Clean up partial artifacts from this failed round
+                    # Rollback partial artifacts, preserving previous stable prototype
                     try:
                         if self.pm is not None:
-                            cleanup_service = PrototypeGenerationService(self.pm, None)
-                            cleanup_service.cleanup_failed_prototype_artifacts(
-                                self.project_name, script_path, new_scene_ids
+                            rollback_service = PrototypeGenerationService(self.pm, None)
+                            rollback_service.rollback_prototype_generation(
+                                self.project_name, script_path, new_scene_ids, old_script_content
                             )
                     except Exception:
                         logger.exception(
-                            "Prototype cleanup also failed for project %s", self.project_name
+                            "Prototype rollback also failed for project %s", self.project_name
                         )
 
             self.phase = PipelineStage.EDITING

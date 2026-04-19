@@ -400,116 +400,20 @@ async def test_update_index_writes_full_prototype_metadata(client: TestClient, t
 
 
 @pytest.mark.asyncio
-async def test_update_index_replaces_previous_prototype_scenes(client: TestClient, tmp_path: Path) -> None:
-    """update_index must clear old prototype scenes before writing new ones."""
+async def test_commit_prototype_replacement_removes_old_artifacts(client: TestClient, tmp_path: Path) -> None:
+    """commit_prototype_replacement must remove old prototype files and index entries, keeping only the new set."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
     from renpy_mcp.services.project_manager import ProjectManager
     from renpy_mcp.config import get_settings
 
-    project_name = "proto_replace"
-    _create_project(client, tmp_path, project_name)
-
-    blueprint = ProjectBlueprint(**_make_blueprint())
-    provider = _make_mock_scene_provider()
-    pm = ProjectManager(get_settings())
-    service = PrototypeGenerationService(pm=pm, provider=provider)
-
-    chapter = blueprint.chapters[0]
-    scenes = await service.generate_scenes(chapter, blueprint)
-    script_path = service.write_script(project_name, chapter, scenes)
-    service.update_index(project_name, chapter, scenes, script_path)
-
-    old_scene_ids = [s.scene_id for s in scenes]
-
-    # Simulate a second generation with different scenes
-    new_scenes = [
-        type(
-            "Scene",
-            (),
-            {
-                "scene_id": "proto-v2-s1",
-                "title": "New Opening",
-                "summary": "New opening scene.",
-                "location": "gym",
-                "characters_present": [],
-                "entry_label": "prototype_v2_start",
-                "next_scene_id": None,
-            },
-        )(),
-    ]
-    service.update_index(project_name, chapter, new_scenes, "game/prototype_v2.rpy")
-
-    index_path = tmp_path / project_name / "meta" / "index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-
-    # Old scenes must be gone
-    for sid in old_scene_ids:
-        assert sid not in index.get("scenes", {}), f"Old prototype scene {sid} should have been removed"
-
-    # New scene must be present
-    assert "proto-v2-s1" in index.get("scenes", {})
-
-
-@pytest.mark.asyncio
-async def test_prototype_generation_midway_failure_cleans_new_script_artifact(client: TestClient, tmp_path: Path) -> None:
-    """If prototype generation fails after write_script, the new script file and index entries must be cleaned up."""
-    from renpy_mcp.blueprint.models import ProjectBlueprint
-    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
-    from renpy_mcp.services.project_manager import ProjectManager
-    from renpy_mcp.config import get_settings
-
-    project_name = "proto_cleanup"
-    _create_project(client, tmp_path, project_name)
-
-    blueprint = ProjectBlueprint(**_make_blueprint())
-    provider = _make_mock_scene_provider()
-    pm = ProjectManager(get_settings())
-    service = PrototypeGenerationService(pm=pm, provider=provider)
-
-    chapter = blueprint.chapters[0]
-    scenes = await service.generate_scenes(chapter, blueprint)
-    script_path = service.write_script(project_name, chapter, scenes)
-
-    # Simulate a failure after write_script
-    def failing_wire(*args, **kwargs):
-        raise RuntimeError("Simulated wiring failure")
-
-    service.wire_main_script_to_prototype = failing_wire
-
-    new_scene_ids = [s.scene_id for s in scenes]
-    try:
-        service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
-    except RuntimeError:
-        # Cleanup partial artifacts as chat_ws.py would do
-        service.cleanup_failed_prototype_artifacts(project_name, script_path, new_scene_ids)
-
-    # New script file must be gone
-    assert not (tmp_path / project_name / script_path).exists(), "New script artifact should have been cleaned up"
-
-    # New index entries must be gone
-    index_path = tmp_path / project_name / "meta" / "index.json"
-    if index_path.exists():
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        for sid in new_scene_ids:
-            assert sid not in index.get("scenes", {}), f"New scene {sid} should not leak into index after failure"
-
-
-@pytest.mark.asyncio
-async def test_remove_existing_prototype_artifacts_cleans_files_and_index(client: TestClient, tmp_path: Path) -> None:
-    """remove_existing_prototype_artifacts must delete old prototype files and index entries."""
-    from renpy_mcp.blueprint.models import ProjectBlueprint
-    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
-    from renpy_mcp.services.project_manager import ProjectManager
-    from renpy_mcp.config import get_settings
-
-    project_name = "proto_remove"
+    project_name = "proto_commit"
     _create_project(client, tmp_path, project_name)
 
     pm = ProjectManager(get_settings())
 
-    # Seed an old prototype index
-    index = {
+    # Seed old prototype artifacts
+    old_index = {
         "scenes": {
             "old-s1": {
                 "chapter_id": "ch1",
@@ -525,21 +429,227 @@ async def test_remove_existing_prototype_artifacts_cleans_files_and_index(client
             }
         }
     }
-    pm.write_project_index(project_name, index)
-
-    # Seed an old prototype file
+    pm.write_project_index(project_name, old_index)
     old_file = tmp_path / project_name / "game" / "prototype_old.rpy"
     old_file.write_text("label old_start:\n    return\n", encoding="utf-8")
 
-    service = PrototypeGenerationService(pm=pm, provider=None)
-    service.remove_existing_prototype_artifacts(project_name)
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
 
-    # File must be gone
-    assert not old_file.exists(), "Old prototype file should have been removed"
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    new_script_path = service.write_script(project_name, chapter, scenes)
+    service.update_index(project_name, chapter, scenes, new_script_path)
 
-    # Index entry must be gone (but non-prototype entries should survive)
+    new_scene_ids = [s.scene_id for s in scenes]
+
+    # Commit: this should remove old artifacts
+    service.commit_prototype_replacement(project_name, new_scene_ids, new_script_path)
+
+    # Old file must be gone
+    assert not old_file.exists(), "Old prototype file should have been removed after commit"
+
+    # Old index entry must be gone
     index = pm.read_project_index(project_name)
-    assert "old-s1" not in index.get("scenes", {}), "Old prototype index entry should have been removed"
+    assert "old-s1" not in index.get("scenes", {}), "Old prototype index entry should be removed after commit"
+
+    # New entries must still exist
+    for sid in new_scene_ids:
+        assert sid in index.get("scenes", {}), f"New scene {sid} should survive commit"
+
+
+@pytest.mark.asyncio
+async def test_failed_regeneration_preserves_previous_prototype_artifacts(client: TestClient, tmp_path: Path) -> None:
+    """If a new prototype generation fails, the previous stable prototype must remain intact."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_preserve_old"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Seed an old stable prototype
+    old_index = {
+        "scenes": {
+            "old-s1": {
+                "chapter_id": "ch1",
+                "scene_id": "old-s1",
+                "title": "Old Scene",
+                "summary": "Old stable scene.",
+                "location": "old_place",
+                "next_scene_id": None,
+                "label": "old_start",
+                "file_path": "game/prototype_old.rpy",
+                "source": "prototype",
+                "order": 1,
+            }
+        }
+    }
+    pm.write_project_index(project_name, old_index)
+    old_file = tmp_path / project_name / "game" / "prototype_old.rpy"
+    old_file.write_text("label old_start:\n    return\n", encoding="utf-8")
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    script_path.write_text(
+        'label start:\n    "Hello from the Ren\'Py MCP server!"\n    call old_start\n    return\n',
+        encoding="utf-8",
+    )
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    new_script_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    # Simulate failure after wire
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
+
+    try:
+        service.update_index(project_name, chapter, scenes, new_script_path)
+    except RuntimeError:
+        # Rollback as chat_ws.py would do
+        service.rollback_prototype_generation(
+            project_name, new_script_path, new_scene_ids, old_script_content
+        )
+
+    # Old prototype file must survive
+    assert old_file.exists(), "Old prototype file should have been preserved"
+
+    # Old index entries must survive
+    index = pm.read_project_index(project_name)
+    assert "old-s1" in index.get("scenes", {}), "Old prototype index entry should be preserved"
+
+    # Old main script must be restored
+    content = script_path.read_text(encoding="utf-8")
+    assert "call old_start" in content, "Main script should be restored to old entry"
+    assert "call prototype_ch1_start" not in content, "New entry label should not remain"
+
+    # New script file must be gone
+    assert not (tmp_path / project_name / new_script_path).exists(), "New script artifact should have been removed"
+
+
+@pytest.mark.asyncio
+async def test_post_wire_failure_restores_main_script_content(client: TestClient, tmp_path: Path) -> None:
+    """If update_index fails after wire_main_script_to_prototype, script.rpy must be restored."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_restore_script"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Start with a main script that has a managed region
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    original_content = """label start:
+    "Hello from the Ren'Py MCP server!"
+    # PROTOTYPE START (managed)
+    call old_start
+    return
+    # PROTOTYPE END (managed)
+"""
+    script_path.write_text(original_content, encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    new_script_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    # Simulate post-wire failure
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
+
+    try:
+        service.update_index(project_name, chapter, scenes, new_script_path)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, new_script_path, new_scene_ids, old_script_content
+        )
+
+    # script.rpy must be restored exactly
+    restored = script_path.read_text(encoding="utf-8")
+    assert restored == original_content, f"script.rpy was not restored. Got: {restored}"
+
+
+@pytest.mark.asyncio
+async def test_successful_regeneration_replaces_previous_prototype_only_after_commit(client: TestClient, tmp_path: Path) -> None:
+    """After successful commit, only the new prototype should remain; old should be gone."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_staged"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+
+    # Seed old prototype
+    old_index = {
+        "scenes": {
+            "old-s1": {
+                "chapter_id": "ch1",
+                "scene_id": "old-s1",
+                "title": "Old Scene",
+                "summary": "Old.",
+                "location": "old_place",
+                "next_scene_id": None,
+                "label": "old_start",
+                "file_path": "game/prototype_old.rpy",
+                "source": "prototype",
+                "order": 1,
+            }
+        }
+    }
+    pm.write_project_index(project_name, old_index)
+    old_file = tmp_path / project_name / "game" / "prototype_old.rpy"
+    old_file.write_text("label old_start:\n    return\n", encoding="utf-8")
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    new_script_path = service.write_script(project_name, chapter, scenes)
+    new_scene_ids = [s.scene_id for s in scenes]
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+    service.update_index(project_name, chapter, scenes, new_script_path)
+
+    # Before commit, old prototype should still exist
+    index_before = pm.read_project_index(project_name)
+    assert "old-s1" in index_before.get("scenes", {}), "Old prototype should exist before commit"
+    assert old_file.exists(), "Old prototype file should exist before commit"
+
+    # Commit
+    service.commit_prototype_replacement(project_name, new_scene_ids, new_script_path)
+
+    # After commit, old should be gone and new should remain
+    index_after = pm.read_project_index(project_name)
+    assert "old-s1" not in index_after.get("scenes", {}), "Old prototype should be removed after commit"
+    assert not old_file.exists(), "Old prototype file should be removed after commit"
+    for sid in new_scene_ids:
+        assert sid in index_after.get("scenes", {}), f"New scene {sid} should remain after commit"
 
 
 @pytest.mark.asyncio

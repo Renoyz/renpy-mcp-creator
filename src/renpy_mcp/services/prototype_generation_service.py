@@ -284,67 +284,112 @@ Requirements:
         )
 
     # ------------------------------------------------------------------
-    # Artifact cleanup
+    # Main script backup / restore
     # ------------------------------------------------------------------
 
-    def remove_existing_prototype_artifacts(self, project_name: str) -> None:
-        """Remove all existing prototype artifacts: files and index entries.
+    def backup_main_script(self, project_name: str) -> str | None:
+        """Return the current content of game/script.rpy for potential rollback.
 
-        This ensures idempotency by clearing out the previous prototype
-        generation before a new one is written.
+        Returns:
+            The file content, or None if the file does not exist.
+        """
+        if self.pm is None:
+            return None
+        project_dir = self.pm._project_dir(project_name)
+        script_path = project_dir / "game" / "script.rpy"
+        if script_path.exists():
+            return script_path.read_text(encoding="utf-8")
+        return None
+
+    def restore_main_script(self, project_name: str, content: str | None) -> None:
+        """Restore game/script.rpy to a previously backed-up content.
+
+        Args:
+            project_name: Target project name.
+            content: Content to restore, or None to skip.
+        """
+        if self.pm is None or content is None:
+            return
+        project_dir = self.pm._project_dir(project_name)
+        script_path = project_dir / "game" / "script.rpy"
+        try:
+            script_path.write_text(content, encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to restore script.rpy for project %s", project_name)
+
+    # ------------------------------------------------------------------
+    # Staged replace: commit and rollback
+    # ------------------------------------------------------------------
+
+    def commit_prototype_replacement(
+        self,
+        project_name: str,
+        new_scene_ids: list[str],
+        new_script_path: str,
+    ) -> None:
+        """Finalize prototype replacement by removing old artifacts.
+
+        This must only be called after all new prototype steps
+        (write_script, wire_main_script, update_index) have succeeded.
         """
         if self.pm is None:
             return
 
         project_dir = self.pm._project_dir(project_name)
 
-        # 1. Remove prototype entries from index
+        # 1. Remove old prototype index entries (keep only new_scene_ids)
         index = self.pm.read_project_index(project_name)
         if index and "scenes" in index:
-            prototype_ids = [
+            old_ids = [
                 sid for sid, s in index["scenes"].items()
-                if isinstance(s, dict) and s.get("source") == "prototype"
+                if isinstance(s, dict) and s.get("source") == "prototype" and sid not in new_scene_ids
             ]
-            if prototype_ids:
-                for sid in prototype_ids:
+            if old_ids:
+                for sid in old_ids:
                     del index["scenes"][sid]
                 self.pm.write_project_index(project_name, index)
 
-        # 2. Remove prototype script files
+        # 2. Remove old prototype files (keep only the new one)
         game_dir = project_dir / "game"
         if game_dir.exists():
+            new_file_name = Path(new_script_path).name
             for proto_file in game_dir.glob("prototype_*.rpy"):
-                try:
-                    proto_file.unlink()
-                except OSError:
-                    logger.warning("Failed to remove old prototype file: %s", proto_file)
+                if proto_file.name != new_file_name:
+                    try:
+                        proto_file.unlink()
+                    except OSError:
+                        logger.warning("Failed to remove old prototype file: %s", proto_file)
 
-    def cleanup_failed_prototype_artifacts(
+    def rollback_prototype_generation(
         self,
         project_name: str,
-        script_path: str | None,
+        new_script_path: str | None,
         new_scene_ids: list[str],
+        old_script_content: str | None,
     ) -> None:
-        """Clean up partial artifacts from a failed prototype generation round.
+        """Rollback a failed prototype generation round.
 
-        This is called from the orchestrator when any step after
-        write_script fails, to prevent leaving the project in a
-        half-generated state.
+        Restores the main script, removes the newly written prototype file,
+        and removes newly written index entries.  The previous stable
+        prototype (if any) is left untouched.
         """
         if self.pm is None:
             return
 
-        # 1. Remove newly written script file
-        if script_path:
+        # 1. Restore main script.rpy
+        self.restore_main_script(project_name, old_script_content)
+
+        # 2. Remove newly written prototype file
+        if new_script_path:
             project_dir = self.pm._project_dir(project_name)
-            file_path = project_dir / script_path
+            file_path = project_dir / new_script_path
             try:
                 if file_path.exists():
                     file_path.unlink()
             except OSError:
                 logger.warning("Failed to remove partial prototype file: %s", file_path)
 
-        # 2. Remove newly written index entries
+        # 3. Remove newly written index entries
         index = self.pm.read_project_index(project_name)
         if index and "scenes" in index:
             changed = False
@@ -368,8 +413,8 @@ Requirements:
     ) -> None:
         """Update meta/index.json with full prototype scene metadata.
 
-        Old prototype entries are removed first so that the index
-        always contains exactly one generation of prototype scenes.
+        Writes new prototype entries alongside any existing ones.
+        Old entries are only removed by commit_prototype_replacement().
         """
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for index writeback")
@@ -377,14 +422,6 @@ Requirements:
         index = self.pm.read_project_index(project_name) or {"scenes": {}}
         if "scenes" not in index:
             index["scenes"] = {}
-
-        # Remove old prototype entries first
-        old_prototype_ids = [
-            sid for sid, s in index["scenes"].items()
-            if isinstance(s, dict) and s.get("source") == "prototype"
-        ]
-        for sid in old_prototype_ids:
-            del index["scenes"][sid]
 
         for i, scene in enumerate(scenes):
             index["scenes"][scene.scene_id] = {
