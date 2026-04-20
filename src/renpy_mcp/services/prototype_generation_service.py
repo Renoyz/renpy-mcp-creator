@@ -86,6 +86,8 @@ class SpritePlanItem(BaseModel):
     sprite_placeholder: bool = True
     position: str = "center"
     expression: str = "neutral"
+    layout_mode: str = "solo"
+    transform_name: str = "proto_center_solo"
 
 
 class PrototypeScene(BaseModel):
@@ -508,6 +510,28 @@ Requirements:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(file_path, "PNG")
 
+    _SPRITE_LAYOUTS = {
+        "solo": {
+            "positions": ["center"],
+            "transforms": ["proto_center_solo"],
+        },
+        "duo": {
+            "positions": ["left", "right"],
+            "transforms": ["proto_left_duo", "proto_right_duo"],
+        },
+        "trio": {
+            "positions": ["left", "center", "right"],
+            "transforms": ["proto_left_trio", "proto_center_trio", "proto_right_trio"],
+        },
+    }
+
+    def _resolve_layout_mode(self, char_count: int) -> str:
+        if char_count == 1:
+            return "solo"
+        elif char_count == 2:
+            return "duo"
+        return "trio"
+
     def build_sprite_plan(
         self,
         scenes: list[PrototypeScene],
@@ -515,28 +539,36 @@ Requirements:
     ) -> None:
         """Assign sprite plans to each scene based on characters_present and available assets.
 
-        Positions are assigned deterministically:
-            1 character -> center
-            2 characters -> left, right
-            3+ characters -> left, center, right (cycling)
+        Layout mode is determined by character count:
+            1 character -> solo (center)
+            2 characters -> duo (left, right)
+            3+ characters -> trio (left, center, right)
+        Each sprite gets a layout-specific transform that controls zoom,
+        vertical anchor, and horizontal alignment.
         """
-        positions_pool = ["center", "left", "right"]
         char_registry = self._build_character_registry(scenes)
 
         for scene in scenes:
             sprite_plan: list[SpritePlanItem] = []
             chars = scene.characters_present
+            count = len(chars)
+            layout_mode = self._resolve_layout_mode(count)
+            layout = self._SPRITE_LAYOUTS[layout_mode]
+            positions = layout["positions"]
+            transforms = layout["transforms"]
+
             for idx, char_name in enumerate(chars):
                 asset = character_assets.get(char_name, {})
-                position = positions_pool[idx % len(positions_pool)]
                 safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or f"char_{idx}"
                 sprite_plan.append(SpritePlanItem(
                     character_name=char_name,
                     character_id=safe_id,
                     sprite_path=str(asset.get("path")) if asset.get("path") else None,
                     sprite_placeholder=asset.get("placeholder", True),
-                    position=position,
+                    position=positions[idx] if idx < len(positions) else positions[-1],
                     expression="neutral",
+                    layout_mode=layout_mode,
+                    transform_name=transforms[idx] if idx < len(transforms) else transforms[-1],
                 ))
             scene.sprite_plan = sprite_plan
 
@@ -581,6 +613,12 @@ Requirements:
                 'define gui.text_font = "fonts/simhei.ttf"',
                 'define gui.name_text_font = "fonts/simhei.ttf"',
                 'define gui.interface_text_font = "fonts/simhei.ttf"',
+                "",
+                "style say_dialogue:",
+                '    font "fonts/simhei.ttf"',
+                "",
+                "style say_label:",
+                '    font "fonts/simhei.ttf"',
                 "",
             ]
             config_path.write_text("\n".join(lines), encoding="utf-8")
@@ -685,6 +723,45 @@ Requirements:
         if char_assets:
             lines.append("")
 
+        # Emit prototype stage transforms for sprite layout
+        lines.append("# Prototype stage transforms")
+        lines.append("transform proto_center_solo:")
+        lines.append("    xalign 0.5")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.75")
+        lines.append("")
+        lines.append("transform proto_left_duo:")
+        lines.append("    xalign 0.28")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.62")
+        lines.append("")
+        lines.append("transform proto_right_duo:")
+        lines.append("    xalign 0.72")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.62")
+        lines.append("")
+        lines.append("transform proto_left_trio:")
+        lines.append("    xalign 0.20")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.52")
+        lines.append("")
+        lines.append("transform proto_center_trio:")
+        lines.append("    xalign 0.5")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.52")
+        lines.append("")
+        lines.append("transform proto_right_trio:")
+        lines.append("    xalign 0.80")
+        lines.append("    yanchor 1.0")
+        lines.append("    ypos 0.88")
+        lines.append("    zoom 0.52")
+        lines.append("")
+
         # Emit image definitions for backgrounds
         bg_assets = background_assets or {}
         for scene in scenes:
@@ -718,8 +795,8 @@ Requirements:
             for sp in scene.sprite_plan:
                 if sp.sprite_path and Path(sp.sprite_path).exists():
                     safe_id = sp.character_id or char_registry.get(sp.character_name) or _safe_character_id(sp.character_name) or "char_unknown"
-                    pos = sp.position
-                    lines.append(f"    show {safe_id}_neutral at {pos}")
+                    transform_name = sp.transform_name
+                    lines.append(f"    show {safe_id}_neutral at {transform_name}")
             # Output dialogue beats as say statements
             for beat in scene.dialogue_beats:
                 safe_id = char_registry.get(beat.speaker)

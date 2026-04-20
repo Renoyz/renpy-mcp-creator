@@ -2102,8 +2102,8 @@ async def test_write_script_emits_character_image_definitions_and_show_statement
     for scene in scenes:
         for sp in scene.sprite_plan:
             safe_id = sp.character_id
-            assert f"show {safe_id}_neutral at {sp.position}" in content, (
-                f"Must show sprite for {sp.character_name} at {sp.position}"
+            assert f"show {safe_id}_neutral at {sp.transform_name}" in content, (
+                f"Must show sprite for {sp.character_name} at {sp.transform_name}"
             )
 
 
@@ -2212,3 +2212,256 @@ async def test_update_index_persists_sprite_metadata(
         for item in plan:
             assert item["character_name"] in scene.characters_present
             assert item["position"] in ("left", "center", "right")
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Round 8: Sprite stage layout + CJK font runtime fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_sprite_plan_assigns_layout_modes_for_solo_duo_trio(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """build_sprite_plan must assign layout_mode based on character count."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_layout_modes"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    # Manually construct scenes with 1, 2, 3 characters
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Solo", summary="solo scene", location="loc1",
+            characters_present=["Alice"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id="s2",
+        ),
+        PrototypeScene(
+            scene_id="s2", title="Duo", summary="duo scene", location="loc2",
+            characters_present=["Alice", "Bob"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s2", next_scene_id="s3",
+        ),
+        PrototypeScene(
+            scene_id="s3", title="Trio", summary="trio scene", location="loc3",
+            characters_present=["Alice", "Bob", "Carol"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s3", next_scene_id=None,
+        ),
+    ]
+
+    char_assets = {}
+    for scene in scenes:
+        for char_name in scene.characters_present:
+            if char_name not in char_assets:
+                fake_path = tmp_path / project_name / "game" / "images" / "character" / f"{char_name}.png"
+                fake_path.parent.mkdir(parents=True, exist_ok=True)
+                fake_path.write_bytes(b"fake")
+                char_assets[char_name] = {"path": fake_path, "placeholder": False}
+
+    service.build_sprite_plan(scenes, char_assets)
+
+    solo_plan = scenes[0].sprite_plan
+    assert len(solo_plan) == 1
+    assert solo_plan[0].layout_mode == "solo", f"Expected solo, got {solo_plan[0].layout_mode}"
+
+    duo_plan = scenes[1].sprite_plan
+    assert len(duo_plan) == 2
+    for sp in duo_plan:
+        assert sp.layout_mode == "duo", f"Expected duo, got {sp.layout_mode}"
+
+    trio_plan = scenes[2].sprite_plan
+    assert len(trio_plan) == 3
+    for sp in trio_plan:
+        assert sp.layout_mode == "trio", f"Expected trio, got {sp.layout_mode}"
+
+
+@pytest.mark.asyncio
+async def test_write_script_emits_prototype_runtime_transforms_for_sprite_layout(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Script must contain prototype-specific transforms that control zoom and anchor."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_transforms"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Solo", summary="solo", location="loc1",
+            characters_present=["Alice"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    char_assets = {
+        "Alice": {
+            "path": tmp_path / project_name / "game" / "images" / "character" / "alice.png",
+            "placeholder": False,
+        }
+    }
+    char_assets["Alice"]["path"].parent.mkdir(parents=True, exist_ok=True)
+    char_assets["Alice"]["path"].write_bytes(b"fake")
+
+    service.build_sprite_plan(scenes, char_assets)
+    staging_path = service.write_script(project_name, blueprint.chapters[0], scenes, character_assets=char_assets)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+
+    # Must emit prototype transform definitions
+    assert "transform proto_center_solo" in content, (
+        f"Missing proto_center_solo transform. Content:\n{content}"
+    )
+    assert "zoom" in content, "Transforms must control zoom"
+    assert "yanchor" in content or "ypos" in content, "Transforms must control vertical position"
+
+
+@pytest.mark.asyncio
+async def test_write_script_uses_layout_specific_show_transforms(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Show statements must use layout-specific transforms, not bare left/right/center."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_show_transforms"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Duo", summary="duo", location="loc1",
+            characters_present=["Alice", "Bob"],
+            dialogue_beats=[
+                DialogueBeat(speaker="Alice", intent="test", content_brief="hi"),
+            ],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    char_assets = {}
+    for char_name in scenes[0].characters_present:
+        fake_path = tmp_path / project_name / "game" / "images" / "character" / f"{char_name}.png"
+        fake_path.parent.mkdir(parents=True, exist_ok=True)
+        fake_path.write_bytes(b"fake")
+        char_assets[char_name] = {"path": fake_path, "placeholder": False}
+
+    service.build_sprite_plan(scenes, char_assets)
+    staging_path = service.write_script(project_name, blueprint.chapters[0], scenes, character_assets=char_assets)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+
+    # Must use proto_left_duo / proto_right_duo
+    assert "proto_left_duo" in content, f"Missing proto_left_duo in show statement. Content:\n{content}"
+    assert "proto_right_duo" in content, f"Missing proto_right_duo in show statement. Content:\n{content}"
+
+    # Must NOT use bare left / right inside show statements
+    assert "show " not in content or " at left" not in content, (
+        f"Must not use bare 'at left'. Content:\n{content}"
+    )
+    assert "show " not in content or " at right" not in content, (
+        f"Must not use bare 'at right'. Content:\n{content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cjk_font_config_covers_runtime_dialogue_styles(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """CJK font config must cover say_dialogue and say_label styles, not just gui.text_font."""
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_cjk_runtime"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+        assert config_path.exists()
+        content = config_path.read_text(encoding="utf-8")
+
+        # Must set GUI fonts
+        assert "gui.text_font" in content
+        assert "gui.name_text_font" in content
+
+        # Must override say screen styles
+        assert "style say_dialogue" in content, (
+            f"Must override say_dialogue style. Content:\n{content}"
+        )
+        assert "style say_label" in content, (
+            f"Must override say_label style. Content:\n{content}"
+        )
+        assert config["configured"] is True
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+@pytest.mark.asyncio
+async def test_font_config_is_disabled_when_font_file_missing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """When the system font is missing, config must not write bad font references."""
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_font_missing"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+    proto_module._CJK_FONT_SOURCE = tmp_path / "nonexistent.ttf"
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+        assert config_path.exists()
+        content = config_path.read_text(encoding="utf-8")
+
+        # No font definitions should be written
+        assert "gui.text_font" not in content, (
+            f"Must not define fonts when missing. Content:\n{content}"
+        )
+        assert "style say_dialogue" not in content, (
+            f"Must not define say styles when missing. Content:\n{content}"
+        )
+        assert config["configured"] is False
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
