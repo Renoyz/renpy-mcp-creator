@@ -178,12 +178,16 @@ export function ProjectWorkspacePage() {
         setBuildStatus("success");
         setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
         setPreviewAvailable(true);
-        setPipelineStage("prototype_preview_ready");
+        if (hasPrototype) {
+          setPipelineStage("prototype_preview_ready");
+        }
       } else {
         setBuildStatus("failed");
         setBuildMessage(data.error || "Build failed");
         setPreviewAvailable(false);
-        setPipelineStage("prototype_build_failed");
+        if (hasPrototype) {
+          setPipelineStage("prototype_build_failed");
+        }
       }
     } catch (e) {
       setBuildStatus("failed");

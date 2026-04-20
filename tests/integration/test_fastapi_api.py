@@ -1953,9 +1953,9 @@ class TestPrototypePipelineStatus:
         """When blueprint_session.json indicates generating, pipeline should report prototype_generating."""
         project_name = "pipeline_generating"
         client.post("/api/projects", json={"name": project_name})
-        self._seed_prototype(tmp_path, project_name)
 
         meta_dir = tmp_path / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
         (meta_dir / "blueprint_session.json").write_text(
             json.dumps({"pipeline_stage": "generating", "awaiting_confirmation": False}),
             encoding="utf-8",
@@ -1965,5 +1965,58 @@ class TestPrototypePipelineStatus:
         assert r.status_code == 200
         data = r.json()
         assert data["stage"] == "prototype_generating"
-        assert data["has_prototype"] is True
+        assert data["has_prototype"] is False
         assert data["build_status"] == "idle"
+
+    def test_pipeline_status_returns_generating_from_runtime_session_before_prototype_artifacts_exist(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """Real confirmation window: no prototype on disk yet, but runtime session says generating."""
+        project_name = "pipeline_generating_real"
+        client.post("/api/projects", json={"name": project_name})
+
+        meta_dir = tmp_path / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "blueprint_session.json").write_text(
+            json.dumps({"pipeline_stage": "generating", "awaiting_confirmation": False}),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_generating"
+        assert data["has_prototype"] is False
+        assert data["build_status"] == "idle"
+
+    def test_pipeline_status_stays_idle_after_generic_build_without_prototype(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Generic build on a non-prototype project must not promote pipeline to prototype stages."""
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        project_name = "pipeline_generic_build"
+        client.post("/api/projects", json={"name": project_name})
+        client.post("/api/projects/select", json={"name": project_name})
+
+        r = client.post("/api/projects/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+        # Pipeline status should remain idle because there are no prototype artifacts
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "idle"
+        assert data["has_prototype"] is False

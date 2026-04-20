@@ -768,11 +768,11 @@ def create_app() -> FastAPI:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Derive stage
-        if not has_proto:
-            stage = "idle"
-        elif runtime_stage == "generating":
+        # Derive stage: runtime generation takes priority over artifact checks
+        if runtime_stage == "generating":
             stage = "prototype_generating"
+        elif not has_proto:
+            stage = "idle"
         elif build_status and build_status.get("status") == "building":
             stage = "prototype_building"
         elif build_status and build_status.get("status") == "failed":
@@ -782,12 +782,30 @@ def create_app() -> FastAPI:
         else:
             stage = "prototype_ready"
 
+        message_map = {
+            "idle": "No prototype generated yet",
+            "prototype_generating": "Prototype generation in progress",
+            "prototype_ready": "Prototype ready, not yet built",
+            "prototype_building": "Prototype build in progress",
+            "prototype_build_failed": "Prototype build failed",
+            "prototype_preview_ready": "Prototype built and previewable",
+        }
+
+        if build_status:
+            # When idle but a build record exists (generic build), preserve the build message
+            if stage == "idle":
+                message = build_status.get("message", "")
+            else:
+                message = message_map.get(stage, build_status.get("message", ""))
+        else:
+            message = message_map.get(stage, "")
+
         return {
             "stage": stage,
             "has_prototype": has_proto,
             "previewable": build_status.get("previewable", False) if build_status else False,
             "build_status": build_status.get("status", "idle") if build_status else "idle",
-            "message": build_status.get("message", "") if build_status else "",
+            "message": message,
         }
 
     @app.post("/api/projects/{project_name}/prototype/build")

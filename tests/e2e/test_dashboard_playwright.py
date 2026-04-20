@@ -965,6 +965,46 @@ def test_no_blind_build_poll_for_idle_pipeline(
     )
 
 
+def test_generic_build_does_not_pollute_prototype_pipeline_stage(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """A generic build on a non-prototype project must not shift pipeline into prototype stages."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_generic_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_blueprint(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Click Build and wait for terminal state
+    build_button = page.locator("button", has_text=re.compile("Build|Building"))
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+    expect(build_button).not_to_contain_text("Building", timeout=30000)
+
+    # Build status should indicate success (mock build produces output)
+    status_locator = page.locator("[data-testid='build-status']")
+    expect(status_locator).to_be_visible(timeout=10000)
+    status_text = status_locator.text_content() or ""
+    assert (
+        "Build" in status_text
+        or "Built" in status_text
+        or "succeeded" in status_text.lower()
+    ), f"Unexpected build status: {status_text}"
+
+    # Direct API check: pipeline-status must still be idle (no prototype artifacts)
+    r = httpx.get(
+        f"{server_url}/api/projects/{project_name}/prototype/pipeline-status",
+        timeout=5.0,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["stage"] == "idle", (
+        f"Generic build should not promote pipeline stage to prototype-specific; got {data['stage']}"
+    )
+    assert data["has_prototype"] is False
+
+
 def test_workspace_shows_blueprint_chapters_and_scenes(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
