@@ -468,6 +468,7 @@ def create_app() -> FastAPI:
                                 "dialogue_beats": s.get("dialogue_beats", []),
                                 "summary": s.get("summary"),
                                 "background_placeholder": s.get("background_placeholder", True),
+                                "sprite_plan": s.get("sprite_plan", []),
                             }
                             for s in scenes
                         ],

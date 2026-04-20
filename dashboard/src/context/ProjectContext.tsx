@@ -32,6 +32,15 @@ export interface DialogueBeat {
   content_brief: string;
 }
 
+export interface SpritePlanItem {
+  character_name: string;
+  character_id: string;
+  sprite_path: string | null;
+  sprite_placeholder: boolean;
+  position: string;
+  expression: string;
+}
+
 export interface Scene {
   id: string;
   name: string;
@@ -49,6 +58,7 @@ export interface Scene {
   dialogue_beats?: DialogueBeat[];
   summary?: string | null;
   background_placeholder?: boolean;
+  sprite_plan?: SpritePlanItem[];
 }
 
 export interface Chapter {

@@ -10,17 +10,28 @@ from pathlib import Path
 from typing import Any
 
 
+_RENPY_KEYWORDS = frozenset({
+    "define", "image", "label", "scene", "show", "hide", "with", "menu",
+    "return", "jump", "call", "if", "elif", "else", "while", "for", "in",
+    "True", "False", "None", "and", "or", "not", "is", "pass", "continue",
+    "break", "init", "python", "default", "transform", "screen", "style",
+})
+
+
 def _safe_character_id(name: str) -> str:
     """Convert a display name to a safe Ren'Py identifier.
 
     Keeps ASCII alphanumerics; everything else becomes underscore.
     Collapses consecutive underscores.  Falls back to empty string
-    for names with no ASCII chars (e.g. pure CJK).
+    for empty, numeric-leading, or keyword identifiers.
     """
     result = "".join(c if c.isascii() and c.isalnum() else "_" for c in name)
     while "__" in result:
         result = result.replace("__", "_")
-    return result.strip("_")
+    result = result.strip("_")
+    if not result or result[0].isdigit() or result in _RENPY_KEYWORDS:
+        return ""
+    return result
 
 
 def _escape_renpy_string(text: str) -> str:
@@ -66,6 +77,17 @@ class DialogueBeat(BaseModel):
     content_brief: str
 
 
+class SpritePlanItem(BaseModel):
+    """A single character sprite placement within a scene."""
+
+    character_name: str
+    character_id: str = ""
+    sprite_path: str | None = None
+    sprite_placeholder: bool = True
+    position: str = "center"
+    expression: str = "neutral"
+
+
 class PrototypeScene(BaseModel):
     """A detailed scene generated for the prototype chapter."""
 
@@ -77,6 +99,7 @@ class PrototypeScene(BaseModel):
     mood: str = ""
     characters_present: list[str] = Field(default_factory=list)
     dialogue_beats: list[DialogueBeat] = Field(default_factory=list)
+    sprite_plan: list[SpritePlanItem] = Field(default_factory=list)
     entry_label: str
     next_scene_id: str | None = None
 
@@ -256,11 +279,14 @@ Requirements:
 
     async def generate_background_assets(
         self, project_name: str, scenes: list[PrototypeScene]
-    ) -> dict[str, Path]:
+    ) -> dict[str, dict]:
         """Generate background images for each scene.
 
         Tries ImageService first; falls back to PIL placeholder on failure.
-        Returns a mapping of scene_id -> background file path.
+
+        Returns:
+            Mapping scene_id -> {"path": Path | None, "placeholder": bool, "source": str}
+            where source is one of "image_service", "pil_fallback", or "none".
         """
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for asset generation")
@@ -269,7 +295,7 @@ Requirements:
         bg_dir = project_dir / "game" / "images" / "background"
         bg_dir.mkdir(parents=True, exist_ok=True)
 
-        result: dict[str, Path] = {}
+        result: dict[str, dict] = {}
         for scene in scenes:
             file_name = f"bg_{scene.scene_id}.png"
             file_path = bg_dir / file_name
@@ -296,7 +322,11 @@ Requirements:
                         base_name=f"bg_{scene.scene_id}",
                     )
                     if gen_result.success and gen_result.primary_file:
-                        result[scene.scene_id] = gen_result.primary_file
+                        result[scene.scene_id] = {
+                            "path": gen_result.primary_file,
+                            "placeholder": False,
+                            "source": "image_service",
+                        }
                         image_generated = True
             except Exception as exc:
                 logger.warning("ImageService background generation failed for %s: %s", scene.scene_id, exc)
@@ -305,9 +335,18 @@ Requirements:
                 # Fallback: generate a simple placeholder with PIL
                 try:
                     self._generate_placeholder_background(file_path, scene)
-                    result[scene.scene_id] = file_path
+                    result[scene.scene_id] = {
+                        "path": file_path,
+                        "placeholder": True,
+                        "source": "pil_fallback",
+                    }
                 except Exception as exc:
                     logger.warning("PIL placeholder generation failed for %s: %s", scene.scene_id, exc)
+                    result[scene.scene_id] = {
+                        "path": None,
+                        "placeholder": True,
+                        "source": "none",
+                    }
 
         return result
 
@@ -343,6 +382,163 @@ Requirements:
 
         file_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(file_path, "PNG")
+
+    # ------------------------------------------------------------------
+    # Character sprite asset generation
+    # ------------------------------------------------------------------
+
+    async def generate_character_assets(
+        self, project_name: str, blueprint: ProjectBlueprint, scenes: list[PrototypeScene]
+    ) -> dict[str, dict]:
+        """Generate character sprite images for all characters in prototype scenes.
+
+        Tries ImageService first; falls back to PIL placeholder on failure.
+        Attempts background removal via BackgroundRemover when available.
+
+        Returns:
+            Mapping character_name -> {"path": Path | None, "placeholder": bool}
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for asset generation")
+
+        project_dir = self.pm._project_dir(project_name)
+        char_dir = project_dir / "game" / "images" / "character"
+        char_dir.mkdir(parents=True, exist_ok=True)
+
+        # Collect unique characters from all scenes
+        unique_chars: set[str] = set()
+        for scene in scenes:
+            for name in scene.characters_present:
+                unique_chars.add(name)
+
+        # Build character info lookup from blueprint
+        char_info: dict[str, dict] = {}
+        for c in blueprint.characters:
+            char_info[c.name] = {
+                "appearance": c.appearance,
+                "personality": c.personality,
+            }
+
+        result: dict[str, dict] = {}
+        char_registry = self._build_character_registry(scenes)
+
+        for char_name in unique_chars:
+            safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or "char_unknown"
+            file_name = f"{safe_id}_neutral.png"
+            file_path = char_dir / file_name
+
+            info = char_info.get(char_name, {})
+            appearance = info.get("appearance", "anime character")
+            personality = info.get("personality", "")
+
+            char_prompt = (
+                f"Portrait of {char_name}. "
+                f"Appearance: {appearance}. "
+                f"Personality: {personality}. "
+                "Visual novel character sprite style, "
+                "standing pose, facing viewer, white/plain background, "
+                "full body visible, clean line art, anime style."
+            )
+
+            image_generated = False
+            try:
+                from renpy_mcp.config import get_settings
+                from renpy_mcp.ai.image_service import ImageService
+
+                settings = get_settings()
+                image_service = ImageService(settings)
+                if image_service.is_available():
+                    gen_result = await image_service.generate_image(
+                        project_dir=project_dir,
+                        prompt=char_prompt,
+                        image_type="character",
+                        base_name=f"{safe_id}_neutral",
+                    )
+                    if gen_result.success and gen_result.primary_file:
+                        generated_path = gen_result.primary_file
+                        # Try background removal
+                        transparent_path: Path | None = None
+                        try:
+                            from renpy_mcp.ai.background_remover import BackgroundRemover
+                            remover = BackgroundRemover()
+                            transparent_path = remover.remove_background(generated_path)
+                        except Exception as exc:
+                            logger.warning("Background removal failed for %s: %s", char_name, exc)
+
+                        if transparent_path and transparent_path.exists():
+                            result[char_name] = {
+                                "path": transparent_path,
+                                "placeholder": False,
+                            }
+                        else:
+                            result[char_name] = {
+                                "path": generated_path,
+                                "placeholder": False,
+                            }
+                        image_generated = True
+            except Exception as exc:
+                logger.warning("Character image generation failed for %s: %s", char_name, exc)
+
+            if not image_generated:
+                # Fallback: generate a simple placeholder with PIL
+                try:
+                    self._generate_placeholder_character(file_path, char_name)
+                    result[char_name] = {
+                        "path": file_path,
+                        "placeholder": True,
+                    }
+                except Exception as exc:
+                    logger.warning("Character placeholder generation failed for %s: %s", char_name, exc)
+                    result[char_name] = {
+                        "path": None,
+                        "placeholder": True,
+                    }
+
+        return result
+
+    def _generate_placeholder_character(self, file_path: Path, char_name: str) -> None:
+        """Generate a transparent placeholder character sprite using PIL."""
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGBA", (400, 750), color=(0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.text((20, 20), f"{char_name}", fill=(200, 200, 200, 255))
+        draw.text((20, 50), "SPRITE PLACEHOLDER", fill=(180, 180, 180, 255))
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(file_path, "PNG")
+
+    def build_sprite_plan(
+        self,
+        scenes: list[PrototypeScene],
+        character_assets: dict[str, dict],
+    ) -> None:
+        """Assign sprite plans to each scene based on characters_present and available assets.
+
+        Positions are assigned deterministically:
+            1 character -> center
+            2 characters -> left, right
+            3+ characters -> left, center, right (cycling)
+        """
+        positions_pool = ["center", "left", "right"]
+        char_registry = self._build_character_registry(scenes)
+
+        for scene in scenes:
+            sprite_plan: list[SpritePlanItem] = []
+            chars = scene.characters_present
+            for idx, char_name in enumerate(chars):
+                asset = character_assets.get(char_name, {})
+                position = positions_pool[idx % len(positions_pool)]
+                safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or f"char_{idx}"
+                sprite_plan.append(SpritePlanItem(
+                    character_name=char_name,
+                    character_id=safe_id,
+                    sprite_path=str(asset.get("path")) if asset.get("path") else None,
+                    sprite_placeholder=asset.get("placeholder", True),
+                    position=position,
+                    expression="neutral",
+                ))
+            scene.sprite_plan = sprite_plan
 
     # ------------------------------------------------------------------
     # CJK font configuration
@@ -419,12 +615,21 @@ Requirements:
                     registry[name] = safe
         return registry
 
+    def _extract_bg_path(self, bg_asset: Any) -> Path | None:
+        """Extract path from background asset (supports dict and legacy Path)."""
+        if isinstance(bg_asset, dict):
+            return bg_asset.get("path")
+        if isinstance(bg_asset, Path):
+            return bg_asset
+        return None
+
     def write_script(
         self,
         project_name: str,
         chapter: ChapterSummary,
         scenes: list[PrototypeScene],
-        background_assets: dict[str, Path] | None = None,
+        background_assets: dict[str, Any] | None = None,
+        character_assets: dict[str, dict] | None = None,
     ) -> str:
         """Generate and write a minimal executable .rpy script skeleton to a staging file.
 
@@ -433,8 +638,10 @@ Requirements:
         commit_prototype_replacement() to promote it to the final path.
 
         Args:
-            background_assets: Optional mapping of scene_id -> background image path.
-                If provided, the script will reference real background assets.
+            background_assets: Optional mapping of scene_id -> background asset info.
+                Supports both new dict format {"path": Path, "placeholder": bool}
+                and legacy Path format for backward compatibility.
+            character_assets: Optional mapping of character_name -> {"path": Path, "placeholder": bool}.
 
         Returns:
             The staging relative file path.
@@ -466,10 +673,22 @@ Requirements:
         if char_registry:
             lines.append("")
 
+        # Emit character sprite image definitions
+        char_assets = character_assets or {}
+        for char_name, asset in char_assets.items():
+            char_path = asset.get("path")
+            if char_path and char_path.exists():
+                rel_path = char_path.relative_to(project_dir).as_posix()
+                runtime_path = _to_renpy_asset_path(rel_path)
+                safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or "char_unknown"
+                lines.append(f'image {safe_id}_neutral = "{runtime_path}"')
+        if char_assets:
+            lines.append("")
+
         # Emit image definitions for backgrounds
         bg_assets = background_assets or {}
         for scene in scenes:
-            bg_path = bg_assets.get(scene.scene_id)
+            bg_path = self._extract_bg_path(bg_assets.get(scene.scene_id))
             if bg_path and bg_path.exists():
                 rel_path = bg_path.relative_to(project_dir).as_posix()
                 runtime_path = _to_renpy_asset_path(rel_path)
@@ -481,7 +700,7 @@ Requirements:
         for i, scene in enumerate(scenes):
             lines.append(f"label {scene.entry_label}:")
             # Use real background asset if available, else controlled fallback
-            bg_path = bg_assets.get(scene.scene_id)
+            bg_path = self._extract_bg_path(bg_assets.get(scene.scene_id))
             safe_tag = _safe_image_tag(scene.scene_id)
             if bg_path and bg_path.exists():
                 lines.append(f"    scene bg_{safe_tag}")
@@ -495,6 +714,12 @@ Requirements:
                 chars = "、".join(scene.characters_present)
                 escaped_chars = _escape_renpy_string(chars)
                 lines.append(f'    "【登场角色：{escaped_chars}】"')
+            # Show sprites for characters in this scene (only when asset exists)
+            for sp in scene.sprite_plan:
+                if sp.sprite_path and Path(sp.sprite_path).exists():
+                    safe_id = sp.character_id or char_registry.get(sp.character_name) or _safe_character_id(sp.character_name) or "char_unknown"
+                    pos = sp.position
+                    lines.append(f"    show {safe_id}_neutral at {pos}")
             # Output dialogue beats as say statements
             for beat in scene.dialogue_beats:
                 safe_id = char_registry.get(beat.speaker)
@@ -743,7 +968,8 @@ Requirements:
         chapter: ChapterSummary,
         scenes: list[PrototypeScene],
         script_path: str,
-        background_assets: dict[str, Path] | None = None,
+        background_assets: dict[str, Any] | None = None,
+        character_assets: dict[str, dict] | None = None,
         cjk_font_config: dict | None = None,
     ) -> None:
         """Update meta/index.json with full prototype scene metadata.
@@ -759,8 +985,20 @@ Requirements:
             index["scenes"] = {}
 
         bg_assets = background_assets or {}
+        char_assets = character_assets or {}
+        project_dir = self.pm._project_dir(project_name)
+
         for i, scene in enumerate(scenes):
-            bg_path = bg_assets.get(scene.scene_id)
+            bg_asset = bg_assets.get(scene.scene_id)
+            bg_path: Path | None = None
+            bg_placeholder = True
+            if isinstance(bg_asset, dict):
+                bg_path = bg_asset.get("path")
+                bg_placeholder = bg_asset.get("placeholder", True)
+            elif isinstance(bg_asset, Path):
+                bg_path = bg_asset
+                bg_placeholder = not bg_path.exists()
+
             entry = {
                 "chapter_id": chapter.id,
                 "scene_id": scene.scene_id,
@@ -771,15 +1009,26 @@ Requirements:
                 "mood": scene.mood,
                 "characters_present": scene.characters_present,
                 "dialogue_beats": [b.model_dump() for b in scene.dialogue_beats],
+                "sprite_plan": [sp.model_dump() for sp in scene.sprite_plan],
                 "next_scene_id": scene.next_scene_id,
                 "label": scene.entry_label,
                 "file_path": script_path,
                 "source": "prototype",
                 "order": i + 1,
-                "background_asset_path": str(bg_path.relative_to(self.pm._project_dir(project_name)).as_posix()) if bg_path and bg_path.exists() else None,
-                "background_placeholder": not (bg_path and bg_path.exists()),
+                "background_asset_path": str(bg_path.relative_to(project_dir).as_posix()) if bg_path and bg_path.exists() else None,
+                "background_placeholder": bg_placeholder,
             }
             index["scenes"][scene.scene_id] = entry
+
+        # Persist character asset metadata at index top level
+        if char_assets:
+            index["character_assets"] = {
+                name: {
+                    "path": str(info["path"].relative_to(project_dir).as_posix()) if info.get("path") and info["path"].exists() else None,
+                    "placeholder": info.get("placeholder", True),
+                }
+                for name, info in char_assets.items()
+            }
 
         if cjk_font_config:
             index["cjk_font_config"] = cjk_font_config

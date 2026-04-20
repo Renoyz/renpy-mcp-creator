@@ -860,25 +860,35 @@ Requirements:
                     # Step 2: generate background assets for each scene
                     bg_assets = await service.generate_background_assets(self.project_name, scenes)
 
-                    # Step 3: ensure CJK-safe font configuration
+                    # Step 3: generate character sprite assets
+                    char_assets = await service.generate_character_assets(
+                        self.project_name, self.draft, scenes
+                    )
+
+                    # Step 4: build sprite plans for each scene
+                    service.build_sprite_plan(scenes, char_assets)
+
+                    # Step 5: ensure CJK-safe font configuration
                     cjk_font_config = service.ensure_cjk_font_config(self.project_name)
 
-                    # Step 4: write new prototype script to staging file (with real backgrounds)
+                    # Step 6: write new prototype script to staging file (with real backgrounds + sprites)
                     staging_path = service.write_script(
-                        self.project_name, chapter, scenes, background_assets=bg_assets
+                        self.project_name, chapter, scenes,
+                        background_assets=bg_assets, character_assets=char_assets,
                     )
                     final_path = service._final_path_from_staging(staging_path)
 
-                    # Step 5: backup main script before rewiring
+                    # Step 7: backup main script before rewiring
                     old_script_content = service.backup_main_script(self.project_name)
 
-                    # Step 6: wire main script to new prototype entry
+                    # Step 8: wire main script to new prototype entry
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
 
-                    # Step 7: write new prototype index entries (pointing to final path)
+                    # Step 9: write new prototype index entries (pointing to final path)
                     service.update_index(
                         self.project_name, chapter, scenes, final_path,
-                        background_assets=bg_assets, cjk_font_config=cjk_font_config,
+                        background_assets=bg_assets, character_assets=char_assets,
+                        cjk_font_config=cjk_font_config,
                     )
 
                     # Step 8: commit — promote staging file and remove old artifacts
