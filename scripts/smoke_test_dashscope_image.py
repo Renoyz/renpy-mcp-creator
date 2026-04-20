@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Smoke test for Alibaba DashScope image generation API (native endpoint).
-Tests qwen-image-2.0-pro using the multimodal-generation endpoint.
+Tests DashScope image generation using the multimodal-generation endpoint.
 
 Exit codes:
     0 - Image generation works.
@@ -31,11 +31,11 @@ def main() -> int:
         return 1
 
     print(f"Endpoint: {base_url}")
-    print(f"Model:    qwen-image-2.0-pro")
+    print(f"Model:    qwen-image-2.1")
     print("-" * 60)
 
     payload = {
-        "model": "qwen-image-2.0-pro",
+        "model": "qwen-image-2.1",
         "input": {
             "messages": [
                 {
@@ -104,7 +104,7 @@ def main() -> int:
         return 1
 
     print("\n" + "=" * 60)
-    print("SUCCESS: DashScope qwen-image-2.0-pro is working!")
+    print("SUCCESS: DashScope image generation is working!")
     print("=" * 60)
     return 0
 

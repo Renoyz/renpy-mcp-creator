@@ -1,4 +1,4 @@
-"""Generate visual assets using DashScope qwen-image-2.0-pro."""
+"""Generate visual assets using DashScope image models (default: qwen-image-2.1)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from ..models import ImageGenerationResult
 logger = logging.getLogger(__name__)
 
 _DASHSCOPE_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-_DEFAULT_MODEL = "qwen-image-2.0-pro"
+_DEFAULT_MODEL = "qwen-image-2.1"
 
 
 def _slugify(value: str) -> str:

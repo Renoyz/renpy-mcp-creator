@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     gemini_image_model: str = Field(default="gemini-2.5-flash-image")
     gemini_text_model: str = Field(default="gemini-2.0-flash-exp")
     default_template: str = Field(default="basic")
+
+    # DashScope image generation model override
+    dashscope_image_model: str = Field(
+        default="qwen-image-2.1",
+        description="DashScope image generation model. Default changed from qwen-image-2.0-pro to conserve quota.",
+    )
     session_secret: str | None = Field(
         default=None,
         description="Secret key for HTTP session signing. Falls back to SESSION_SECRET env var, then a random token generated at startup.",

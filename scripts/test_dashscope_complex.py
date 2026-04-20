@@ -6,7 +6,7 @@ api_key = os.environ["DASHSCOPE_API_KEY"]
 url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
 payload = {
-    "model": "qwen-image-2.0-pro",
+    "model": "qwen-image-2.1",
     "input": {
         "messages": [
             {
