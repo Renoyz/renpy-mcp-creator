@@ -2302,3 +2302,59 @@ class TestPreviewStatus:
         session = json.loads((meta_dir / "blueprint_session.json").read_text(encoding="utf-8"))
         assert session["pipeline_stage"] == "confirmed"
         assert session["awaiting_confirmation"] is False
+
+
+    def test_scenes_api_returns_controlled_sprite_paths_not_absolute_filesystem_paths(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """GET /scenes must return sprite paths as project-relative, not absolute filesystem paths."""
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+
+        project_name = "scenes_sprite_path"
+        client.post("/api/projects", json={"name": project_name})
+
+        pm = ProjectManager(get_settings())
+        index = {
+            "scenes": {
+                "proto-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s1",
+                    "title": "Test",
+                    "summary": "Test scene",
+                    "location": "library",
+                    "next_scene_id": None,
+                    "label": "prototype_start",
+                    "file_path": "game/prototype.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                    "sprite_plan": [
+                        {
+                            "character_name": "Alice",
+                            "character_id": "char_0",
+                            "sprite_path": "game/images/character/char_0_neutral.png",
+                            "sprite_placeholder": False,
+                            "sprite_renderable": True,
+                            "sprite_quality_reason": "ok",
+                            "position": "center",
+                            "expression": "neutral",
+                            "layout_mode": "solo",
+                            "transform_name": "proto_center_solo",
+                        }
+                    ],
+                }
+            }
+        }
+        pm.write_project_index(project_name, index)
+
+        r = client.get(f"/api/projects/{project_name}/scenes")
+        assert r.status_code == 200
+        data = r.json()
+        scenes = data["chapters"][0]["scenes"]
+        sprite_plan = scenes[0]["sprite_plan"]
+        assert len(sprite_plan) == 1
+        sprite_path = sprite_plan[0]["sprite_path"]
+        assert not Path(sprite_path).is_absolute(), (
+            f"API must not return absolute sprite path: {sprite_path}"
+        )
+        assert sprite_path == "game/images/character/char_0_neutral.png"

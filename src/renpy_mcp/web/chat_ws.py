@@ -847,6 +847,9 @@ Requirements:
             final_path: str | None = None
             new_scene_ids: list[str] = []
             old_script_content: str | None = None
+            bg_assets: dict | None = None
+            char_assets: dict | None = None
+            cjk_font_config: dict | None = None
             if self.draft:
                 try:
                     provider = _get_provider()
@@ -866,7 +869,7 @@ Requirements:
                     )
 
                     # Step 4: build sprite plans for each scene
-                    service.build_sprite_plan(scenes, char_assets)
+                    service.build_sprite_plan(scenes, char_assets, project_name=self.project_name)
 
                     # Step 5: ensure CJK-safe font configuration
                     cjk_font_config = service.ensure_cjk_font_config(self.project_name)
@@ -891,7 +894,7 @@ Requirements:
                         cjk_font_config=cjk_font_config,
                     )
 
-                    # Step 8: commit — promote staging file and remove old artifacts
+                    # Step 10: commit — promote staging file and remove old artifacts
                     service.commit_prototype_replacement(self.project_name, new_scene_ids, staging_path)
 
                 except Exception as e:
@@ -900,9 +903,23 @@ Requirements:
                     # Rollback partial artifacts, preserving previous stable prototype
                     try:
                         if self.pm is not None:
+                            # Collect newly generated asset paths for cleanup
+                            new_asset_paths: list[str] = []
+                            if bg_assets:
+                                for info in bg_assets.values():
+                                    if info.get("is_new_file") and info.get("path"):
+                                        new_asset_paths.append(str(info["path"]))
+                            if char_assets:
+                                for info in char_assets.values():
+                                    if info.get("is_new_file") and info.get("path"):
+                                        new_asset_paths.append(info["path"])
+                            if cjk_font_config:
+                                new_asset_paths.extend(cjk_font_config.get("new_files", []))
+
                             rollback_service = PrototypeGenerationService(self.pm, None)
                             rollback_service.rollback_prototype_generation(
-                                self.project_name, staging_path, new_scene_ids, old_script_content
+                                self.project_name, staging_path, new_scene_ids, old_script_content,
+                                generated_asset_paths=new_asset_paths,
                             )
                     except Exception:
                         logger.exception(

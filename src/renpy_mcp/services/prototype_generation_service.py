@@ -330,6 +330,7 @@ Requirements:
                             "path": gen_result.primary_file,
                             "placeholder": False,
                             "source": "image_service",
+                            "is_new_file": True,
                         }
                         image_generated = True
             except Exception as exc:
@@ -343,6 +344,7 @@ Requirements:
                         "path": file_path,
                         "placeholder": True,
                         "source": "pil_fallback",
+                        "is_new_file": True,
                     }
                 except Exception as exc:
                     logger.warning("PIL placeholder generation failed for %s: %s", scene.scene_id, exc)
@@ -350,6 +352,7 @@ Requirements:
                         "path": None,
                         "placeholder": True,
                         "source": "none",
+                        "is_new_file": False,
                     }
 
         return result
@@ -476,6 +479,7 @@ Requirements:
 
             image_generated = False
             generated_path: Path | None = None
+            bg_removed = False
             try:
                 from renpy_mcp.config import get_settings
                 from renpy_mcp.ai.image_service import ImageService
@@ -502,6 +506,7 @@ Requirements:
 
                         if transparent_path and transparent_path.exists():
                             generated_path = transparent_path
+                            bg_removed = True
                         image_generated = True
             except Exception as exc:
                 logger.warning("Character image generation failed for %s: %s", char_name, exc)
@@ -529,13 +534,15 @@ Requirements:
                 # Fallback: generate a simple placeholder with PIL
                 try:
                     self._generate_placeholder_character(file_path, char_name)
+                    rel_path = str(file_path.relative_to(project_dir).as_posix())
                     result[char_name] = {
-                        "path": file_path,
+                        "path": rel_path,
                         "placeholder": True,
                         "renderable": False,
                         "renderable_reason": "placeholder_fallback",
                         "bbox": None,
                         "baseline_offset": 0,
+                        "is_new_file": True,
                     }
                 except Exception as exc:
                     logger.warning("Character placeholder generation failed for %s: %s", char_name, exc)
@@ -546,22 +553,29 @@ Requirements:
                         "renderable_reason": "generation_failed",
                         "bbox": None,
                         "baseline_offset": 0,
+                        "is_new_file": False,
                     }
             else:
                 # Use normalization metadata for renderability, or default to True
                 renderable = norm_meta.get("renderable", True)
                 reason = norm_meta.get("reason", "ok")
+                if not bg_removed:
+                    # Conservatively suppress raw generated sprites without transparent background
+                    renderable = False
+                    reason = "background_removal_failed"
                 if not renderable:
                     logger.info(
                         "Sprite for %s marked unrenderable: %s", char_name, reason
                     )
+                rel_path = str(final_path.relative_to(project_dir).as_posix())
                 result[char_name] = {
-                    "path": final_path,
+                    "path": rel_path,
                     "placeholder": False,
                     "renderable": renderable,
                     "renderable_reason": reason,
                     "bbox": norm_meta.get("bbox"),
                     "baseline_offset": norm_meta.get("baseline_offset", 0),
+                    "is_new_file": True,
                 }
 
         return result
@@ -604,6 +618,7 @@ Requirements:
         self,
         scenes: list[PrototypeScene],
         character_assets: dict[str, dict],
+        project_name: str | None = None,
     ) -> None:
         """Assign sprite plans to each scene based on characters_present and available assets.
 
@@ -619,6 +634,7 @@ Requirements:
         statements in the generated script.
         """
         char_registry = self._build_character_registry(scenes)
+        project_dir = self.pm._project_dir(project_name) if project_name and self.pm else None
 
         for scene in scenes:
             sprite_plan: list[SpritePlanItem] = []
@@ -640,9 +656,17 @@ Requirements:
                 renderable_reason = asset.get("renderable_reason", "")
 
                 # Additional gate: if the file doesn't actually exist, mark unrenderable
-                if sprite_path and not Path(sprite_path).exists():
-                    is_renderable = False
-                    renderable_reason = "file_missing"
+                if sprite_path:
+                    exists = False
+                    if isinstance(sprite_path, Path):
+                        exists = sprite_path.exists()
+                    elif project_dir is not None:
+                        exists = (project_dir / sprite_path).exists()
+                    elif Path(sprite_path).is_absolute():
+                        exists = Path(sprite_path).exists()
+                    if not exists:
+                        is_renderable = False
+                        renderable_reason = "file_missing"
 
                 sprite_plan.append(SpritePlanItem(
                     character_name=char_name,
@@ -681,11 +705,13 @@ Requirements:
 
         font_dest = fonts_dir / _CJK_FONT_DEST_NAME
         configured = False
+        new_files: list[str] = []
 
         if _CJK_FONT_SOURCE.exists() and not font_dest.exists():
             try:
                 shutil.copy2(_CJK_FONT_SOURCE, font_dest)
                 configured = True
+                new_files.append(str(font_dest.relative_to(project_dir).as_posix()))
             except OSError as exc:
                 logger.warning("Failed to copy CJK font: %s", exc)
         elif font_dest.exists():
@@ -717,11 +743,14 @@ Requirements:
                 "# Font file not available -- CJK fallback disabled.\n",
                 encoding="utf-8",
             )
+        # The config file is (re)written every round; treat it as a new artifact
+        new_files.append(str(config_path.relative_to(project_dir).as_posix()))
 
         return {
             "configured": configured,
             "font_path": font_dest.relative_to(project_dir).as_posix() if font_dest.exists() else None,
             "config_path": config_path.relative_to(project_dir).as_posix(),
+            "new_files": new_files,
         }
     def _build_character_registry(self, scenes: list[PrototypeScene]) -> dict[str, str]:
         """Map display names to safe Ren'Py character identifiers.
@@ -803,8 +832,13 @@ Requirements:
         char_assets = character_assets or {}
         for char_name, asset in char_assets.items():
             char_path = asset.get("path")
-            if char_path and char_path.exists():
-                rel_path = char_path.relative_to(project_dir).as_posix()
+            char_exists = False
+            if isinstance(char_path, Path):
+                char_exists = char_path.exists()
+            elif isinstance(char_path, str):
+                char_exists = (project_dir / char_path).exists()
+            if char_path and char_exists:
+                rel_path = char_path if isinstance(char_path, str) else char_path.relative_to(project_dir).as_posix()
                 runtime_path = _to_renpy_asset_path(rel_path)
                 safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or "char_unknown"
                 lines.append(f'image {safe_id}_neutral = "{runtime_path}"')
@@ -854,8 +888,13 @@ Requirements:
         bg_assets = background_assets or {}
         for scene in scenes:
             bg_path = self._extract_bg_path(bg_assets.get(scene.scene_id))
-            if bg_path and bg_path.exists():
-                rel_path = bg_path.relative_to(project_dir).as_posix()
+            bg_exists = False
+            if isinstance(bg_path, Path):
+                bg_exists = bg_path.exists()
+            elif isinstance(bg_path, str):
+                bg_exists = (project_dir / bg_path).exists()
+            if bg_path and bg_exists:
+                rel_path = bg_path if isinstance(bg_path, str) else bg_path.relative_to(project_dir).as_posix()
                 runtime_path = _to_renpy_asset_path(rel_path)
                 safe_tag = _safe_image_tag(scene.scene_id)
                 lines.append(f'image bg_{safe_tag} = "{runtime_path}"')
@@ -882,12 +921,15 @@ Requirements:
             # Show sprites for characters in this scene (only when renderable)
             shown_sprites: list[str] = []
             for sp in scene.sprite_plan:
-                if sp.sprite_renderable and sp.sprite_path and Path(sp.sprite_path).exists():
+                sprite_abs = None
+                if sp.sprite_path:
+                    sprite_abs = project_dir / sp.sprite_path if not Path(sp.sprite_path).is_absolute() else Path(sp.sprite_path)
+                if sp.sprite_renderable and sprite_abs and sprite_abs.exists():
                     safe_id = sp.character_id or char_registry.get(sp.character_name) or _safe_character_id(sp.character_name) or "char_unknown"
                     transform_name = sp.transform_name
                     lines.append(f"    show {safe_id}_neutral at {transform_name}")
                     shown_sprites.append(sp.character_name)
-                elif sp.sprite_path and Path(sp.sprite_path).exists() and not sp.sprite_renderable:
+                elif sprite_abs and sprite_abs.exists() and not sp.sprite_renderable:
                     # Log why a sprite was suppressed (comment in script for debug)
                     reason = sp.sprite_quality_reason or "quality_gate"
                     lines.append(f"    # SUPPRESSED: {sp.character_name} sprite ({reason})")
@@ -1096,11 +1138,13 @@ Requirements:
         staging_script_path: str | None,
         new_scene_ids: list[str],
         old_script_content: str | None,
+        generated_asset_paths: list[str] | None = None,
     ) -> None:
         """Rollback a failed prototype generation round.
 
         Restores the main script, removes the staging prototype file,
-        and removes newly written index entries.  The previous stable
+        removes newly written index entries, and deletes any visual assets
+        that were generated during this round.  The previous stable
         prototype file (if any) is left untouched.
         """
         if self.pm is None:
@@ -1129,6 +1173,19 @@ Requirements:
                     changed = True
             if changed:
                 self.pm.write_project_index(project_name, index)
+
+        # 4. Remove newly generated visual asset files (only those explicitly listed)
+        if generated_asset_paths:
+            project_dir = self.pm._project_dir(project_name)
+            for p in generated_asset_paths:
+                abs_path = Path(p)
+                if not abs_path.is_absolute():
+                    abs_path = project_dir / p
+                try:
+                    if abs_path.exists() and abs_path.is_file():
+                        abs_path.unlink()
+                except OSError:
+                    logger.warning("Failed to remove generated asset: %s", abs_path)
 
     # ------------------------------------------------------------------
     # Index writeback
@@ -1161,14 +1218,17 @@ Requirements:
 
         for i, scene in enumerate(scenes):
             bg_asset = bg_assets.get(scene.scene_id)
-            bg_path: Path | None = None
+            bg_path_raw = bg_asset.get("path") if isinstance(bg_asset, dict) else bg_asset
             bg_placeholder = True
-            if isinstance(bg_asset, dict):
-                bg_path = bg_asset.get("path")
-                bg_placeholder = bg_asset.get("placeholder", True)
-            elif isinstance(bg_asset, Path):
-                bg_path = bg_asset
-                bg_placeholder = not bg_path.exists()
+            bg_path_str: str | None = None
+            if isinstance(bg_path_raw, Path):
+                bg_placeholder = not bg_path_raw.exists()
+                if bg_path_raw.exists():
+                    bg_path_str = str(bg_path_raw.relative_to(project_dir).as_posix())
+            elif isinstance(bg_path_raw, str):
+                bg_placeholder = not (project_dir / bg_path_raw).exists()
+                if (project_dir / bg_path_raw).exists():
+                    bg_path_str = bg_path_raw
 
             entry = {
                 "chapter_id": chapter.id,
@@ -1186,16 +1246,24 @@ Requirements:
                 "file_path": script_path,
                 "source": "prototype",
                 "order": i + 1,
-                "background_asset_path": str(bg_path.relative_to(project_dir).as_posix()) if bg_path and bg_path.exists() else None,
+                "background_asset_path": bg_path_str,
                 "background_placeholder": bg_placeholder,
             }
             index["scenes"][scene.scene_id] = entry
 
         # Persist character asset metadata at index top level
         if char_assets:
+            def _char_asset_path(info: dict) -> str | None:
+                p = info.get("path")
+                if isinstance(p, str):
+                    return p if (project_dir / p).exists() else None
+                if isinstance(p, Path):
+                    return str(p.relative_to(project_dir).as_posix()) if p.exists() else None
+                return None
+
             index["character_assets"] = {
                 name: {
-                    "path": str(info["path"].relative_to(project_dir).as_posix()) if info.get("path") and info["path"].exists() else None,
+                    "path": _char_asset_path(info),
                     "placeholder": info.get("placeholder", True),
                     "renderable": info.get("renderable", False),
                     "renderable_reason": info.get("renderable_reason", ""),

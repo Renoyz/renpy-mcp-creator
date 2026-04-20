@@ -1957,7 +1957,8 @@ async def test_generate_character_assets_creates_sprite_when_generation_succeeds
     assert len(char_assets) > 0, "Character assets should have been generated"
     for char_name, info in char_assets.items():
         assert info["path"] is not None, f"Character {char_name} should have a path"
-        assert info["path"].exists(), f"Character file for {char_name} should exist"
+        abs_path = tmp_path / project_name / info["path"]
+        assert abs_path.exists(), f"Character file for {char_name} should exist"
         assert info["placeholder"] is False, f"Character {char_name} should not be placeholder"
 
 
@@ -2003,7 +2004,8 @@ async def test_generate_character_assets_marks_placeholder_when_generation_fails
         assert info["placeholder"] is True, f"Character {char_name} must be marked placeholder"
         # PIL fallback should still create a file
         assert info["path"] is not None, f"Character {char_name} should have a fallback path"
-        assert info["path"].exists(), f"Placeholder file for {char_name} should exist"
+        abs_path = tmp_path / project_name / info["path"]
+        assert abs_path.exists(), f"Placeholder file for {char_name} should exist"
 
 
 @pytest.mark.asyncio
@@ -2806,3 +2808,472 @@ async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
         assert config["font_path"] == "game/fonts/simhei.ttf"
     finally:
         proto_module._CJK_FONT_SOURCE = original_source
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Round 10: Asset rollback boundary, bg-removal renderability gate,
+# sprite path relative normalization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rollback_removes_new_background_and_sprite_assets_on_post_asset_failure(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If prototype fails after assets are generated, rollback must delete new visual assets."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import ImageGenerationResult
+
+    project_name = "proto_rollback_assets"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Mock ImageService for character generation
+    fake_char_path = tmp_path / project_name / "game" / "images" / "character" / "char_0_neutral.png"
+    fake_char_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_char_path.write_bytes(b"fakechar")
+
+    async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        return ImageGenerationResult(
+            success=True, prompt=prompt, image_type=image_type,
+            files=[fake_char_path], primary_file=fake_char_path,
+        )
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
+    )
+
+    fake_transparent = fake_char_path.with_name("char_0_neutral_transparent.png")
+    fake_transparent.write_bytes(b"faketransparent")
+
+    def _mock_remove_bg(self, input_path):
+        return fake_transparent
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg
+    )
+
+    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
+        from PIL import Image
+        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (900, 900), (255, 0, 0, 255)).save(out, "PNG")
+        return out, {
+            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+            "baseline_offset": 50, "normalized_size": (900, 900),
+            "visible_ratio": 0.5, "renderable": True, "reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
+    )
+
+    bg_assets = await service.generate_background_assets(project_name, scenes)
+    char_assets = await service.generate_character_assets(project_name, blueprint, scenes)
+
+    new_asset_paths = []
+    for info in bg_assets.values():
+        if info.get("is_new_file") and info.get("path"):
+            new_asset_paths.append(str(info["path"]))
+    for info in char_assets.values():
+        if info.get("is_new_file") and info.get("path"):
+            new_asset_paths.append(info["path"])
+
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+    staging_path = service.write_script(
+        project_name, chapter, scenes,
+        background_assets=bg_assets, character_assets=char_assets,
+    )
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
+
+    new_scene_ids = [s.scene_id for s in scenes]
+
+    try:
+        service.update_index(project_name, chapter, scenes, staging_path)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, staging_path, new_scene_ids, old_script_content,
+            generated_asset_paths=new_asset_paths,
+        )
+
+    for p in new_asset_paths:
+        abs_p = tmp_path / project_name / p
+        assert not abs_p.exists(), f"New asset should be rolled back: {p}"
+
+    assert not (tmp_path / project_name / staging_path).exists()
+    script_path = tmp_path / project_name / "game" / "script.rpy"
+    assert old_script_content == script_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_rollback_removes_new_font_assets_when_generation_fails_after_font_setup(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rollback must clean up newly copied font files and prototype_fonts.rpy."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_rollback_font"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        cjk_font_config = service.ensure_cjk_font_config(project_name)
+        new_files = cjk_font_config.get("new_files", [])
+        assert len(new_files) > 0, "Font config should report new files"
+
+        staging_path = service.write_script(project_name, chapter, scenes)
+        old_script_content = service.backup_main_script(project_name)
+        service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+        def failing_update(*args, **kwargs):
+            raise RuntimeError("Simulated index failure")
+        service.update_index = failing_update
+
+        new_scene_ids = [s.scene_id for s in scenes]
+        try:
+            service.update_index(project_name, chapter, scenes, staging_path)
+        except RuntimeError:
+            service.rollback_prototype_generation(
+                project_name, staging_path, new_scene_ids, old_script_content,
+                generated_asset_paths=new_files,
+            )
+
+        for p in new_files:
+            abs_p = tmp_path / project_name / p
+            assert not abs_p.exists(), f"Font asset should be rolled back: {p}"
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+@pytest.mark.asyncio
+async def test_rollback_does_not_delete_preexisting_assets(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rollback must only delete assets listed in generated_asset_paths, not stable old files."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import ImageGenerationResult
+
+    project_name = "proto_rollback_preserve"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Pre-seed an old stable sprite
+    old_sprite = tmp_path / project_name / "game" / "images" / "character" / "old_char.png"
+    old_sprite.parent.mkdir(parents=True, exist_ok=True)
+    old_sprite.write_bytes(b"old_sprite")
+
+    # Mock new character generation
+    new_sprite = tmp_path / project_name / "game" / "images" / "character" / "char_0_neutral.png"
+    new_sprite.parent.mkdir(parents=True, exist_ok=True)
+    new_sprite.write_bytes(b"new_sprite")
+
+    async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        return ImageGenerationResult(
+            success=True, prompt=prompt, image_type=image_type,
+            files=[new_sprite], primary_file=new_sprite,
+        )
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
+    )
+
+    def _mock_remove_bg(self, input_path):
+        return new_sprite
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg
+    )
+
+    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
+        from PIL import Image
+        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (900, 900), (255, 0, 0, 255)).save(out, "PNG")
+        return out, {
+            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+            "baseline_offset": 50, "normalized_size": (900, 900),
+            "visible_ratio": 0.5, "renderable": True, "reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
+    )
+
+    char_assets = await service.generate_character_assets(project_name, blueprint, scenes)
+
+    new_asset_paths = []
+    for info in char_assets.values():
+        if info.get("is_new_file") and info.get("path"):
+            new_asset_paths.append(info["path"])
+
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+    staging_path = service.write_script(project_name, chapter, scenes, character_assets=char_assets)
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated failure")
+    service.update_index = failing_update
+
+    try:
+        service.update_index(project_name, chapter, scenes, staging_path)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, staging_path, [s.scene_id for s in scenes], old_script_content,
+            generated_asset_paths=new_asset_paths,
+        )
+
+    # The normalized file (final_path) should be rolled back; the original mock file is
+    # pre-created by the test and not tracked in new_asset_paths, so it may survive.
+    for p in new_asset_paths:
+        assert not (tmp_path / project_name / p).exists(), f"New asset should be rolled back: {p}"
+    assert old_sprite.exists(), "Preexisting sprite must not be deleted by rollback"
+
+
+@pytest.mark.asyncio
+async def test_character_asset_is_not_renderable_when_background_removal_fails(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When background removal fails, the raw generated sprite must be marked unrenderable."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import ImageGenerationResult
+
+    project_name = "proto_bg_removal_fail"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    fake_char_path = tmp_path / project_name / "game" / "images" / "character" / "char_0_neutral.png"
+    fake_char_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_char_path.write_bytes(b"fakechar")
+
+    async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        return ImageGenerationResult(
+            success=True, prompt=prompt, image_type=image_type,
+            files=[fake_char_path], primary_file=fake_char_path,
+        )
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
+    )
+
+    def _mock_remove_bg_fail(self, input_path):
+        return None
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg_fail
+    )
+
+    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
+        from PIL import Image
+        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (900, 900), (255, 0, 0, 255)).save(out, "PNG")
+        return out, {
+            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+            "baseline_offset": 50, "normalized_size": (900, 900),
+            "visible_ratio": 0.5, "renderable": True, "reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
+    )
+
+    char_assets = await service.generate_character_assets(project_name, blueprint, scenes)
+
+    assert len(char_assets) > 0
+    for char_name, info in char_assets.items():
+        assert info["path"] is not None
+        abs_path = tmp_path / project_name / info["path"]
+        assert abs_path.exists(), f"File should be preserved for debugging: {info['path']}"
+        assert info["renderable"] is False, (
+            f"Character {char_name} must be unrenderable when bg removal fails"
+        )
+        assert info["renderable_reason"] == "background_removal_failed", (
+            f"Expected background_removal_failed, got {info['renderable_reason']}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_write_script_does_not_show_raw_generated_sprite_when_transparency_is_missing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Script must not show raw-generated sprites that lack transparent background."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_raw_no_show"
+    _create_project(client, tmp_path, project_name)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Test", summary="test", location="loc",
+            characters_present=["主角"],
+            dialogue_beats=[DialogueBeat(speaker="主角", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    fake_sprite = tmp_path / project_name / "game" / "images" / "character" / "char_0_neutral.png"
+    fake_sprite.parent.mkdir(parents=True, exist_ok=True)
+    fake_sprite.write_bytes(b"fakesprite")
+
+    char_assets = {
+        "主角": {
+            "path": "game/images/character/char_0_neutral.png",
+            "placeholder": False,
+            "renderable": False,
+            "renderable_reason": "background_removal_failed",
+        }
+    }
+
+    from renpy_mcp.blueprint.models import ChapterSummary
+    chapter = ChapterSummary(id="ch1", name="Test", order=1)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+    staging_path = service.write_script(project_name, chapter, scenes, character_assets=char_assets)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+
+    assert "show char_0_neutral" not in content, (
+        f"Raw generated sprite without transparency must not be shown. Content:\n{content}"
+    )
+    assert "SUPPRESSED" in content and "主角" in content, (
+        f"Unrenderable sprite should have suppression comment. Content:\n{content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_index_persists_sprite_paths_as_project_relative_paths(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Index must store sprite paths as project-relative strings, not absolute paths."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_relative_sprite"
+    _create_project(client, tmp_path, project_name)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Test", summary="test", location="loc",
+            characters_present=["Alice", "Bob"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    char_assets = {
+        "Alice": {
+            "path": "game/images/character/char_Alice_neutral.png",
+            "placeholder": False,
+            "renderable": True,
+            "renderable_reason": "ok",
+        },
+        "Bob": {
+            "path": "game/images/character/char_Bob_neutral.png",
+            "placeholder": False,
+            "renderable": True,
+            "renderable_reason": "ok",
+        },
+    }
+
+    for name, asset in char_assets.items():
+        p = tmp_path / project_name / asset["path"]
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"fake")
+
+    from renpy_mcp.blueprint.models import ChapterSummary
+    chapter = ChapterSummary(id="ch1", name="Test", order=1)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+    staging_path = service.write_script(project_name, chapter, scenes, character_assets=char_assets)
+    final_path = service._final_path_from_staging(staging_path)
+    service.update_index(project_name, chapter, scenes, final_path, character_assets=char_assets)
+
+    index = pm.read_project_index(project_name)
+    assert "character_assets" in index
+
+    for char_name, info in index["character_assets"].items():
+        path_val = info.get("path")
+        assert path_val is not None, f"Character {char_name} missing path in index"
+        assert not Path(path_val).is_absolute(), (
+            f"Sprite path must not be absolute: {path_val}"
+        )
+        assert path_val.startswith("game/"), (
+            f"Sprite path must be project-relative starting with game/: {path_val}"
+        )
+
+    for scene in scenes:
+        mapping = index["scenes"][scene.scene_id]
+        for sp in mapping.get("sprite_plan", []):
+            sprite_path = sp.get("sprite_path")
+            if sprite_path:
+                assert not Path(sprite_path).is_absolute(), (
+                    f"Sprite plan path must not be absolute: {sprite_path}"
+                )
+                assert sprite_path.startswith("game/"), (
+                    f"Sprite plan path must be project-relative: {sprite_path}"
+                )
