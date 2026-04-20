@@ -2020,3 +2020,62 @@ class TestPrototypePipelineStatus:
         data = r.json()
         assert data["stage"] == "idle"
         assert data["has_prototype"] is False
+
+    def test_pipeline_status_preserves_real_build_failure_message(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """Failed builds must preserve the real failure message, not a static fallback."""
+        project_name = "pipeline_failed_msg"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        logs_dir = tmp_path / project_name / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "build-status.json").write_text(
+            json.dumps({
+                "status": "failed",
+                "message": "Missing SDK executable: raptools not found",
+                "previewable": False,
+                "target": "web",
+            }),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_build_failed"
+        assert data["message"] == "Missing SDK executable: raptools not found"
+        assert data["message"] != "Prototype build failed"
+
+    def test_pipeline_status_preserves_real_success_message_for_preview_ready(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """Successful previewable builds must preserve the real success message."""
+        project_name = "pipeline_success_msg"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        build_dir = tmp_path / f"{project_name}-dists" / f"{project_name}-web"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "index.html").write_text("<html>mock</html>", encoding="utf-8")
+
+        logs_dir = tmp_path / project_name / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "build-status.json").write_text(
+            json.dumps({
+                "status": "success",
+                "message": f"Prototype built to {build_dir}",
+                "output_path": str(build_dir),
+                "previewable": True,
+                "target": "web",
+            }),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_preview_ready"
+        assert data["message"] == f"Prototype built to {build_dir}"
+        assert data["message"] != "Prototype built and previewable"

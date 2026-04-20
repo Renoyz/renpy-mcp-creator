@@ -791,12 +791,9 @@ def create_app() -> FastAPI:
             "prototype_preview_ready": "Prototype built and previewable",
         }
 
-        if build_status:
-            # When idle but a build record exists (generic build), preserve the build message
-            if stage == "idle":
-                message = build_status.get("message", "")
-            else:
-                message = message_map.get(stage, build_status.get("message", ""))
+        # Preserve real build message when available; fallback to stage default only when absent
+        if build_status and build_status.get("message"):
+            message = build_status["message"]
         else:
             message = message_map.get(stage, "")
 
