@@ -37,6 +37,8 @@ export interface SpritePlanItem {
   character_id: string;
   sprite_path: string | null;
   sprite_placeholder: boolean;
+  sprite_renderable?: boolean;
+  sprite_quality_reason?: string;
   position: string;
   expression: string;
 }

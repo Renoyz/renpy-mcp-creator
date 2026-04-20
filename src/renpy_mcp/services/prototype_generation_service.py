@@ -84,6 +84,8 @@ class SpritePlanItem(BaseModel):
     character_id: str = ""
     sprite_path: str | None = None
     sprite_placeholder: bool = True
+    sprite_renderable: bool = False
+    sprite_quality_reason: str = ""
     position: str = "center"
     expression: str = "neutral"
     layout_mode: str = "solo"
@@ -396,9 +398,17 @@ Requirements:
 
         Tries ImageService first; falls back to PIL placeholder on failure.
         Attempts background removal via BackgroundRemover when available.
+        Post-processes sprites with normalize_sprite for consistent baseline.
 
         Returns:
-            Mapping character_name -> {"path": Path | None, "placeholder": bool}
+            Mapping character_name -> {
+                "path": Path | None,
+                "placeholder": bool,
+                "renderable": bool,
+                "renderable_reason": str,
+                "bbox": dict | None,
+                "baseline_offset": int,
+            }
         """
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for asset generation")
@@ -421,6 +431,19 @@ Requirements:
                 "personality": c.personality,
             }
 
+        # Build scene context lookup per character
+        char_scene_context: dict[str, dict] = {}
+        for char_name in unique_chars:
+            for scene in scenes:
+                if char_name in scene.characters_present:
+                    char_scene_context[char_name] = {
+                        "location": scene.location,
+                        "location_visual_brief": scene.location_visual_brief,
+                        "mood": scene.mood,
+                        "character_count": len(scene.characters_present),
+                    }
+                    break
+
         result: dict[str, dict] = {}
         char_registry = self._build_character_registry(scenes)
 
@@ -432,17 +455,27 @@ Requirements:
             info = char_info.get(char_name, {})
             appearance = info.get("appearance", "anime character")
             personality = info.get("personality", "")
+            ctx = char_scene_context.get(char_name, {})
+            layout_mode = self._resolve_layout_mode(ctx.get("character_count", 1))
+            framing = "medium shot" if layout_mode == "solo" else ("medium shot" if layout_mode == "duo" else "medium-long shot")
 
             char_prompt = (
                 f"Portrait of {char_name}. "
                 f"Appearance: {appearance}. "
                 f"Personality: {personality}. "
+                f"Scene setting: {ctx.get('location', 'unknown')}. "
+                f"Visual direction: {ctx.get('location_visual_brief', '')}. "
+                f"Mood: {ctx.get('mood', 'neutral')}. "
+                f"Camera framing: {framing}, centered on character. "
                 "Visual novel character sprite style, "
                 "standing pose, facing viewer, white/plain background, "
-                "full body visible, clean line art, anime style."
+                "full body visible, clean line art, anime style. "
+                "Same art direction, lighting, and color palette as the scene background. "
+                "Matching atmosphere for seamless visual novel composition."
             )
 
             image_generated = False
+            generated_path: Path | None = None
             try:
                 from renpy_mcp.config import get_settings
                 from renpy_mcp.ai.image_service import ImageService
@@ -468,33 +501,68 @@ Requirements:
                             logger.warning("Background removal failed for %s: %s", char_name, exc)
 
                         if transparent_path and transparent_path.exists():
-                            result[char_name] = {
-                                "path": transparent_path,
-                                "placeholder": False,
-                            }
-                        else:
-                            result[char_name] = {
-                                "path": generated_path,
-                                "placeholder": False,
-                            }
+                            generated_path = transparent_path
                         image_generated = True
             except Exception as exc:
                 logger.warning("Character image generation failed for %s: %s", char_name, exc)
 
-            if not image_generated:
+            # Post-process: normalize sprite for consistent baseline
+            normalized_path: Path | None = None
+            norm_meta: dict = {}
+            if image_generated and generated_path and generated_path.exists():
+                try:
+                    from renpy_mcp.ai.background_remover import BackgroundRemover
+                    remover = BackgroundRemover()
+                    normalized_path, norm_meta = remover.normalize_sprite(
+                        generated_path,
+                        output_path=char_dir / f"{safe_id}_normalized.png",
+                    )
+                except Exception as exc:
+                    logger.warning("Sprite normalization failed for %s: %s", char_name, exc)
+
+            # Determine final path and renderability
+            final_path = normalized_path if normalized_path and normalized_path.exists() else generated_path
+            if final_path is None or not final_path.exists():
+                final_path = None
+
+            if not image_generated or final_path is None:
                 # Fallback: generate a simple placeholder with PIL
                 try:
                     self._generate_placeholder_character(file_path, char_name)
                     result[char_name] = {
                         "path": file_path,
                         "placeholder": True,
+                        "renderable": False,
+                        "renderable_reason": "placeholder_fallback",
+                        "bbox": None,
+                        "baseline_offset": 0,
                     }
                 except Exception as exc:
                     logger.warning("Character placeholder generation failed for %s: %s", char_name, exc)
                     result[char_name] = {
                         "path": None,
                         "placeholder": True,
+                        "renderable": False,
+                        "renderable_reason": "generation_failed",
+                        "bbox": None,
+                        "baseline_offset": 0,
                     }
+            else:
+                # Use normalization metadata for renderability, or default to True
+                renderable = norm_meta.get("renderable", True)
+                reason = norm_meta.get("reason", "ok")
+                if not renderable:
+                    logger.info(
+                        "Sprite for %s marked unrenderable: %s", char_name, reason
+                    )
+                result[char_name] = {
+                    "path": final_path,
+                    "placeholder": False,
+                    "renderable": renderable,
+                    "renderable_reason": reason,
+                    "bbox": norm_meta.get("bbox"),
+                    "baseline_offset": norm_meta.get("baseline_offset", 0),
+                }
 
         return result
 
@@ -545,6 +613,10 @@ Requirements:
             3+ characters -> trio (left, center, right)
         Each sprite gets a layout-specific transform that controls zoom,
         vertical anchor, and horizontal alignment.
+
+        Sprites marked as unrenderable (placeholder, normalization failure,
+        or quality gate rejection) are recorded but will not produce show
+        statements in the generated script.
         """
         char_registry = self._build_character_registry(scenes)
 
@@ -560,11 +632,25 @@ Requirements:
             for idx, char_name in enumerate(chars):
                 asset = character_assets.get(char_name, {})
                 safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or f"char_{idx}"
+                sprite_path = asset.get("path")
+                is_placeholder = asset.get("placeholder", True)
+                # Backward-compatible default: non-placeholder assets without explicit
+                # renderable field are assumed renderable (legacy test / caller path)
+                is_renderable = asset.get("renderable", not is_placeholder) if not is_placeholder else False
+                renderable_reason = asset.get("renderable_reason", "")
+
+                # Additional gate: if the file doesn't actually exist, mark unrenderable
+                if sprite_path and not Path(sprite_path).exists():
+                    is_renderable = False
+                    renderable_reason = "file_missing"
+
                 sprite_plan.append(SpritePlanItem(
                     character_name=char_name,
                     character_id=safe_id,
-                    sprite_path=str(asset.get("path")) if asset.get("path") else None,
-                    sprite_placeholder=asset.get("placeholder", True),
+                    sprite_path=str(sprite_path) if sprite_path else None,
+                    sprite_placeholder=is_placeholder,
+                    sprite_renderable=is_renderable,
+                    sprite_quality_reason=renderable_reason,
                     position=positions[idx] if idx < len(positions) else positions[-1],
                     expression="neutral",
                     layout_mode=layout_mode,
@@ -610,16 +696,18 @@ Requirements:
         if font_dest.exists():
             lines = [
                 "# Auto-generated CJK font configuration for prototype",
-                'define gui.text_font = "fonts/simhei.ttf"',
-                'define gui.name_text_font = "fonts/simhei.ttf"',
-                'define gui.interface_text_font = "fonts/simhei.ttf"',
-                "",
-                "style say_dialogue:",
-                '    font "fonts/simhei.ttf"',
-                "",
-                "style say_label:",
-                '    font "fonts/simhei.ttf"',
-                "",
+                "# Uses init python so the overrides apply AFTER gui.rpy defaults load.",
+                "init python:",
+                '    import os',
+                '    _font_file = os.path.join(config.gamedir, "fonts", "simhei.ttf")',
+                '    if os.path.exists(_font_file):',
+                '        gui.text_font = "fonts/simhei.ttf"',
+                '        gui.name_text_font = "fonts/simhei.ttf"',
+                '        gui.interface_text_font = "fonts/simhei.ttf"',
+                '        style.say_dialogue.font = "fonts/simhei.ttf"',
+                '        style.say_label.font = "fonts/simhei.ttf"',
+                '        style.namebox.font = "fonts/simhei.ttf"',
+                '        style.window.font = "fonts/simhei.ttf"',
             ]
             config_path.write_text("\n".join(lines), encoding="utf-8")
         else:
@@ -791,12 +879,18 @@ Requirements:
                 chars = "、".join(scene.characters_present)
                 escaped_chars = _escape_renpy_string(chars)
                 lines.append(f'    "【登场角色：{escaped_chars}】"')
-            # Show sprites for characters in this scene (only when asset exists)
+            # Show sprites for characters in this scene (only when renderable)
+            shown_sprites: list[str] = []
             for sp in scene.sprite_plan:
-                if sp.sprite_path and Path(sp.sprite_path).exists():
+                if sp.sprite_renderable and sp.sprite_path and Path(sp.sprite_path).exists():
                     safe_id = sp.character_id or char_registry.get(sp.character_name) or _safe_character_id(sp.character_name) or "char_unknown"
                     transform_name = sp.transform_name
                     lines.append(f"    show {safe_id}_neutral at {transform_name}")
+                    shown_sprites.append(sp.character_name)
+                elif sp.sprite_path and Path(sp.sprite_path).exists() and not sp.sprite_renderable:
+                    # Log why a sprite was suppressed (comment in script for debug)
+                    reason = sp.sprite_quality_reason or "quality_gate"
+                    lines.append(f"    # SUPPRESSED: {sp.character_name} sprite ({reason})")
             # Output dialogue beats as say statements
             for beat in scene.dialogue_beats:
                 safe_id = char_registry.get(beat.speaker)
@@ -1103,6 +1197,8 @@ Requirements:
                 name: {
                     "path": str(info["path"].relative_to(project_dir).as_posix()) if info.get("path") and info["path"].exists() else None,
                     "placeholder": info.get("placeholder", True),
+                    "renderable": info.get("renderable", False),
+                    "renderable_reason": info.get("renderable_reason", ""),
                 }
                 for name, info in char_assets.items()
             }

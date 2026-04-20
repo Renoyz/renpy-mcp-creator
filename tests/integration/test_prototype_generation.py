@@ -1689,11 +1689,11 @@ async def test_cjk_font_config_uses_define_style_and_only_when_font_exists(
     try:
         config = service.ensure_cjk_font_config(project_name)
         content = config_path.read_text(encoding="utf-8")
-        assert "define gui.text_font" in content, (
-            f"Must use define style, got:\n{content}"
+        assert "gui.text_font" in content, (
+            f"Must set gui.text_font, got:\n{content}"
         )
-        assert "init python:" not in content, (
-            "Must NOT use init python block for font config"
+        assert "init python:" in content, (
+            "Must use init python block for runtime font override"
         )
         assert config["configured"] is True
     finally:
@@ -2420,11 +2420,11 @@ async def test_cjk_font_config_covers_runtime_dialogue_styles(
         assert "gui.name_text_font" in content
 
         # Must override say screen styles
-        assert "style say_dialogue" in content, (
-            f"Must override say_dialogue style. Content:\n{content}"
+        assert "style.say_dialogue.font" in content, (
+            f"Must override say_dialogue style at runtime. Content:\n{content}"
         )
-        assert "style say_label" in content, (
-            f"Must override say_label style. Content:\n{content}"
+        assert "style.say_label.font" in content, (
+            f"Must override say_label style at runtime. Content:\n{content}"
         )
         assert config["configured"] is True
     finally:
@@ -2463,5 +2463,346 @@ async def test_font_config_is_disabled_when_font_file_missing(
             f"Must not define say styles when missing. Content:\n{content}"
         )
         assert config["configured"] is False
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Round 9: Sprite normalization, renderability gate, scene-aware prompt, CJK runtime
+# ---------------------------------------------------------------------------
+
+
+def test_sprite_postprocess_normalizes_visible_bbox_and_baseline() -> None:
+    """normalize_sprite must trim transparent edges and produce consistent baseline metadata."""
+    from renpy_mcp.ai.background_remover import BackgroundRemover
+    from PIL import Image
+
+    remover = BackgroundRemover()
+
+    # Create a test image with a visible rectangle surrounded by transparent margin
+    img = Image.new("RGBA", (400, 600), (0, 0, 0, 0))
+    draw = Image.new("RGBA", (200, 400), (255, 0, 0, 255))
+    img.paste(draw, (100, 100))
+
+    tmp_path = Path("tests/integration/.tmp_sprite_test")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    input_path = tmp_path / "test_sprite.png"
+    img.save(input_path, "PNG")
+
+    output_path = tmp_path / "test_sprite_normalized.png"
+    result_path, meta = remover.normalize_sprite(input_path, output_path=output_path)
+
+    assert result_path is not None, "normalize_sprite should return a path"
+    assert result_path.exists(), "Normalized sprite file must exist"
+
+    # Bbox should reflect the visible region
+    bbox = meta.get("bbox")
+    assert bbox is not None, "bbox must be present"
+    assert bbox["left"] == 100, f"Expected left=100, got {bbox['left']}"
+    assert bbox["top"] == 100, f"Expected top=100, got {bbox['top']}"
+    assert bbox["right"] == 300, f"Expected right=300, got {bbox['right']}"
+    assert bbox["bottom"] == 500, f"Expected bottom=500, got {bbox['bottom']}"
+
+    # Baseline offset should be positive (pixels from bottom of bbox to canvas bottom)
+    assert meta.get("baseline_offset", 0) > 0, "baseline_offset must be positive"
+
+    # Normalized canvas should have consistent dimensions
+    norm_w, norm_h = meta.get("normalized_size", (0, 0))
+    assert norm_w > 0 and norm_h > 0, "normalized_size must be positive"
+
+    # Renderable should be True for a normal sprite
+    assert meta.get("renderable") is True, f"Expected renderable=True, got {meta}"
+    assert meta.get("reason") == "ok", f"Expected reason='ok', got {meta.get('reason')}"
+
+    # Cleanup
+    input_path.unlink(missing_ok=True)
+    output_path.unlink(missing_ok=True)
+
+
+def test_sprite_postprocess_rejects_empty_image() -> None:
+    """normalize_sprite must reject fully transparent images."""
+    from renpy_mcp.ai.background_remover import BackgroundRemover
+    from PIL import Image
+
+    remover = BackgroundRemover()
+
+    # Fully transparent image
+    img = Image.new("RGBA", (400, 600), (0, 0, 0, 0))
+    tmp_path = Path("tests/integration/.tmp_sprite_test")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    input_path = tmp_path / "empty_sprite.png"
+    img.save(input_path, "PNG")
+
+    result_path, meta = remover.normalize_sprite(input_path)
+
+    assert result_path is None, "Fully transparent image should not produce output"
+    assert meta.get("renderable") is False, "Empty image must be unrenderable"
+    assert "no_visible_pixels" in meta.get("reason", ""), f"Expected no_visible_pixels reason, got {meta}"
+
+    input_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_build_sprite_plan_marks_unrenderable_sprites_when_quality_is_insufficient(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Placeholder or quality-gate-rejected sprites must have sprite_renderable=False."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_renderable_gate"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Test", summary="test", location="loc",
+            characters_present=["Alice", "Bob"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    # Alice: renderable (placeholder=False, renderable=True)
+    # Bob: unrenderable (renderable=False due to quality gate)
+    fake_renderable = tmp_path / project_name / "game" / "images" / "character" / "alice.png"
+    fake_renderable.parent.mkdir(parents=True, exist_ok=True)
+    fake_renderable.write_bytes(b"fake")
+
+    fake_unrenderable = tmp_path / project_name / "game" / "images" / "character" / "bob.png"
+    fake_unrenderable.parent.mkdir(parents=True, exist_ok=True)
+    fake_unrenderable.write_bytes(b"fake")
+
+    char_assets = {
+        "Alice": {"path": fake_renderable, "placeholder": False, "renderable": True, "renderable_reason": "ok"},
+        "Bob": {"path": fake_unrenderable, "placeholder": False, "renderable": False, "renderable_reason": "insufficient_visible_pixels"},
+    }
+
+    service.build_sprite_plan(scenes, char_assets)
+
+    plan = scenes[0].sprite_plan
+    alice_plan = next((p for p in plan if p.character_name == "Alice"), None)
+    bob_plan = next((p for p in plan if p.character_name == "Bob"), None)
+
+    assert alice_plan is not None
+    assert alice_plan.sprite_renderable is True, "Alice should be renderable"
+    assert alice_plan.sprite_quality_reason == "ok"
+
+    assert bob_plan is not None
+    assert bob_plan.sprite_renderable is False, "Bob should be unrenderable due to quality gate"
+    assert "insufficient_visible_pixels" in bob_plan.sprite_quality_reason
+
+
+@pytest.mark.asyncio
+async def test_write_script_only_shows_renderable_sprites(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Only sprite_renderable=True characters should produce show statements."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_show_gate"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Duo", summary="duo", location="loc",
+            characters_present=["Alice", "Bob"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    fake_renderable = tmp_path / project_name / "game" / "images" / "character" / "alice.png"
+    fake_renderable.parent.mkdir(parents=True, exist_ok=True)
+    fake_renderable.write_bytes(b"fake")
+
+    fake_unrenderable = tmp_path / project_name / "game" / "images" / "character" / "bob.png"
+    fake_unrenderable.parent.mkdir(parents=True, exist_ok=True)
+    fake_unrenderable.write_bytes(b"fake")
+
+    char_assets = {
+        "Alice": {"path": fake_renderable, "placeholder": False, "renderable": True, "renderable_reason": "ok"},
+        "Bob": {"path": fake_unrenderable, "placeholder": False, "renderable": False, "renderable_reason": "sprite_too_small"},
+    }
+
+    service.build_sprite_plan(scenes, char_assets)
+    staging_path = service.write_script(project_name, blueprint.chapters[0], scenes, character_assets=char_assets)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+
+    # Alice (renderable) should produce a show statement
+    assert "show alice_neutral at" in content.lower(), (
+        f"Renderable sprite must produce show statement. Content:\n{content}"
+    )
+
+    # Bob (unrenderable) should NOT produce a show statement
+    assert "show bob_neutral at" not in content.lower(), (
+        f"Unrenderable sprite must not produce show statement. Content:\n{content}"
+    )
+
+    # But Bob should have a suppression comment for debug
+    assert "SUPPRESSED" in content and "Bob" in content, (
+        f"Unrenderable sprite should have suppression comment. Content:\n{content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_character_generation_prompt_includes_scene_visual_context(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Character generation prompt must include scene location_visual_brief and mood."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import ImageGenerationResult
+
+    project_name = "proto_scene_prompt"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    from renpy_mcp.services.prototype_generation_service import PrototypeScene, DialogueBeat
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1", title="Test", summary="test", location="ancient_temple",
+            location_visual_brief="A ruined Buddhist temple at dusk, cold blue palette, misty atmosphere",
+            mood="melancholic",
+            characters_present=["Alice"],
+            dialogue_beats=[DialogueBeat(speaker="Alice", intent="test", content_brief="hi")],
+            entry_label="label_s1", next_scene_id=None,
+        ),
+    ]
+
+    captured_prompts: list[str] = []
+
+    async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        captured_prompts.append(prompt)
+        fake_path = tmp_path / project_name / "game" / "images" / "character" / "alice.png"
+        fake_path.parent.mkdir(parents=True, exist_ok=True)
+        fake_path.write_bytes(b"fake")
+        return ImageGenerationResult(
+            success=True,
+            prompt=prompt,
+            image_type=image_type,
+            files=[fake_path],
+            primary_file=fake_path,
+        )
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
+    )
+
+    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
+        # Create a fake normalized output
+        from PIL import Image
+        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (900, 900), (255, 0, 0, 255)).save(out, "PNG")
+        return out, {
+            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+            "baseline_offset": 50,
+            "normalized_size": (900, 900),
+            "visible_ratio": 0.5,
+            "renderable": True,
+            "reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
+    )
+
+    char_assets = await service.generate_character_assets(project_name, blueprint, scenes)
+
+    assert len(captured_prompts) >= 1, "generate_image should have been called"
+    prompt = captured_prompts[0]
+
+    # Prompt must include scene visual context
+    assert "ancient_temple" in prompt.lower() or "temple" in prompt.lower(), (
+        f"Prompt must include scene location. Got: {prompt}"
+    )
+    assert "melancholic" in prompt.lower(), (
+        f"Prompt must include mood. Got: {prompt}"
+    )
+    assert "Buddhist temple" in prompt or "Visual direction" in prompt, (
+        f"Prompt must include location_visual_brief. Got: {prompt}"
+    )
+    assert "Same art direction" in prompt or "lighting" in prompt.lower(), (
+        f"Prompt must request matching art direction. Got: {prompt}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """CJK font config must use init python (runtime execution) and reference the actual font file."""
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_cjk_runtime"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+        assert config_path.exists()
+        content = config_path.read_text(encoding="utf-8")
+
+        # Must use init python so it executes at runtime (after gui.rpy defaults)
+        assert "init python:" in content, (
+            f"Must use init python for runtime execution. Content:\n{content}"
+        )
+
+        # Must check file existence at runtime
+        assert "os.path.exists" in content, (
+            f"Must check font file existence at runtime. Content:\n{content}"
+        )
+
+        # Must set style attributes directly (runtime chain)
+        assert "style.say_dialogue.font" in content, (
+            f"Must set style.say_dialogue.font at runtime. Content:\n{content}"
+        )
+        assert "style.say_label.font" in content, (
+            f"Must set style.say_label.font at runtime. Content:\n{content}"
+        )
+        assert "style.namebox.font" in content, (
+            f"Must set style.namebox.font at runtime. Content:\n{content}"
+        )
+
+        # Font file must actually exist in the project
+        font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
+        assert font_path.exists(), "Font file must be copied into project"
+
+        # Config must claim configured
+        assert config["configured"] is True
+        assert config["font_path"] == "game/fonts/simhei.ttf"
     finally:
         proto_module._CJK_FONT_SOURCE = original_source

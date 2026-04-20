@@ -84,6 +84,120 @@ class BackgroundRemover:
             logger.error("Failed to remove background for %s: %s", input_path, exc)
             return None
 
+    def normalize_sprite(
+        self,
+        input_path: Path,
+        output_path: Path | None = None,
+        target_height: int = 750,
+        canvas_height: int = 900,
+    ) -> tuple[Path | None, dict]:
+        """Trim transparent edges and normalize sprite to a consistent baseline canvas.
+
+        Steps:
+        1. Open the image (RGBA) and find the bounding box of non-transparent pixels.
+        2. Crop to the bbox.
+        3. Scale so the cropped height matches target_height.
+        4. Place the scaled image at the bottom-center of a fixed-size canvas.
+        5. Record baseline metadata.
+
+        Returns:
+            (normalized_path, metadata) where metadata contains:
+            - bbox: {left, top, right, bottom} in original coordinates
+            - baseline_offset: pixels from bottom of bbox to bottom of normalized canvas
+            - normalized_size: (width, height)
+            - visible_ratio: ratio of visible pixels to total pixels
+            - renderable: bool — whether the sprite passes quality gate
+            - reason: str — human-readable quality assessment
+        """
+        try:
+            with Image.open(input_path) as img:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                alpha = img.split()[-1]
+                bbox = alpha.getbbox()
+                if not bbox:
+                    return None, {
+                        "bbox": None,
+                        "baseline_offset": 0,
+                        "normalized_size": (0, 0),
+                        "visible_ratio": 0.0,
+                        "renderable": False,
+                        "reason": "no_visible_pixels",
+                    }
+
+                left, top, right, bottom = bbox
+                visible_pixels = sum(
+                    1 for x in range(left, right) for y in range(top, bottom)
+                    if alpha.getpixel((x, y)) > 10
+                )
+                total_pixels = img.width * img.height
+                visible_ratio = visible_pixels / total_pixels if total_pixels > 0 else 0.0
+
+                # Crop to visible area
+                cropped = img.crop(bbox)
+
+                # Scale to target height
+                cw, ch = cropped.size
+                if ch > 0:
+                    scale = target_height / ch
+                    new_w = max(1, int(cw * scale))
+                    new_h = max(1, int(ch * scale))
+                    cropped = cropped.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                else:
+                    return None, {
+                        "bbox": None,
+                        "baseline_offset": 0,
+                        "normalized_size": (0, 0),
+                        "visible_ratio": 0.0,
+                        "renderable": False,
+                        "reason": "zero_height_after_crop",
+                    }
+
+                # Create normalized canvas and center the sprite at the bottom
+                canvas = Image.new("RGBA", (canvas_height, canvas_height), (0, 0, 0, 0))
+                paste_x = (canvas.width - cropped.width) // 2
+                paste_y = canvas.height - cropped.height
+                canvas.paste(cropped, (paste_x, paste_y), cropped)
+
+                if output_path is None:
+                    output_path = input_path.with_name(
+                        f"{input_path.stem}_normalized.png"
+                    )
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                canvas.save(output_path, "PNG")
+
+                # Quality gate: reject if too little visible content or too small
+                renderable = True
+                reason = "ok"
+                if visible_ratio < 0.02:
+                    renderable = False
+                    reason = "insufficient_visible_pixels"
+                elif cropped.width < 100 or cropped.height < 100:
+                    renderable = False
+                    reason = "sprite_too_small"
+                elif (bottom - top) / img.height < 0.3:
+                    renderable = False
+                    reason = "visible_region_too_narrow"
+
+                return output_path, {
+                    "bbox": {"left": left, "top": top, "right": right, "bottom": bottom},
+                    "baseline_offset": canvas.height - paste_y,
+                    "normalized_size": (canvas.width, canvas.height),
+                    "visible_ratio": visible_ratio,
+                    "renderable": renderable,
+                    "reason": reason,
+                }
+        except Exception as exc:
+            logger.error("Sprite normalization failed for %s: %s", input_path, exc)
+            return None, {
+                "bbox": None,
+                "baseline_offset": 0,
+                "normalized_size": (0, 0),
+                "visible_ratio": 0.0,
+                "renderable": False,
+                "reason": f"normalization_error: {exc}",
+            }
+
     def process_directory(self, directory: Path) -> Tuple[List[Path], List[Path]]:
         """Process all supported images inside a directory."""
         successes: List[Path] = []
