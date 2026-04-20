@@ -1048,7 +1048,10 @@ def create_app() -> FastAPI:
         build_dir = Path(build_dir)
         if not build_dir.exists() or not (build_dir / "index.html").exists():
             raise HTTPException(status_code=404, detail="No web build found. Run build first.")
-        server = await _preview_manager.start(name, build_dir)
+        try:
+            server = await _preview_manager.start(name, build_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Preview failed: {exc}")
         return {"success": True, "url": server.url, "port": server.port}
 
     @app.post("/api/projects/preview/stop")
@@ -1057,6 +1060,12 @@ def create_app() -> FastAPI:
         name = _resolve_current_project_name(request, body)
         stopped = await _preview_manager.stop(name)
         return {"success": stopped, "project": name}
+
+    @app.get("/api/projects/preview/status")
+    async def api_preview_status(request: Request):
+        name = _resolve_current_project_name(request)
+        status = _preview_manager.status(name)
+        return status
 
     # ---------------------------------------------------------------------------
     # Project-scoped build status and preview (Phase 5 Round 2 fix)
@@ -1092,8 +1101,20 @@ def create_app() -> FastAPI:
         build_dir = Path(build_dir)
         if not build_dir.exists() or not (build_dir / "index.html").exists():
             raise HTTPException(status_code=404, detail="No web build found. Run build first.")
-        server = await _preview_manager.start(project_name, build_dir)
+        try:
+            server = await _preview_manager.start(project_name, build_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Preview failed: {exc}")
         return {"success": True, "url": server.url, "port": server.port}
+
+    @app.get("/api/projects/{project_name}/preview/status")
+    async def api_project_preview_status(project_name: str):
+        """Return preview runtime status for a specific project."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        status = _preview_manager.status(project_name)
+        return status
 
     @app.get("/api/graph")
     async def api_graph(config: RenPyConfig = Depends(get_config)):

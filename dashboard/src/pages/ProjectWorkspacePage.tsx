@@ -124,6 +124,23 @@ export function ProjectWorkspacePage() {
       .catch(() => {});
   }, [activeProjectName]);
 
+  // Load preview runtime status on mount / project change (refresh recovery)
+  useEffect(() => {
+    if (!activeProjectName) return;
+    fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/preview/status`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.status === "running" && data.url) {
+          setPreviewUrl(data.url);
+          setPreviewStatus("success");
+        } else if (data.status === "failed") {
+          setPreviewStatus("failed");
+          setPreviewMessage(data.message || "Preview failed");
+        }
+      })
+      .catch(() => {});
+  }, [activeProjectName]);
+
   // Poll build status ONLY when pipeline stage indicates an active build
   useEffect(() => {
     if (!activeProjectName || pipelineStage !== "prototype_building") return;
@@ -298,7 +315,7 @@ export function ProjectWorkspacePage() {
                   : buildStatus === "success"
                   ? "Build OK"
                   : buildStatus === "failed"
-                  ? "Build Failed"
+                  ? "Retry Build"
                   : "Build"}
               </button>
               <button
@@ -347,7 +364,9 @@ export function ProjectWorkspacePage() {
         )}
         {!isOnboarding && previewUrl && (
           <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-xs">
-            <span className="text-gray-500">Preview: </span>
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-50 text-green-700 text-xs font-medium mr-2">
+              Preview Running
+            </span>
             <a
               href={previewUrl}
               target="_blank"

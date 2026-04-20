@@ -77,6 +77,28 @@ class PreviewManager:
         for project_name in list(self._servers.keys()):
             await self.stop(project_name)
 
+    def status(self, project_name: str) -> dict:
+        """Return the runtime status of a preview server.
+
+        Returns a dict with:
+        - status: "idle" | "running" | "failed"
+        - url: str | None
+        - message: str
+        """
+        server = self._servers.get(project_name)
+        if server is None:
+            return {"status": "idle", "url": None, "message": ""}
+        # Check if process is still alive (process may be None in tests)
+        if server.process is not None and server.process.returncode is not None:
+            # Process has exited — remove stale entry
+            self._servers.pop(project_name, None)
+            return {
+                "status": "failed",
+                "url": None,
+                "message": f"Preview server exited with code {server.process.returncode}",
+            }
+        return {"status": "running", "url": server.url, "message": ""}
+
     def _allocate_port(self) -> int:
         """Allocate an ephemeral localhost port."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

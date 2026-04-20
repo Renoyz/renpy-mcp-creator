@@ -931,6 +931,58 @@ def test_workspace_prototype_build_and_preview(
     expect(preview_link).to_be_visible(timeout=10000)
 
 
+def test_workspace_prototype_pipeline_full_journey(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Full Phase 5主线验收: build -> preview-ready -> preview start -> running -> refresh recovery."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_full_journey_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_prototype(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Build
+    build_button = page.locator("button", has_text=re.compile("Build|Building"))
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+    expect(build_button).not_to_contain_text("Building", timeout=30000)
+
+    # Build success
+    status_locator = page.locator("[data-testid='build-status']")
+    expect(status_locator).to_be_visible(timeout=10000)
+    status_text = status_locator.text_content() or ""
+    assert (
+        "Built" in status_text
+        or "succeeded" in status_text.lower()
+        or "Build" in status_text
+    ), f"Unexpected build status: {status_text}"
+
+    # Preview
+    preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
+    preview_button.click()
+    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+
+    # Preview URL visible
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+
+    # Preview Running label visible
+    expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
+
+    # Refresh
+    page.reload()
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # After refresh, preview URL and running label should still be visible
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+    expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
+
+    # Stop preview to avoid port leaks
+    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
+
+
 def test_no_blind_build_poll_for_idle_pipeline(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:

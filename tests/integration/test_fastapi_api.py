@@ -2079,3 +2079,218 @@ class TestPrototypePipelineStatus:
         assert data["stage"] == "prototype_preview_ready"
         assert data["message"] == f"Prototype built to {build_dir}"
         assert data["message"] != "Prototype built and previewable"
+
+
+class TestPreviewStatus:
+    """Tests for GET /api/projects/{name}/preview/status and preview runtime boundary."""
+
+    def _seed_prototype_and_build(self, client, monkeypatch, workspace, project_name):
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+        from renpy_mcp.services import preview_manager as pm
+        from renpy_mcp.services.preview_manager import PreviewServer
+
+        async def _mock_build(self, request):
+            output_path = workspace / f"{request.project_name}-dists" / f"{request.project_name}-web"
+            output_path.mkdir(parents=True, exist_ok=True)
+            (output_path / "index.html").write_text("<html></html>", encoding="utf-8")
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=output_path,
+            )
+
+        async def _mock_start(self, project_name, directory):
+            server = PreviewServer(
+                project_name=project_name,
+                directory=directory,
+                port=55555,
+                process=None,
+            )
+            self._servers[project_name] = server
+            return server
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        monkeypatch.setattr(pm.PreviewManager, "start", _mock_start)
+
+        client.post("/api/projects", json={"name": project_name})
+
+        meta_dir = workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        game_dir = workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        (game_dir / "prototype_ch1.rpy").write_text(
+            "label prototype_ch1_start:\n    \"Hello\"\n    return\n",
+            encoding="utf-8",
+        )
+        (game_dir / "script.rpy").write_text(
+            "label start:\n    # PROTOTYPE START (managed)\n    call prototype_ch1_start\n    return\n    # PROTOTYPE END (managed)\n",
+            encoding="utf-8",
+        )
+        index = {
+            "scenes": {
+                "proto-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s1",
+                    "title": "Opening",
+                    "summary": "Open scene.",
+                    "location": "library",
+                    "next_scene_id": None,
+                    "label": "prototype_ch1_start",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                },
+            }
+        }
+        (meta_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+        r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+        build_dir = workspace / f"{project_name}-dists" / f"{project_name}-web"
+        return build_dir
+
+    def test_preview_status_returns_running_after_project_scoped_preview_start(self, client, monkeypatch, tmp_path):
+        from renpy_mcp.config import get_settings
+
+        workspace = get_settings().workspace
+        project_name = "preview_status_running"
+        build_dir = self._seed_prototype_and_build(client, monkeypatch, workspace, project_name)
+        assert build_dir.exists()
+
+        r = client.post(f"/api/projects/{project_name}/preview")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "127.0.0.1:55555" in data["url"]
+
+        r = client.get(f"/api/projects/{project_name}/preview/status")
+        assert r.status_code == 200
+        status = r.json()
+        assert status["status"] == "running"
+        assert "127.0.0.1:55555" in status["url"]
+
+    def test_preview_failure_does_not_erase_preview_ready_or_build_success(self, client, monkeypatch, tmp_path):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services import preview_manager as pm
+
+        workspace = get_settings().workspace
+        project_name = "preview_fail_safe"
+        build_dir = self._seed_prototype_and_build(client, monkeypatch, workspace, project_name)
+        assert build_dir.exists()
+
+        async def _mock_start_failing(self, project_name, directory):
+            raise RuntimeError("Port allocation failed")
+
+        monkeypatch.setattr(pm.PreviewManager, "start", _mock_start_failing)
+
+        r = client.post(f"/api/projects/{project_name}/preview")
+        assert r.status_code == 500
+
+        r = client.get(f"/api/projects/{project_name}/build/status")
+        assert r.status_code == 200
+        bs = r.json()
+        assert bs["status"] == "success"
+        assert bs["previewable"] is True
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        pipe = r.json()
+        assert pipe["stage"] == "prototype_preview_ready"
+        assert pipe["build_status"] == "success"
+        assert pipe["previewable"] is True
+
+        assert (workspace / project_name / "game" / "prototype_ch1.rpy").exists()
+        assert (workspace / project_name / "game" / "script.rpy").exists()
+
+    def test_build_retry_after_failure_succeeds_without_restarting_blueprint_pipeline(self, client, monkeypatch, tmp_path):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        workspace = get_settings().workspace
+        project_name = "build_retry_test"
+
+        client.post("/api/projects", json={"name": project_name})
+
+        meta_dir = workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        game_dir = workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+        (game_dir / "prototype_ch1.rpy").write_text(
+            "label prototype_ch1_start:\n    \"Hello\"\n    return\n",
+            encoding="utf-8",
+        )
+        (game_dir / "script.rpy").write_text(
+            "label start:\n    # PROTOTYPE START (managed)\n    call prototype_ch1_start\n    return\n    # PROTOTYPE END (managed)\n",
+            encoding="utf-8",
+        )
+        index = {
+            "scenes": {
+                "proto-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-s1",
+                    "title": "Opening",
+                    "summary": "Open scene.",
+                    "location": "library",
+                    "next_scene_id": None,
+                    "label": "prototype_ch1_start",
+                    "file_path": "game/prototype_ch1.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                },
+            }
+        }
+        (meta_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+        (meta_dir / "blueprint_session.json").write_text(
+            json.dumps({"pipeline_stage": "confirmed", "awaiting_confirmation": False}),
+            encoding="utf-8",
+        )
+
+        call_count = {"value": 0}
+
+        async def _mock_build_fail_then_succeed(self, request):
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                return BuildResult(
+                    project_name=request.project_name,
+                    target=request.target,
+                    success=False,
+                    error="SDK not found",
+                )
+            output_path = workspace / f"{request.project_name}-dists" / f"{request.project_name}-web"
+            output_path.mkdir(parents=True, exist_ok=True)
+            (output_path / "index.html").write_text("<html></html>", encoding="utf-8")
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=output_path,
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build_fail_then_succeed)
+
+        r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is False
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.json()["stage"] == "prototype_build_failed"
+
+        r = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        pipe = r.json()
+        assert pipe["stage"] == "prototype_preview_ready"
+        assert pipe["build_status"] == "success"
+        assert pipe["previewable"] is True
+
+        session = json.loads((meta_dir / "blueprint_session.json").read_text(encoding="utf-8"))
+        assert session["pipeline_stage"] == "confirmed"
+        assert session["awaiting_confirmation"] is False
