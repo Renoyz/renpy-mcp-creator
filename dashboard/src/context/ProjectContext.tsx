@@ -532,6 +532,15 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, [currentProject?.name, loadProjectData]);
 
   const sendBlueprintConfirmation = useCallback((approved: boolean) => {
+    // Optimistically enter generating state immediately so the UI responds
+    // before the first streamed progress event arrives.
+    if (approved) {
+      setBlueprintPhaseState("generating");
+      setGenerationProgress({
+        step: "正在准备生成原型...",
+        percent: 1,
+      });
+    }
     let sent = false;
     if (blueprintConfirmationSenderRef.current) {
       sent = blueprintConfirmationSenderRef.current(approved);

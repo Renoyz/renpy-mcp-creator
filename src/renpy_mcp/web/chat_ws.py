@@ -781,50 +781,45 @@ Requirements:
             }
         ]
 
-    async def handle_confirmation_response(self, approved: bool) -> list[dict[str, Any]]:
+    async def handle_confirmation_response(self, approved: bool):
+        """Handle blueprint confirmation. Yields events as an async generator.
+
+        Progress events are streamed immediately rather than batched at the end.
+        """
         self._load_history()
         lang = _preferred_output_language_from_messages(self.messages)
 
         if self.phase != PipelineStage.REVIEWING:
-            return [
-                {
-                    "type": "error",
-                    "message": _localized_text(
-                        lang,
-                        "当前没有待确认的蓝图草案。",
-                        "There is no blueprint draft waiting for confirmation right now.",
-                    ),
-                    "pipeline_stage": self.phase.value,
-                }
-            ]
+            yield {
+                "type": "error",
+                "message": _localized_text(
+                    lang,
+                    "当前没有待确认的蓝图草案。",
+                    "There is no blueprint draft waiting for confirmation right now.",
+                ),
+                "pipeline_stage": self.phase.value,
+            }
+            return
 
         if approved:
             self.phase = PipelineStage.GENERATING
 
-            steps = [
-                {"step": _localized_text(lang, "正在分析创作意图...", "Analyzing your creative goals..."), "percent": 10},
-                {"step": _localized_text(lang, "正在设计角色设定...", "Designing the character roster..."), "percent": 30},
-                {"step": _localized_text(lang, "正在构建章节大纲...", "Building the chapter outline..."), "percent": 55},
-                {"step": _localized_text(lang, "正在编排场景结构...", "Structuring the scene flow..."), "percent": 80},
-                {"step": _localized_text(lang, "正在完善分支与结局...", "Polishing branches and endings..."), "percent": 95},
-                {"step": _localized_text(lang, "正在构建可预览原型...", "Building playable prototype..."), "percent": 98},
-            ]
-
-            events: list[dict[str, Any]] = []
-            for step in steps:
-                events.append(
-                    {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                )
-                self.messages.append({
-                    "role": "assistant",
-                    "message_kind": "progress",
-                    "content": step["step"],
-                    "step": step["step"],
-                    "percent": step["percent"],
-                })
-                self._save_history()
-                self._save_session_with_progress(step["step"], step["percent"])
-                await asyncio.sleep(0.6)
+            # Stream the first progress event immediately so the frontend
+            # enters generating state without waiting for the whole pipeline.
+            first_step = {
+                "step": _localized_text(lang, "正在准备生成原型...", "Preparing prototype generation..."),
+                "percent": 1,
+            }
+            self.messages.append({
+                "role": "assistant",
+                "message_kind": "progress",
+                "content": first_step["step"],
+                "step": first_step["step"],
+                "percent": first_step["percent"],
+            })
+            self._save_history()
+            self._save_session_with_progress(first_step["step"], first_step["percent"])
+            yield {"type": "progress", **first_step, "pipeline_stage": self.phase.value}
 
             # Persist blueprint
             if self.draft:
@@ -850,22 +845,69 @@ Requirements:
             bg_assets: dict | None = None
             char_assets: dict | None = None
             cjk_font_config: dict | None = None
+            round_id: str | None = None
+
             if self.draft:
                 try:
                     provider = _get_provider()
                     service = PrototypeGenerationService(self.pm, provider)
                     chapter = service.select_prototype_chapter(self.draft)
+                    round_id = f"r{uuid.uuid4().hex[:8]}"
 
-                    # Step 1: generate scenes (memory only)
+                    # Step 1: generate scenes
+                    step = {
+                        "step": _localized_text(lang, "正在生成场景...", "Generating scenes..."),
+                        "percent": 15,
+                    }
+                    self.messages.append({
+                        "role": "assistant",
+                        "message_kind": "progress",
+                        "content": step["step"],
+                        "step": step["step"],
+                        "percent": step["percent"],
+                    })
+                    self._save_history()
+                    self._save_session_with_progress(step["step"], step["percent"])
+                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     scenes = await service.generate_scenes(chapter, self.draft)
                     new_scene_ids = [s.scene_id for s in scenes]
 
-                    # Step 2: generate background assets for each scene
-                    bg_assets = await service.generate_background_assets(self.project_name, scenes)
+                    # Step 2: generate background assets
+                    step = {
+                        "step": _localized_text(lang, "正在生成背景...", "Generating backgrounds..."),
+                        "percent": 35,
+                    }
+                    self.messages.append({
+                        "role": "assistant",
+                        "message_kind": "progress",
+                        "content": step["step"],
+                        "step": step["step"],
+                        "percent": step["percent"],
+                    })
+                    self._save_history()
+                    self._save_session_with_progress(step["step"], step["percent"])
+                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
+                    bg_assets = await service.generate_background_assets(
+                        self.project_name, scenes, round_id=round_id
+                    )
 
                     # Step 3: generate character sprite assets
+                    step = {
+                        "step": _localized_text(lang, "正在生成角色...", "Generating characters..."),
+                        "percent": 55,
+                    }
+                    self.messages.append({
+                        "role": "assistant",
+                        "message_kind": "progress",
+                        "content": step["step"],
+                        "step": step["step"],
+                        "percent": step["percent"],
+                    })
+                    self._save_history()
+                    self._save_session_with_progress(step["step"], step["percent"])
+                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     char_assets = await service.generate_character_assets(
-                        self.project_name, self.draft, scenes
+                        self.project_name, self.draft, scenes, round_id=round_id
                     )
 
                     # Step 4: build sprite plans for each scene
@@ -874,7 +916,21 @@ Requirements:
                     # Step 5: ensure CJK-safe font configuration
                     cjk_font_config = service.ensure_cjk_font_config(self.project_name)
 
-                    # Step 6: write new prototype script to staging file (with real backgrounds + sprites)
+                    # Step 6: write new prototype script to staging file
+                    step = {
+                        "step": _localized_text(lang, "正在写脚本...", "Writing script..."),
+                        "percent": 75,
+                    }
+                    self.messages.append({
+                        "role": "assistant",
+                        "message_kind": "progress",
+                        "content": step["step"],
+                        "step": step["step"],
+                        "percent": step["percent"],
+                    })
+                    self._save_history()
+                    self._save_session_with_progress(step["step"], step["percent"])
+                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     staging_path = service.write_script(
                         self.project_name, chapter, scenes,
                         background_assets=bg_assets, character_assets=char_assets,
@@ -887,23 +943,38 @@ Requirements:
                     # Step 8: wire main script to new prototype entry
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
 
-                    # Step 9: write new prototype index entries (pointing to final path)
+                    # Step 9: write new prototype index entries
                     service.update_index(
                         self.project_name, chapter, scenes, final_path,
                         background_assets=bg_assets, character_assets=char_assets,
                         cjk_font_config=cjk_font_config,
                     )
 
-                    # Step 10: commit — promote staging file and remove old artifacts
-                    service.commit_prototype_replacement(self.project_name, new_scene_ids, staging_path)
+                    # Step 10: commit
+                    step = {
+                        "step": _localized_text(lang, "正在提交原型...", "Committing prototype..."),
+                        "percent": 90,
+                    }
+                    self.messages.append({
+                        "role": "assistant",
+                        "message_kind": "progress",
+                        "content": step["step"],
+                        "step": step["step"],
+                        "percent": step["percent"],
+                    })
+                    self._save_history()
+                    self._save_session_with_progress(step["step"], step["percent"])
+                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
+                    service.commit_prototype_replacement(
+                        self.project_name, new_scene_ids, staging_path, round_id=round_id
+                    )
 
                 except Exception as e:
                     prototype_error = str(e)
                     logger.exception("Prototype generation failed for project %s", self.project_name)
-                    # Rollback partial artifacts, preserving previous stable prototype
+                    # Rollback partial artifacts
                     try:
                         if self.pm is not None:
-                            # Collect newly generated asset paths for cleanup
                             new_asset_paths: list[str] = []
                             if bg_assets:
                                 for info in bg_assets.values():
@@ -913,6 +984,8 @@ Requirements:
                                 for info in char_assets.values():
                                     if info.get("is_new_file") and info.get("path"):
                                         new_asset_paths.append(info["path"])
+                                    if info.get("intermediate_paths"):
+                                        new_asset_paths.extend(info["intermediate_paths"])
                             if cjk_font_config:
                                 new_asset_paths.extend(cjk_font_config.get("new_files", []))
 
@@ -920,13 +993,14 @@ Requirements:
                             rollback_service.rollback_prototype_generation(
                                 self.project_name, staging_path, new_scene_ids, old_script_content,
                                 generated_asset_paths=new_asset_paths,
+                                round_id=round_id,
                             )
                     except Exception:
                         logger.exception(
                             "Prototype rollback also failed for project %s", self.project_name
                         )
 
-                # Step 7: auto-build prototype if generation succeeded
+                # Auto-build prototype if generation succeeded
                 if not prototype_error and self.pm is not None:
                     try:
                         _write_build_status_for_project(
@@ -935,7 +1009,6 @@ Requirements:
                             _localized_text(lang, "正在构建可预览原型...", "Building playable prototype..."),
                         )
 
-                        # Test-only mock build path (mirrors fastapi_app.py)
                         if os.environ.get("RENPY_MCP_MOCK_BUILD"):
                             settings = get_settings()
                             build_dir = (
@@ -1016,16 +1089,14 @@ Requirements:
             self._save_history()
             _clear_runtime_session(self.project_name)
 
-            events.append(
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "message_kind": "system",
-                    "content": assistant_content,
-                    "pipeline_stage": self.phase.value,
-                }
-            )
-            return events
+            yield {
+                "type": "message",
+                "role": "assistant",
+                "message_kind": "system",
+                "content": assistant_content,
+                "pipeline_stage": self.phase.value,
+            }
+            return
 
         # Rejected -> back to collecting
         self.phase = PipelineStage.COLLECTING
@@ -1040,15 +1111,13 @@ Requirements:
         self._save_history()
         self._save_session()
 
-        return [
-            {
-                "type": "message",
-                "role": "assistant",
-                "message_kind": "text",
-                "content": assistant_content,
-                "pipeline_stage": self.phase.value,
-            }
-        ]
+        yield {
+            "type": "message",
+            "role": "assistant",
+            "message_kind": "text",
+            "content": assistant_content,
+            "pipeline_stage": self.phase.value,
+        }
 
 
 def _get_orchestrator(project_name: str) -> BlueprintOrchestrator:
@@ -1371,12 +1440,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 # --- Blueprint orchestrator confirmation path -------------------
                 if active_project and _orchestrator_has_confirmation(active_project, confirmation_id):
                     orchestrator = _get_orchestrator(active_project)
-                    events = await orchestrator.handle_confirmation_response(approved)
-                    for i, event in enumerate(events):
+                    async for event in orchestrator.handle_confirmation_response(approved):
                         await websocket.send_json(event)
-                        # Stagger progress events so the frontend has time to render each stage.
-                        if i < len(events) - 1 and event.get("type") == "progress":
-                            await asyncio.sleep(0.6)
                     continue
 
                 # --- Regular ChatEngine confirmation path -----------------------

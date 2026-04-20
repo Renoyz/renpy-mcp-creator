@@ -282,7 +282,7 @@ Requirements:
     # ------------------------------------------------------------------
 
     async def generate_background_assets(
-        self, project_name: str, scenes: list[PrototypeScene]
+        self, project_name: str, scenes: list[PrototypeScene], round_id: str | None = None,
     ) -> dict[str, dict]:
         """Generate background images for each scene.
 
@@ -299,12 +299,28 @@ Requirements:
         bg_dir = project_dir / "game" / "images" / "background"
         bg_dir.mkdir(parents=True, exist_ok=True)
 
+        staging_bg_dir: Path | None = None
+        if round_id:
+            staging_bg_dir = project_dir / "game" / "__staging__" / round_id / "images" / "background"
+            staging_bg_dir.mkdir(parents=True, exist_ok=True)
+
         result: dict[str, dict] = {}
         for scene in scenes:
             file_name = f"bg_{scene.scene_id}.png"
-            file_path = bg_dir / file_name
+            final_path = bg_dir / file_name
+            staging_path = staging_bg_dir / file_name if staging_bg_dir else final_path
 
-            # Try ImageService if available
+            # Compute relative paths for return value
+            rel_final = str(final_path.relative_to(project_dir).as_posix())
+            rel_staging = str(staging_path.relative_to(project_dir).as_posix()) if staging_bg_dir else None
+
+            # Protect pre-existing asset when round_id is provided
+            old_backup: Path | None = None
+            if round_id and final_path.exists():
+                old_backup = project_dir / "game" / "__staging__" / round_id / "__backup__" / file_name
+                old_backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(final_path, old_backup)
+
             image_generated = False
             try:
                 from renpy_mcp.config import get_settings
@@ -326,30 +342,53 @@ Requirements:
                         base_name=f"bg_{scene.scene_id}",
                     )
                     if gen_result.success and gen_result.primary_file:
-                        result[scene.scene_id] = {
-                            "path": gen_result.primary_file,
-                            "placeholder": False,
-                            "source": "image_service",
-                            "is_new_file": True,
-                        }
+                        generated = gen_result.primary_file
+                        if round_id and staging_bg_dir:
+                            # Move generated file into staging; restore old asset
+                            shutil.move(str(generated), str(staging_path))
+                            if old_backup and old_backup.exists():
+                                shutil.copy2(old_backup, final_path)
+                            result[scene.scene_id] = {
+                                "path": rel_final,
+                                "staging_path": rel_staging,
+                                "placeholder": False,
+                                "source": "image_service",
+                                "is_new_file": True,
+                            }
+                        else:
+                            result[scene.scene_id] = {
+                                "path": generated,
+                                "placeholder": False,
+                                "source": "image_service",
+                                "is_new_file": True,
+                            }
                         image_generated = True
             except Exception as exc:
                 logger.warning("ImageService background generation failed for %s: %s", scene.scene_id, exc)
 
             if not image_generated:
-                # Fallback: generate a simple placeholder with PIL
                 try:
-                    self._generate_placeholder_background(file_path, scene)
-                    result[scene.scene_id] = {
-                        "path": file_path,
-                        "placeholder": True,
-                        "source": "pil_fallback",
-                        "is_new_file": True,
-                    }
+                    self._generate_placeholder_background(staging_path, scene)
+                    if round_id and staging_bg_dir:
+                        result[scene.scene_id] = {
+                            "path": rel_final,
+                            "staging_path": rel_staging,
+                            "placeholder": True,
+                            "source": "pil_fallback",
+                            "is_new_file": True,
+                        }
+                    else:
+                        result[scene.scene_id] = {
+                            "path": staging_path,
+                            "placeholder": True,
+                            "source": "pil_fallback",
+                            "is_new_file": True,
+                        }
                 except Exception as exc:
                     logger.warning("PIL placeholder generation failed for %s: %s", scene.scene_id, exc)
                     result[scene.scene_id] = {
                         "path": None,
+                        "staging_path": None,
                         "placeholder": True,
                         "source": "none",
                         "is_new_file": False,
@@ -395,7 +434,8 @@ Requirements:
     # ------------------------------------------------------------------
 
     async def generate_character_assets(
-        self, project_name: str, blueprint: ProjectBlueprint, scenes: list[PrototypeScene]
+        self, project_name: str, blueprint: ProjectBlueprint, scenes: list[PrototypeScene],
+        round_id: str | None = None,
     ) -> dict[str, dict]:
         """Generate character sprite images for all characters in prototype scenes.
 
@@ -403,14 +443,20 @@ Requirements:
         Attempts background removal via BackgroundRemover when available.
         Post-processes sprites with normalize_sprite for consistent baseline.
 
+        When round_id is provided, all new files are written to a round-scoped
+        staging directory and only promoted to final paths on commit.
+
         Returns:
             Mapping character_name -> {
-                "path": Path | None,
+                "path": str,              # final project-relative path
+                "staging_path": str | None,
                 "placeholder": bool,
                 "renderable": bool,
                 "renderable_reason": str,
                 "bbox": dict | None,
                 "baseline_offset": int,
+                "is_new_file": bool,
+                "intermediate_paths": list[str],
             }
         """
         if self.pm is None:
@@ -419,6 +465,11 @@ Requirements:
         project_dir = self.pm._project_dir(project_name)
         char_dir = project_dir / "game" / "images" / "character"
         char_dir.mkdir(parents=True, exist_ok=True)
+
+        staging_char_dir: Path | None = None
+        if round_id:
+            staging_char_dir = project_dir / "game" / "__staging__" / round_id / "images" / "character"
+            staging_char_dir.mkdir(parents=True, exist_ok=True)
 
         # Collect unique characters from all scenes
         unique_chars: set[str] = set()
@@ -453,7 +504,11 @@ Requirements:
         for char_name in unique_chars:
             safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or "char_unknown"
             file_name = f"{safe_id}_neutral.png"
-            file_path = char_dir / file_name
+            final_path = char_dir / file_name
+            staging_path = staging_char_dir / file_name if staging_char_dir else final_path
+
+            rel_final = str(final_path.relative_to(project_dir).as_posix())
+            rel_staging = str(staging_path.relative_to(project_dir).as_posix()) if staging_char_dir else None
 
             info = char_info.get(char_name, {})
             appearance = info.get("appearance", "anime character")
@@ -477,9 +532,18 @@ Requirements:
                 "Matching atmosphere for seamless visual novel composition."
             )
 
+            intermediate_paths: list[str] = []
             image_generated = False
             generated_path: Path | None = None
             bg_removed = False
+
+            # Protect pre-existing asset when round_id is provided
+            old_backup: Path | None = None
+            if round_id and final_path.exists():
+                old_backup = project_dir / "game" / "__staging__" / round_id / "__backup__" / file_name
+                old_backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(final_path, old_backup)
+
             try:
                 from renpy_mcp.config import get_settings
                 from renpy_mcp.ai.image_service import ImageService
@@ -494,8 +558,18 @@ Requirements:
                         base_name=f"{safe_id}_neutral",
                     )
                     if gen_result.success and gen_result.primary_file:
-                        generated_path = gen_result.primary_file
-                        # Try background removal
+                        raw_generated = gen_result.primary_file
+                        if round_id and staging_char_dir:
+                            # Move generated file into staging
+                            shutil.move(str(raw_generated), str(staging_path))
+                            if old_backup and old_backup.exists():
+                                shutil.copy2(old_backup, final_path)
+                            generated_path = staging_path
+                            intermediate_paths.append(rel_staging)
+                        else:
+                            generated_path = raw_generated
+
+                        # Try background removal on the staging/generated file
                         transparent_path: Path | None = None
                         try:
                             from renpy_mcp.ai.background_remover import BackgroundRemover
@@ -505,6 +579,16 @@ Requirements:
                             logger.warning("Background removal failed for %s: %s", char_name, exc)
 
                         if transparent_path and transparent_path.exists():
+                            # Ensure transparent result stays inside staging if we are staging
+                            if round_id and staging_char_dir and not str(transparent_path).startswith(str(staging_char_dir)):
+                                dest = staging_char_dir / transparent_path.name
+                                shutil.move(str(transparent_path), str(dest))
+                                transparent_path = dest
+                                intermediate_paths.append(str(dest.relative_to(project_dir).as_posix()))
+                            elif round_id and staging_char_dir:
+                                rel_tp = str(transparent_path.relative_to(project_dir).as_posix())
+                                if rel_tp not in intermediate_paths:
+                                    intermediate_paths.append(rel_tp)
                             generated_path = transparent_path
                             bg_removed = True
                         image_generated = True
@@ -518,65 +602,100 @@ Requirements:
                 try:
                     from renpy_mcp.ai.background_remover import BackgroundRemover
                     remover = BackgroundRemover()
+                    norm_output = (
+                        staging_char_dir / f"{safe_id}_normalized.png"
+                        if round_id and staging_char_dir
+                        else char_dir / f"{safe_id}_normalized.png"
+                    )
                     normalized_path, norm_meta = remover.normalize_sprite(
                         generated_path,
-                        output_path=char_dir / f"{safe_id}_normalized.png",
+                        output_path=norm_output,
                     )
+                    if normalized_path and normalized_path.exists() and round_id and staging_char_dir:
+                        rel_np = str(normalized_path.relative_to(project_dir).as_posix())
+                        if rel_np not in intermediate_paths:
+                            intermediate_paths.append(rel_np)
                 except Exception as exc:
                     logger.warning("Sprite normalization failed for %s: %s", char_name, exc)
 
             # Determine final path and renderability
-            final_path = normalized_path if normalized_path and normalized_path.exists() else generated_path
-            if final_path is None or not final_path.exists():
-                final_path = None
+            final_sprite_path = normalized_path if normalized_path and normalized_path.exists() else generated_path
+            if final_sprite_path is None or not final_sprite_path.exists():
+                final_sprite_path = None
 
-            if not image_generated or final_path is None:
-                # Fallback: generate a simple placeholder with PIL
+            if not image_generated or final_sprite_path is None:
                 try:
-                    self._generate_placeholder_character(file_path, char_name)
-                    rel_path = str(file_path.relative_to(project_dir).as_posix())
-                    result[char_name] = {
-                        "path": rel_path,
-                        "placeholder": True,
-                        "renderable": False,
-                        "renderable_reason": "placeholder_fallback",
-                        "bbox": None,
-                        "baseline_offset": 0,
-                        "is_new_file": True,
-                    }
+                    self._generate_placeholder_character(staging_path, char_name)
+                    if round_id and staging_char_dir:
+                        result[char_name] = {
+                            "path": rel_final,
+                            "staging_path": rel_staging,
+                            "placeholder": True,
+                            "renderable": False,
+                            "renderable_reason": "placeholder_fallback",
+                            "bbox": None,
+                            "baseline_offset": 0,
+                            "is_new_file": True,
+                            "intermediate_paths": intermediate_paths,
+                        }
+                    else:
+                        result[char_name] = {
+                            "path": rel_final,
+                            "placeholder": True,
+                            "renderable": False,
+                            "renderable_reason": "placeholder_fallback",
+                            "bbox": None,
+                            "baseline_offset": 0,
+                            "is_new_file": True,
+                            "intermediate_paths": intermediate_paths,
+                        }
                 except Exception as exc:
                     logger.warning("Character placeholder generation failed for %s: %s", char_name, exc)
                     result[char_name] = {
                         "path": None,
+                        "staging_path": None,
                         "placeholder": True,
                         "renderable": False,
                         "renderable_reason": "generation_failed",
                         "bbox": None,
                         "baseline_offset": 0,
                         "is_new_file": False,
+                        "intermediate_paths": intermediate_paths,
                     }
             else:
-                # Use normalization metadata for renderability, or default to True
                 renderable = norm_meta.get("renderable", True)
                 reason = norm_meta.get("reason", "ok")
                 if not bg_removed:
-                    # Conservatively suppress raw generated sprites without transparent background
                     renderable = False
                     reason = "background_removal_failed"
                 if not renderable:
-                    logger.info(
-                        "Sprite for %s marked unrenderable: %s", char_name, reason
-                    )
-                rel_path = str(final_path.relative_to(project_dir).as_posix())
-                result[char_name] = {
-                    "path": rel_path,
-                    "placeholder": False,
-                    "renderable": renderable,
-                    "renderable_reason": reason,
-                    "bbox": norm_meta.get("bbox"),
-                    "baseline_offset": norm_meta.get("baseline_offset", 0),
-                    "is_new_file": True,
-                }
+                    logger.info("Sprite for %s marked unrenderable: %s", char_name, reason)
+
+                if round_id and staging_char_dir:
+                    rel_sprite = str(final_sprite_path.relative_to(project_dir).as_posix())
+                    result[char_name] = {
+                        "path": rel_final,
+                        "staging_path": rel_sprite,
+                        "placeholder": False,
+                        "renderable": renderable,
+                        "renderable_reason": reason,
+                        "bbox": norm_meta.get("bbox"),
+                        "baseline_offset": norm_meta.get("baseline_offset", 0),
+                        "is_new_file": True,
+                        "intermediate_paths": intermediate_paths,
+                    }
+                else:
+                    rel_sprite = str(final_sprite_path.relative_to(project_dir).as_posix())
+                    result[char_name] = {
+                        "path": rel_sprite,
+                        "placeholder": False,
+                        "renderable": renderable,
+                        "renderable_reason": reason,
+                        "bbox": norm_meta.get("bbox"),
+                        "baseline_offset": norm_meta.get("baseline_offset", 0),
+                        "is_new_file": True,
+                        "intermediate_paths": intermediate_paths,
+                    }
 
         return result
 
@@ -656,14 +775,16 @@ Requirements:
                 renderable_reason = asset.get("renderable_reason", "")
 
                 # Additional gate: if the file doesn't actually exist, mark unrenderable
-                if sprite_path:
+                # Prefer staging_path for existence check when available
+                check_path = asset.get("staging_path") or sprite_path
+                if check_path:
                     exists = False
-                    if isinstance(sprite_path, Path):
-                        exists = sprite_path.exists()
+                    if isinstance(check_path, Path):
+                        exists = check_path.exists()
                     elif project_dir is not None:
-                        exists = (project_dir / sprite_path).exists()
-                    elif Path(sprite_path).is_absolute():
-                        exists = Path(sprite_path).exists()
+                        exists = (project_dir / check_path).exists()
+                    elif Path(check_path).is_absolute():
+                        exists = Path(check_path).exists()
                     if not exists:
                         is_renderable = False
                         renderable_reason = "file_missing"
@@ -831,14 +952,16 @@ Requirements:
         # Emit character sprite image definitions
         char_assets = character_assets or {}
         for char_name, asset in char_assets.items():
-            char_path = asset.get("path")
+            # Prefer staging_path for existence check; emit path (final) in script
+            check_path = asset.get("staging_path") or asset.get("path")
             char_exists = False
-            if isinstance(char_path, Path):
-                char_exists = char_path.exists()
-            elif isinstance(char_path, str):
-                char_exists = (project_dir / char_path).exists()
-            if char_path and char_exists:
-                rel_path = char_path if isinstance(char_path, str) else char_path.relative_to(project_dir).as_posix()
+            if isinstance(check_path, Path):
+                char_exists = check_path.exists()
+            elif isinstance(check_path, str):
+                char_exists = (project_dir / check_path).exists()
+            emit_path = asset.get("path") or asset.get("staging_path")
+            if emit_path and char_exists:
+                rel_path = emit_path if isinstance(emit_path, str) else emit_path.relative_to(project_dir).as_posix()
                 runtime_path = _to_renpy_asset_path(rel_path)
                 safe_id = char_registry.get(char_name) or _safe_character_id(char_name) or "char_unknown"
                 lines.append(f'image {safe_id}_neutral = "{runtime_path}"')
@@ -887,14 +1010,19 @@ Requirements:
         # Emit image definitions for backgrounds
         bg_assets = background_assets or {}
         for scene in scenes:
-            bg_path = self._extract_bg_path(bg_assets.get(scene.scene_id))
+            bg_asset = bg_assets.get(scene.scene_id)
+            bg_path = self._extract_bg_path(bg_asset)
+            # Prefer staging_path for existence check
+            bg_staging = bg_asset.get("staging_path") if isinstance(bg_asset, dict) else None
+            check_path = bg_staging or bg_path
             bg_exists = False
-            if isinstance(bg_path, Path):
-                bg_exists = bg_path.exists()
-            elif isinstance(bg_path, str):
-                bg_exists = (project_dir / bg_path).exists()
-            if bg_path and bg_exists:
-                rel_path = bg_path if isinstance(bg_path, str) else bg_path.relative_to(project_dir).as_posix()
+            if isinstance(check_path, Path):
+                bg_exists = check_path.exists()
+            elif isinstance(check_path, str):
+                bg_exists = (project_dir / check_path).exists()
+            emit_path = bg_path or bg_staging
+            if emit_path and bg_exists:
+                rel_path = emit_path if isinstance(emit_path, str) else emit_path.relative_to(project_dir).as_posix()
                 runtime_path = _to_renpy_asset_path(rel_path)
                 safe_tag = _safe_image_tag(scene.scene_id)
                 lines.append(f'image bg_{safe_tag} = "{runtime_path}"')
@@ -904,9 +1032,17 @@ Requirements:
         for i, scene in enumerate(scenes):
             lines.append(f"label {scene.entry_label}:")
             # Use real background asset if available, else controlled fallback
-            bg_path = self._extract_bg_path(bg_assets.get(scene.scene_id))
+            bg_asset = bg_assets.get(scene.scene_id)
+            bg_path = self._extract_bg_path(bg_asset)
+            bg_staging = bg_asset.get("staging_path") if isinstance(bg_asset, dict) else None
+            check_path = bg_staging or bg_path
             safe_tag = _safe_image_tag(scene.scene_id)
-            if bg_path and bg_path.exists():
+            bg_exists = False
+            if isinstance(check_path, Path):
+                bg_exists = check_path.exists()
+            elif isinstance(check_path, str):
+                bg_exists = (project_dir / check_path).exists()
+            if bg_path and bg_exists:
                 lines.append(f"    scene bg_{safe_tag}")
             else:
                 escaped_loc = _escape_renpy_string(scene.location)
@@ -921,9 +1057,10 @@ Requirements:
             # Show sprites for characters in this scene (only when renderable)
             shown_sprites: list[str] = []
             for sp in scene.sprite_plan:
+                sprite_check_path = sp.sprite_path
                 sprite_abs = None
-                if sp.sprite_path:
-                    sprite_abs = project_dir / sp.sprite_path if not Path(sp.sprite_path).is_absolute() else Path(sp.sprite_path)
+                if sprite_check_path:
+                    sprite_abs = project_dir / sprite_check_path if not Path(sprite_check_path).is_absolute() else Path(sprite_check_path)
                 if sp.sprite_renderable and sprite_abs and sprite_abs.exists():
                     safe_id = sp.character_id or char_registry.get(sp.character_name) or _safe_character_id(sp.character_name) or "char_unknown"
                     transform_name = sp.transform_name
@@ -1081,6 +1218,7 @@ Requirements:
         project_name: str,
         new_scene_ids: list[str],
         staging_script_path: str,
+        round_id: str | None = None,
     ) -> None:
         """Finalize prototype replacement by promoting the staging script and removing old artifacts.
 
@@ -1103,7 +1241,24 @@ Requirements:
         if staging_file.exists():
             staging_file.replace(final_file)
 
-        # 2. Remove old prototype index entries (keep only new_scene_ids)
+        # 2. Promote round-scoped staging assets to final paths
+        if round_id:
+            staging_dir = project_dir / "game" / "__staging__" / round_id
+            if staging_dir.exists():
+                for src in staging_dir.rglob("*"):
+                    if src.is_file() and "__backup__" not in str(src):
+                        rel = src.relative_to(staging_dir)
+                        dst = project_dir / "game" / rel
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        src.replace(dst)
+                # Remove empty staging dir and backup dir
+                try:
+                    import shutil
+                    shutil.rmtree(staging_dir)
+                except OSError:
+                    logger.warning("Failed to remove staging dir: %s", staging_dir)
+
+        # 3. Remove old prototype index entries (keep only new_scene_ids)
         index = self.pm.read_project_index(project_name)
         if index and "scenes" in index:
             old_ids = [
@@ -1115,7 +1270,7 @@ Requirements:
                     del index["scenes"][sid]
                 self.pm.write_project_index(project_name, index)
 
-        # 3. Remove old prototype files (keep only the new final file)
+        # 4. Remove old prototype files (keep only the new final file)
         game_dir = project_dir / "game"
         if game_dir.exists():
             new_file_name = Path(final_script_path).name
@@ -1139,6 +1294,7 @@ Requirements:
         new_scene_ids: list[str],
         old_script_content: str | None,
         generated_asset_paths: list[str] | None = None,
+        round_id: str | None = None,
     ) -> None:
         """Rollback a failed prototype generation round.
 
@@ -1174,7 +1330,18 @@ Requirements:
             if changed:
                 self.pm.write_project_index(project_name, index)
 
-        # 4. Remove newly generated visual asset files (only those explicitly listed)
+        # 4. Remove round-scoped staging directory (primary rollback mechanism)
+        if round_id:
+            project_dir = self.pm._project_dir(project_name)
+            staging_dir = project_dir / "game" / "__staging__" / round_id
+            if staging_dir.exists():
+                try:
+                    import shutil
+                    shutil.rmtree(staging_dir)
+                except OSError:
+                    logger.warning("Failed to remove staging dir: %s", staging_dir)
+
+        # 5. Fallback: remove individual generated asset paths (legacy path)
         if generated_asset_paths:
             project_dir = self.pm._project_dir(project_name)
             for p in generated_asset_paths:

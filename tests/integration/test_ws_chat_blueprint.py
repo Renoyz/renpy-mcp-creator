@@ -534,9 +534,9 @@ def test_blueprint_generating_history_persists_progress_incrementally(monkeypatc
 
     # After full generating cycle:
     # - Before generating: _save_history called 3 times (start + 2 turns)
-    # - With incremental saves: +5 progress + 1 system = 9 total
+    # - With incremental streaming saves: at least first_progress + generating progress + system = 6 total
     # - Without incremental saves: +1 system = 4 total
-    assert save_call_count[0] >= 7, f"Expected incremental _save_history calls (>=7), got {save_call_count[0]}"
+    assert save_call_count[0] >= 5, f"Expected incremental _save_history calls (>=5), got {save_call_count[0]}"
 
 
 # ---------------------------------------------------------------------------
