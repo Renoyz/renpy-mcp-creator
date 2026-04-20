@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,17 @@ from renpy_mcp.services.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
+_CJK_FONT_SOURCE = Path(r"C:\Windows\Fonts\simhei.ttf")
+_CJK_FONT_DEST_NAME = "simhei.ttf"
+
+
+class DialogueBeat(BaseModel):
+    """A single dialogue beat within a scene."""
+
+    speaker: str
+    intent: str
+    content_brief: str
+
 
 class PrototypeScene(BaseModel):
     """A detailed scene generated for the prototype chapter."""
@@ -23,7 +35,10 @@ class PrototypeScene(BaseModel):
     title: str
     summary: str
     location: str
+    location_visual_brief: str = ""
+    mood: str = ""
     characters_present: list[str] = Field(default_factory=list)
+    dialogue_beats: list[DialogueBeat] = Field(default_factory=list)
     entry_label: str
     next_scene_id: str | None = None
 
@@ -52,6 +67,31 @@ class PrototypeGenerationService:
     # ------------------------------------------------------------------
     # Scene generation (LLM)
     # ------------------------------------------------------------------
+
+    def _validate_scene_consistency(self, scenes: list[PrototypeScene]) -> None:
+        """Validate and auto-correct scene consistency rules.
+
+        Rules enforced:
+        1. dialogue_beats.speaker must belong to characters_present.
+        2. location_visual_brief must not be empty.
+        3. mood must not be empty.
+        """
+        for scene in scenes:
+            # Rule 1: speakers must be in characters_present
+            valid_speakers = set(scene.characters_present)
+            filtered_beats: list[DialogueBeat] = []
+            for beat in scene.dialogue_beats:
+                if beat.speaker in valid_speakers:
+                    filtered_beats.append(beat)
+            scene.dialogue_beats = filtered_beats
+
+            # Rule 2: location_visual_brief fallback
+            if not scene.location_visual_brief.strip():
+                scene.location_visual_brief = scene.location
+
+            # Rule 3: mood fallback
+            if not scene.mood.strip():
+                scene.mood = "neutral"
 
     async def generate_scenes(
         self, chapter: ChapterSummary, blueprint: ProjectBlueprint
@@ -94,9 +134,20 @@ Generate a JSON array of scenes. Each scene must have these fields:
 - title: scene title
 - summary: 1-2 sentence narration summary
 - location: setting name (e.g., "library", "cafe")
+- location_visual_brief: visual description for background generation (e.g., "被火焰吞噬的村庄废墟，夜色、残墙、余烬、低能见度")
+- mood: emotional tone of the scene (e.g., "悲怆", "紧张", "压迫", "短暂温暖", "怀疑")
 - characters_present: list of character names appearing in this scene
+- dialogue_beats: array of dialogue beats, each with:
+  - speaker: character name (must be in characters_present)
+  - intent: what the character is trying to do or feel
+  - content_brief: brief description of what they say
 - entry_label: Ren'Py label name for this scene (e.g., "prototype_ch1_start")
 - next_scene_id: scene_id of the next scene, or null for the last scene
+
+Consistency rules:
+- Every dialogue_beats.speaker MUST be in characters_present.
+- The mood must be reflected in both the location_visual_brief and the dialogue beats.
+- If the location changes between scenes, the visual brief must also change.
 
 Requirements:
 - 2 to 4 scenes total
@@ -134,6 +185,7 @@ Requirements:
                     raise ValueError("Expected JSON array of scenes")
 
                 scenes = [PrototypeScene(**item) for item in data]
+                self._validate_scene_consistency(scenes)
                 return scenes
 
             except json.JSONDecodeError as e:
@@ -160,14 +212,165 @@ Requirements:
         """Derive the final path from a staging prototype script path."""
         return staging_path.replace(".__staging__", "")
 
+    # ------------------------------------------------------------------
+    # Background asset generation
+    # ------------------------------------------------------------------
+
+    async def generate_background_assets(
+        self, project_name: str, scenes: list[PrototypeScene]
+    ) -> dict[str, Path]:
+        """Generate background images for each scene.
+
+        Tries ImageService first; falls back to PIL placeholder on failure.
+        Returns a mapping of scene_id -> background file path.
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for asset generation")
+
+        project_dir = self.pm._project_dir(project_name)
+        bg_dir = project_dir / "game" / "images" / "background"
+        bg_dir.mkdir(parents=True, exist_ok=True)
+
+        result: dict[str, Path] = {}
+        for scene in scenes:
+            file_name = f"bg_{scene.scene_id}.png"
+            file_path = bg_dir / file_name
+
+            # Try ImageService if available
+            image_generated = False
+            try:
+                from renpy_mcp.config import get_settings
+                from renpy_mcp.ai.image_service import ImageService
+
+                settings = get_settings()
+                image_service = ImageService(settings)
+                if image_service.is_available():
+                    bg_prompt = (
+                        f"Background: {scene.location}. "
+                        f"Visual: {scene.location_visual_brief}. "
+                        f"Mood: {scene.mood}. "
+                        "Visual novel background style, 16:9, no characters, no text."
+                    )
+                    gen_result = await image_service.generate_image(
+                        project_dir=project_dir,
+                        prompt=bg_prompt,
+                        image_type="background",
+                        base_name=f"bg_{scene.scene_id}",
+                    )
+                    if gen_result.success and gen_result.primary_file:
+                        result[scene.scene_id] = gen_result.primary_file
+                        image_generated = True
+            except Exception as exc:
+                logger.warning("ImageService background generation failed for %s: %s", scene.scene_id, exc)
+
+            if not image_generated:
+                # Fallback: generate a simple placeholder with PIL
+                try:
+                    self._generate_placeholder_background(file_path, scene)
+                    result[scene.scene_id] = file_path
+                except Exception as exc:
+                    logger.warning("PIL placeholder generation failed for %s: %s", scene.scene_id, exc)
+
+        return result
+
+    def _generate_placeholder_background(self, file_path: Path, scene: PrototypeScene) -> None:
+        """Generate a simple colored placeholder background using PIL."""
+        from PIL import Image, ImageDraw
+
+        # Map mood to base color
+        mood_colors: dict[str, tuple[int, int, int]] = {
+            "悲怆": (30, 30, 50),
+            "紧张": (50, 20, 20),
+            "压迫": (20, 20, 20),
+            "短暂温暖": (60, 40, 30),
+            "怀疑": (30, 40, 30),
+        }
+        base_color = mood_colors.get(scene.mood, (25, 25, 35))
+
+        img = Image.new("RGB", (1280, 720), color=base_color)
+        draw = ImageDraw.Draw(img)
+
+        # Add a subtle gradient-like overlay
+        for y in range(0, 720, 4):
+            shade = int((y / 720) * 30)
+            draw.line([(0, y), (1280, y)], fill=(
+                min(255, base_color[0] + shade),
+                min(255, base_color[1] + shade),
+                min(255, base_color[2] + shade),
+            ))
+
+        # Add scene location text as watermark
+        draw.text((20, 20), f"{scene.location}", fill=(200, 200, 200))
+        draw.text((20, 50), f"{scene.mood}", fill=(180, 180, 180))
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(file_path, "PNG")
+
+    # ------------------------------------------------------------------
+    # CJK font configuration
+    # ------------------------------------------------------------------
+
+    def ensure_cjk_font_config(self, project_name: str) -> dict:
+        """Ensure the project has CJK-safe font configuration.
+
+        Copies a system CJK font into the project and writes a Ren'Py config
+        file that references it.
+
+        Returns:
+            dict with keys: configured (bool), font_path (str | None), config_path (str)
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for font configuration")
+
+        project_dir = self.pm._project_dir(project_name)
+        fonts_dir = project_dir / "game" / "fonts"
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+
+        font_dest = fonts_dir / _CJK_FONT_DEST_NAME
+        configured = False
+
+        if _CJK_FONT_SOURCE.exists() and not font_dest.exists():
+            try:
+                shutil.copy2(_CJK_FONT_SOURCE, font_dest)
+                configured = True
+            except OSError as exc:
+                logger.warning("Failed to copy CJK font: %s", exc)
+        elif font_dest.exists():
+            configured = True
+
+        # Write font config rpy
+        config_path = project_dir / "game" / "prototype_fonts.rpy"
+        lines = [
+            "# Auto-generated CJK font configuration for prototype",
+            "init python:",
+            '    gui.text_font = "fonts/simhei.ttf"',
+            '    gui.name_text_font = "fonts/simhei.ttf"',
+            '    gui.interface_text_font = "fonts/simhei.ttf"',
+            "",
+        ]
+        config_path.write_text("\n".join(lines), encoding="utf-8")
+
+        return {
+            "configured": configured,
+            "font_path": font_dest.relative_to(project_dir).as_posix() if font_dest.exists() else None,
+            "config_path": config_path.relative_to(project_dir).as_posix(),
+        }
     def write_script(
-        self, project_name: str, chapter: ChapterSummary, scenes: list[PrototypeScene]
+        self,
+        project_name: str,
+        chapter: ChapterSummary,
+        scenes: list[PrototypeScene],
+        background_assets: dict[str, Path] | None = None,
     ) -> str:
         """Generate and write a minimal executable .rpy script skeleton to a staging file.
 
         The script is written to a staging path (e.g.
         "game/prototype_ch1.__staging__.rpy").  Callers must invoke
         commit_prototype_replacement() to promote it to the final path.
+
+        Args:
+            background_assets: Optional mapping of scene_id -> background image path.
+                If provided, the script will reference real background assets.
 
         Returns:
             The staging relative file path.
@@ -189,19 +392,33 @@ Requirements:
         lines.append(f"# Prototype chapter: {chapter.name}")
         lines.append("")
 
+        # Emit image definitions for backgrounds
+        bg_assets = background_assets or {}
+        for scene in scenes:
+            bg_path = bg_assets.get(scene.scene_id)
+            if bg_path and bg_path.exists():
+                rel_path = bg_path.relative_to(project_dir).as_posix()
+                lines.append(f'image bg_{scene.scene_id} = "{rel_path}"')
+        if bg_assets:
+            lines.append("")
+
         for i, scene in enumerate(scenes):
             lines.append(f"label {scene.entry_label}:")
-            # Safe placeholder: scene black works without any image assets
-            lines.append('    scene black')
+            # Use real background asset if available, else controlled fallback
+            bg_path = bg_assets.get(scene.scene_id)
+            if bg_path and bg_path.exists():
+                lines.append(f"    scene bg_{scene.scene_id}")
+            else:
+                lines.append(f"    scene black  # PLACEHOLDER: {scene.location}")
             if scene.location:
-                safe_location = scene.location.replace('"', '\\"')
-                lines.append(f'    "【地点：{safe_location}】"')
+                safe_location = scene.location.replace('"', '\"')
+                lines.append(f'    "【地点：{safe_location}"')
             if scene.characters_present:
                 chars = "、".join(scene.characters_present)
-                safe_chars = chars.replace('"', '\\"')
-                lines.append(f'    "【登场角色：{safe_chars}】"')
+                safe_chars = chars.replace('"', '\"')
+                lines.append(f'    "【登场角色：{safe_chars}"')
             # Use summary as narration text
-            narration = scene.summary.replace('"', '\\"')
+            narration = scene.summary.replace('"', '\"')
             lines.append(f'    "{narration}"')
             if scene.next_scene_id:
                 next_scene = next((s for s in scenes if s.scene_id == scene.next_scene_id), None)
@@ -217,7 +434,6 @@ Requirements:
 
         staging_file.write_text("\n".join(lines), encoding="utf-8")
         return staging_path
-
     # ------------------------------------------------------------------
     # Main script wiring
     # ------------------------------------------------------------------
@@ -434,13 +650,14 @@ Requirements:
     # ------------------------------------------------------------------
     # Index writeback
     # ------------------------------------------------------------------
-
     def update_index(
         self,
         project_name: str,
         chapter: ChapterSummary,
         scenes: list[PrototypeScene],
         script_path: str,
+        background_assets: dict[str, Path] | None = None,
+        cjk_font_config: dict | None = None,
     ) -> None:
         """Update meta/index.json with full prototype scene metadata.
 
@@ -454,18 +671,30 @@ Requirements:
         if "scenes" not in index:
             index["scenes"] = {}
 
+        bg_assets = background_assets or {}
         for i, scene in enumerate(scenes):
-            index["scenes"][scene.scene_id] = {
+            bg_path = bg_assets.get(scene.scene_id)
+            entry = {
                 "chapter_id": chapter.id,
                 "scene_id": scene.scene_id,
                 "title": scene.title,
                 "summary": scene.summary,
                 "location": scene.location,
+                "location_visual_brief": scene.location_visual_brief,
+                "mood": scene.mood,
+                "characters_present": scene.characters_present,
+                "dialogue_beats": [b.model_dump() for b in scene.dialogue_beats],
                 "next_scene_id": scene.next_scene_id,
                 "label": scene.entry_label,
                 "file_path": script_path,
                 "source": "prototype",
                 "order": i + 1,
+                "background_asset_path": str(bg_path.relative_to(self.pm._project_dir(project_name)).as_posix()) if bg_path and bg_path.exists() else None,
+                "background_placeholder": not (bg_path and bg_path.exists()),
             }
+            index["scenes"][scene.scene_id] = entry
+
+        if cjk_font_config:
+            index["cjk_font_config"] = cjk_font_config
 
         self.pm.write_project_index(project_name, index)

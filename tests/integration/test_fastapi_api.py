@@ -1830,11 +1830,19 @@ class TestPrototypePipelineStatus:
                     "title": "初次相遇",
                     "summary": "主角在图书馆遇到配角。",
                     "location": "library",
+                    "location_visual_brief": "安静的大学图书馆，暖黄色灯光，午后阳光",
+                    "mood": "短暂温暖",
+                    "characters_present": ["主角", "配角"],
+                    "dialogue_beats": [
+                        {"speaker": "主角", "intent": "寻找一本书", "content_brief": "询问配角是否见过某本书"},
+                    ],
                     "next_scene_id": None,
                     "label": "prototype_ch1_start",
                     "file_path": "game/prototype_ch1_第一章.rpy",
                     "source": "prototype",
                     "order": 1,
+                    "background_asset_path": None,
+                    "background_placeholder": True,
                 },
             }
         }

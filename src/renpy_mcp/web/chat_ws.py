@@ -857,20 +857,31 @@ Requirements:
                     scenes = await service.generate_scenes(chapter, self.draft)
                     new_scene_ids = [s.scene_id for s in scenes]
 
-                    # Step 2: write new prototype script to staging file
-                    staging_path = service.write_script(self.project_name, chapter, scenes)
+                    # Step 2: generate background assets for each scene
+                    bg_assets = await service.generate_background_assets(self.project_name, scenes)
+
+                    # Step 3: ensure CJK-safe font configuration
+                    cjk_font_config = service.ensure_cjk_font_config(self.project_name)
+
+                    # Step 4: write new prototype script to staging file (with real backgrounds)
+                    staging_path = service.write_script(
+                        self.project_name, chapter, scenes, background_assets=bg_assets
+                    )
                     final_path = service._final_path_from_staging(staging_path)
 
-                    # Step 3: backup main script before rewiring
+                    # Step 5: backup main script before rewiring
                     old_script_content = service.backup_main_script(self.project_name)
 
-                    # Step 4: wire main script to new prototype entry
+                    # Step 6: wire main script to new prototype entry
                     service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
 
-                    # Step 5: write new prototype index entries (pointing to final path)
-                    service.update_index(self.project_name, chapter, scenes, final_path)
+                    # Step 7: write new prototype index entries (pointing to final path)
+                    service.update_index(
+                        self.project_name, chapter, scenes, final_path,
+                        background_assets=bg_assets, cjk_font_config=cjk_font_config,
+                    )
 
-                    # Step 6: commit — promote staging file and remove old artifacts
+                    # Step 8: commit — promote staging file and remove old artifacts
                     service.commit_prototype_replacement(self.project_name, new_scene_ids, staging_path)
 
                 except Exception as e:

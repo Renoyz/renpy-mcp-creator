@@ -75,7 +75,13 @@ def _make_mock_scene_provider() -> object:
             "title": "初次相遇",
             "summary": "主角在图书馆遇到配角，两人因为一本书结缘。",
             "location": "library",
+            "location_visual_brief": "安静的大学图书馆内景，书架高耸，暖黄色灯光，午后阳光从窗户斜射入",
+            "mood": "短暂温暖",
             "characters_present": ["主角", "配角"],
+            "dialogue_beats": [
+                {"speaker": "主角", "intent": "寻找一本书", "content_brief": "询问配角是否见过某本书"},
+                {"speaker": "配角", "intent": "分享阅读兴趣", "content_brief": "表示自己也喜欢这本书"},
+            ],
             "entry_label": "prototype_ch1_start",
             "next_scene_id": "proto-ch1-s2",
         },
@@ -84,7 +90,13 @@ def _make_mock_scene_provider() -> object:
             "title": "深夜对话",
             "summary": "两人在闭馆后继续在咖啡厅讨论书中的哲学问题。",
             "location": "cafe",
+            "location_visual_brief": "深夜营业的小咖啡厅，木质桌椅，窗外路灯昏黄，咖啡香气",
+            "mood": "怀疑",
             "characters_present": ["主角", "配角"],
+            "dialogue_beats": [
+                {"speaker": "主角", "intent": "探讨哲学观点", "content_brief": "提出对书中观点的质疑"},
+                {"speaker": "配角", "intent": "解释并反问", "content_brief": "解释自己的看法并反问主角"},
+            ],
             "entry_label": "prototype_ch1_scene2",
             "next_scene_id": "proto-ch1-s3",
         },
@@ -93,7 +105,13 @@ def _make_mock_scene_provider() -> object:
             "title": "分别时刻",
             "summary": "夜色渐深，两人在车站告别，约定明天再见。",
             "location": "train_station",
+            "location_visual_brief": "夜晚的城市火车站台，霓虹灯闪烁，列车灯光远去，微凉的风",
+            "mood": "悲怆",
             "characters_present": ["主角", "配角"],
+            "dialogue_beats": [
+                {"speaker": "主角", "intent": "表达不舍", "content_brief": "希望下次还能一起讨论"},
+                {"speaker": "配角", "intent": "温柔告别", "content_brief": "约定明天同一时间再见"},
+            ],
             "entry_label": "prototype_ch1_scene3",
             "next_scene_id": None,
         },
@@ -1231,3 +1249,221 @@ async def test_prototype_status_endpoint_reflects_prototype_presence(
     assert data["scene_count"] == len(scenes)
     assert data["script_exists"] is True
     assert data["wired"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Round 6: Scene package consistency, background assets, CJK fonts
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_generate_scenes_produces_consistent_scene_packages(client: TestClient, tmp_path: Path) -> None:
+    """generate_scenes must produce scenes with location_visual_brief, mood, dialogue_beats,
+    and all dialogue speakers must belong to characters_present."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=None, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    for scene in scenes:
+        assert scene.location_visual_brief, f"Scene {scene.scene_id} missing location_visual_brief"
+        assert scene.mood, f"Scene {scene.scene_id} missing mood"
+        assert isinstance(scene.dialogue_beats, list), f"Scene {scene.scene_id} dialogue_beats must be a list"
+        valid_speakers = set(scene.characters_present)
+        for beat in scene.dialogue_beats:
+            assert beat.speaker in valid_speakers, (
+                f"Speaker '{beat.speaker}' not in characters_present {valid_speakers}"
+            )
+            assert beat.intent, f"Beat intent must not be empty"
+            assert beat.content_brief, f"Beat content_brief must not be empty"
+
+
+@pytest.mark.asyncio
+async def test_background_assets_are_generated_and_bound_to_scene_index(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Background assets must be generated, written to disk, and bound in the scene index."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_bg_assets"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    bg_assets = await service.generate_background_assets(project_name, scenes)
+
+    # At least one background file should exist
+    assert len(bg_assets) > 0, "Background assets should have been generated"
+    for scene_id, bg_path in bg_assets.items():
+        assert bg_path.exists(), f"Background file for {scene_id} should exist at {bg_path}"
+
+    # Write script and index with background binding
+    staging_path = service.write_script(project_name, chapter, scenes, background_assets=bg_assets)
+    final_path = service._final_path_from_staging(staging_path)
+    service.update_index(project_name, chapter, scenes, final_path, background_assets=bg_assets)
+
+    # Verify index contains background mapping
+    index = pm.read_project_index(project_name)
+    for scene in scenes:
+        mapping = index["scenes"][scene.scene_id]
+        assert mapping.get("background_asset_path") is not None, (
+            f"Scene {scene.scene_id} missing background_asset_path in index"
+        )
+        assert mapping.get("background_placeholder") is False, (
+            f"Scene {scene.scene_id} should not be marked placeholder when asset exists"
+        )
+
+
+@pytest.mark.asyncio
+async def test_write_script_references_real_background_assets_instead_of_scene_black(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """When background assets are provided, write_script must reference them instead of scene black."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_real_bg"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    bg_assets = await service.generate_background_assets(project_name, scenes)
+
+    staging_path = service.write_script(project_name, chapter, scenes, background_assets=bg_assets)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must contain image definitions for backgrounds
+    for scene_id in bg_assets:
+        assert f"image bg_{scene_id}" in content, f"Missing image definition for bg_{scene_id}"
+
+    # Must use real background references, not just scene black
+    for scene in scenes:
+        if scene.scene_id in bg_assets:
+            assert f"scene bg_{scene.scene_id}" in content, (
+                f"Scene {scene.scene_id} should reference bg_{scene.scene_id}"
+            )
+
+    # Should not contain uncontrolled scene black (placeholder comments are OK)
+    # The old uniform "scene black" without comment must not appear for scenes with assets
+    for scene in scenes:
+        if scene.scene_id in bg_assets:
+            assert f"    scene black\n" not in content.split(f"label {scene.entry_label}:")[1].split("label ")[0], (
+                f"Scene {scene.scene_id} should not use bare scene black when asset exists"
+            )
+
+
+@pytest.mark.asyncio
+async def test_web_preview_uses_cjk_safe_font_configuration(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Prototype generation must produce CJK-safe font configuration files."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_cjk_font"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    # Ensure CJK font config
+    font_config = service.ensure_cjk_font_config(project_name)
+
+    # Font config file must exist
+    config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+    assert config_path.exists(), "CJK font config file must be written"
+
+    content = config_path.read_text(encoding="utf-8")
+    assert "gui.text_font" in content, "Font config must set gui.text_font"
+    assert "fonts/simhei.ttf" in content, "Font config must reference simhei.ttf"
+
+    # Index must record CJK font config
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    final_path = service._final_path_from_staging(staging_path)
+    service.update_index(
+        project_name, chapter, scenes, final_path, cjk_font_config=font_config
+    )
+
+    index = pm.read_project_index(project_name)
+    assert "cjk_font_config" in index, "Index must contain cjk_font_config"
+    assert index["cjk_font_config"]["config_path"] == "game/prototype_fonts.rpy", (
+        "Index must record font config path"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_marks_placeholder_when_background_generation_fails(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When background generation fails, scenes must be marked as placeholder in the index."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_bg_fail"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Force PIL placeholder generation to fail by breaking Image.new
+    def _broken_image_new(*args, **kwargs):
+        raise RuntimeError("Simulated PIL failure")
+
+    monkeypatch.setattr("PIL.Image.new", _broken_image_new)
+
+    bg_assets = await service.generate_background_assets(project_name, scenes)
+
+    # No assets should have been generated
+    assert len(bg_assets) == 0, "Background assets should be empty when generation fails"
+
+    staging_path = service.write_script(project_name, chapter, scenes, background_assets=bg_assets)
+    final_path = service._final_path_from_staging(staging_path)
+    service.update_index(project_name, chapter, scenes, final_path, background_assets=bg_assets)
+
+    index = pm.read_project_index(project_name)
+    for scene in scenes:
+        mapping = index["scenes"][scene.scene_id]
+        assert mapping.get("background_placeholder") is True, (
+            f"Scene {scene.scene_id} must be marked placeholder when background fails"
+        )
+        assert mapping.get("background_asset_path") is None, (
+            f"Scene {scene.scene_id} must not have asset path when generation failed"
+        )
+
+    # Script should use controlled fallback (scene black with PLACEHOLDER comment)
+    script_path = tmp_path / project_name / staging_path
+    content = script_path.read_text(encoding="utf-8")
+    assert "PLACEHOLDER" in content, "Script must indicate placeholder backgrounds"

@@ -26,6 +26,12 @@ export interface ProjectMeta {
   updated_at?: string;
 }
 
+export interface DialogueBeat {
+  speaker: string;
+  intent: string;
+  content_brief: string;
+}
+
 export interface Scene {
   id: string;
   name: string;
@@ -37,6 +43,12 @@ export interface Scene {
   status?: string;
   type?: string;
   is_ending?: boolean | null;
+  location?: string | null;
+  location_visual_brief?: string | null;
+  mood?: string | null;
+  dialogue_beats?: DialogueBeat[];
+  summary?: string | null;
+  background_placeholder?: boolean;
 }
 
 export interface Chapter {

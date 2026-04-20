@@ -841,11 +841,20 @@ def _seed_project_prototype(workspace: Path, project_name: str) -> None:
                 "title": "初次相遇",
                 "summary": "主角在图书馆遇到配角。",
                 "location": "library",
+                "location_visual_brief": "安静的大学图书馆，暖黄色灯光，午后阳光",
+                "mood": "短暂温暖",
+                "characters_present": ["主角", "配角"],
+                "dialogue_beats": [
+                    {"speaker": "主角", "intent": "寻找一本书", "content_brief": "询问配角是否见过某本书"},
+                    {"speaker": "配角", "intent": "分享兴趣", "content_brief": "表示自己也喜欢这本书"},
+                ],
                 "next_scene_id": "proto-ch1-s2",
                 "label": "prototype_ch1_start",
                 "file_path": "game/prototype_ch1_第一章.rpy",
                 "source": "prototype",
                 "order": 1,
+                "background_asset_path": None,
+                "background_placeholder": True,
             },
             "proto-ch1-s2": {
                 "chapter_id": "ch1",
@@ -853,11 +862,19 @@ def _seed_project_prototype(workspace: Path, project_name: str) -> None:
                 "title": "深夜对话",
                 "summary": "两人在咖啡厅讨论。",
                 "location": "cafe",
+                "location_visual_brief": "深夜小咖啡厅，木质桌椅，窗外路灯昏黄",
+                "mood": "怀疑",
+                "characters_present": ["主角", "配角"],
+                "dialogue_beats": [
+                    {"speaker": "主角", "intent": "探讨哲学", "content_brief": "提出对书中观点的质疑"},
+                ],
                 "next_scene_id": None,
                 "label": "prototype_ch1_scene2",
                 "file_path": "game/prototype_ch1_第一章.rpy",
                 "source": "prototype",
                 "order": 2,
+                "background_asset_path": None,
+                "background_placeholder": True,
             },
         }
     }
@@ -1122,6 +1139,43 @@ def test_workspace_click_scene_switches_script(
 
     # Script should switch to scene 2 content
     expect(page.locator("text=Hello scene 2")).to_be_visible(timeout=10000)
+
+
+def test_workspace_scene_view_renders_readable_scene_content_not_only_raw_script(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Scene tab must show readable scene metadata (location, mood, dialogue beats)
+    and not only the raw script source."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_ws_readable_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_prototype(e2e_workspace, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Switch to Scene tab
+    page.locator("button", has_text="场景").click()
+
+    # Readable scene view should be visible
+    expect(page.locator("text=场景概览")).to_be_visible(timeout=10000)
+
+    # Location badge
+    expect(page.locator("[data-testid='scene-location-badge']")).to_have_text("library", timeout=10000)
+
+    # Mood badge
+    expect(page.locator("[data-testid='scene-mood-badge']")).to_have_text("短暂温暖", timeout=10000)
+
+    # Visual brief
+    expect(page.locator("text=安静的大学图书馆")).to_be_visible(timeout=10000)
+
+    # Dialogue beats
+    expect(page.locator("text=对话节拍")).to_be_visible(timeout=10000)
+    expect(page.locator("text=主角").first).to_be_visible(timeout=10000)
+
+    # Background placeholder indicator
+    expect(page.locator("[data-testid='scene-bg-placeholder']")).to_be_visible(timeout=10000)
 
 
 def test_workspace_shows_error_when_blueprint_missing(
