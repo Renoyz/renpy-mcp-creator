@@ -919,6 +919,43 @@ def create_app() -> FastAPI:
         stopped = await _preview_manager.stop(name)
         return {"success": stopped, "project": name}
 
+    # ---------------------------------------------------------------------------
+    # Project-scoped build status and preview (Phase 5 Round 2 fix)
+    # ---------------------------------------------------------------------------
+
+    @app.get("/api/projects/{project_name}/build/status")
+    async def api_project_build_status(project_name: str):
+        """Return build status for a specific project (project-scoped, not session-scoped)."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        status = _read_build_status(project_name)
+        if status is None:
+            return {"status": "idle", "message": "", "output_path": None, "previewable": False, "target": None, "updated_at": None}
+        return {
+            "status": status.get("status", "idle"),
+            "message": status.get("message", ""),
+            "output_path": status.get("output_path"),
+            "previewable": status.get("previewable", False),
+            "target": status.get("target"),
+            "updated_at": status.get("updated_at"),
+        }
+
+    @app.post("/api/projects/{project_name}/preview")
+    async def api_project_preview(project_name: str):
+        """Start preview for a specific project (project-scoped, not session-scoped)."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        build_dir = _resolve_preview_build_dir(project_name)
+        if build_dir is None:
+            raise HTTPException(status_code=404, detail="No successful build available. Run build first.")
+        build_dir = Path(build_dir)
+        if not build_dir.exists() or not (build_dir / "index.html").exists():
+            raise HTTPException(status_code=404, detail="No web build found. Run build first.")
+        server = await _preview_manager.start(project_name, build_dir)
+        return {"success": True, "url": server.url, "port": server.port}
+
     @app.get("/api/graph")
     async def api_graph(config: RenPyConfig = Depends(get_config)):
         if not config.project_path:

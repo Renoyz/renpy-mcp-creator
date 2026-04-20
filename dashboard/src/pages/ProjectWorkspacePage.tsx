@@ -106,10 +106,10 @@ export function ProjectWorkspacePage() {
     setActiveTab("blueprint");
   }, [name]);
 
-  // Poll build status
+  // Poll build status (project-scoped)
   useEffect(() => {
     if (!activeProjectName) return;
-    fetch("/api/projects/build/status")
+    fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/build/status`)
       .then((r) => r.json())
       .then((data) => {
         if (data.status && data.status !== "idle") {
@@ -127,25 +127,22 @@ export function ProjectWorkspacePage() {
     setBuildMessage("");
     setPreviewUrl(null);
     try {
-      // Try prototype-aware build first; fall back to generic build if no prototype exists
-      let resp = await fetch(
-        `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/build`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ target: "web" }),
-        }
+      // Query prototype status to decide which build endpoint to use
+      const statusResp = await fetch(
+        `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/status`
       );
-      if (!resp.ok && resp.status === 400) {
-        const errData = await resp.json().catch(() => ({}));
-        if (errData.detail?.includes("No prototype scenes found")) {
-          resp = await fetch("/api/projects/build", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ target: "web" }),
-          });
-        }
-      }
+      const protoStatus = await statusResp.json();
+      const hasPrototype = protoStatus.has_prototype === true;
+
+      const buildUrl = hasPrototype
+        ? `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/build`
+        : "/api/projects/build";
+
+      let resp = await fetch(buildUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "web" }),
+      });
       const data = await resp.json();
       if (resp.ok && data.success) {
         setBuildStatus("success");
@@ -168,11 +165,14 @@ export function ProjectWorkspacePage() {
     setPreviewStatus("running");
     setPreviewMessage("");
     try {
-      const resp = await fetch("/api/projects/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
+      const resp = await fetch(
+        `/api/projects/${encodeURIComponent(activeProjectName)}/preview`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }
+      );
       const data = await resp.json();
       if (resp.ok && data.success) {
         setPreviewUrl(data.url);

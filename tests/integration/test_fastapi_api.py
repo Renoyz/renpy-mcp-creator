@@ -1634,3 +1634,99 @@ class TestProjectSceneScriptApi:
         assert data["file_path"] == "game//scene1.rpy"
         assert 'label start:' in data["content"]
         assert '"Hello sep"' in data["content"]
+
+
+class TestProjectScopedBuildPreviewApi:
+    """Tests for project-scoped build status and preview endpoints."""
+
+    def test_project_scoped_build_status_returns_project_status(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """GET /api/projects/{name}/build/status must return that project's build status."""
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        project_name = "scoped_status_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        # Create a real previewable directory so previewable=True is written
+        from renpy_mcp.config import get_settings
+        build_dir = get_settings().workspace / f"{project_name}-dists" / f"{project_name}-web"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "index.html").write_text("<html>mock</html>", encoding="utf-8")
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=build_dir,
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        client.post("/api/projects/select", json={"name": project_name})
+        client.post("/api/projects/build", json={"target": "web"})
+
+        r = client.get(f"/api/projects/{project_name}/build/status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "success"
+        assert data["previewable"] is True
+
+    def test_project_scoped_build_status_for_unbuilt_project(
+        self, client: TestClient
+    ):
+        """GET /api/projects/{name}/build/status for an unbuilt project returns idle."""
+        project_name = "scoped_idle_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/build/status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "idle"
+        assert data["previewable"] is False
+
+    def test_project_scoped_preview_starts_for_project(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """POST /api/projects/{name}/preview must start preview for that specific project."""
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        project_name = "scoped_preview_test"
+        client.post("/api/projects", json={"name": project_name})
+
+        from renpy_mcp.config import get_settings
+        build_dir = get_settings().workspace / f"{project_name}-dists" / f"{project_name}-web"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "index.html").write_text("<html>mock</html>", encoding="utf-8")
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=build_dir,
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        client.post("/api/projects/select", json={"name": project_name})
+        client.post("/api/projects/build", json={"target": "web"})
+
+        r = client.post(f"/api/projects/{project_name}/preview", json={})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "url" in data
+        assert "127.0.0.1" in data["url"]
+
+    def test_project_scoped_preview_rejects_no_build(
+        self, client: TestClient
+    ):
+        """POST /api/projects/{name}/preview must 404 if project has no build."""
+        project_name = "scoped_preview_no_build"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.post(f"/api/projects/{project_name}/preview", json={})
+        assert r.status_code == 404
+        assert "build" in r.json()["detail"].lower()
