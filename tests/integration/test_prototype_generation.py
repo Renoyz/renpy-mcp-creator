@@ -1352,15 +1352,19 @@ async def test_write_script_references_real_background_assets_instead_of_scene_b
     full_path = tmp_path / project_name / staging_path
     content = full_path.read_text(encoding="utf-8")
 
-    # Must contain image definitions for backgrounds
+    from renpy_mcp.services.prototype_generation_service import _safe_image_tag
+
+    # Must contain image definitions for backgrounds using safe tags
     for scene_id in bg_assets:
-        assert f"image bg_{scene_id}" in content, f"Missing image definition for bg_{scene_id}"
+        safe_tag = _safe_image_tag(scene_id)
+        assert f"image bg_{safe_tag}" in content, f"Missing image definition for bg_{safe_tag}"
 
     # Must use real background references, not just scene black
     for scene in scenes:
         if scene.scene_id in bg_assets:
-            assert f"scene bg_{scene.scene_id}" in content, (
-                f"Scene {scene.scene_id} should reference bg_{scene.scene_id}"
+            safe_tag = _safe_image_tag(scene.scene_id)
+            assert f"scene bg_{safe_tag}" in content, (
+                f"Scene {scene.scene_id} should reference bg_{safe_tag}"
             )
 
     # Should not contain uncontrolled scene black (placeholder comments are OK)
@@ -1467,3 +1471,390 @@ async def test_pipeline_marks_placeholder_when_background_generation_fails(
     script_path = tmp_path / project_name / staging_path
     content = script_path.read_text(encoding="utf-8")
     assert "PLACEHOLDER" in content, "Script must indicate placeholder backgrounds"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Round 6b: Runtime correctness fixes (paths, characters, fonts, escape, tags)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_script_uses_runtime_relative_background_paths(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Background image paths in .rpy must be relative to the game/ root, not include 'game/'."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_bg_path"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Create fake background files
+    bg_assets: dict[str, Path] = {}
+    for scene in scenes:
+        bg_path = tmp_path / project_name / "game" / "images" / "background" / f"bg_{scene.scene_id}.png"
+        bg_path.parent.mkdir(parents=True, exist_ok=True)
+        bg_path.write_bytes(b"fake")
+        bg_assets[scene.scene_id] = bg_path
+
+    staging_path = service.write_script(project_name, chapter, scenes, background_assets=bg_assets)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must NOT contain game/ prefix in image path definitions
+    assert "game/images/background/" not in content, (
+        f"Image path should not contain game/ prefix: {content}"
+    )
+    # Must contain runtime-relative path
+    assert "images/background/" in content, (
+        f"Image path should be runtime-relative: {content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_script_emits_safe_character_definitions_for_dialogue_speakers(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Script must define Character() objects for dialogue speakers, not use raw names."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_char_defs"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must contain at least one Character definition
+    define_lines = [l for l in content.splitlines() if l.startswith("define ") and "Character(" in l]
+    assert len(define_lines) >= 1, f"Must define characters, got:\n{content}"
+
+    # Each speaker from dialogue beats must have a Character definition
+    all_speakers = set()
+    for scene in scenes:
+        for beat in scene.dialogue_beats:
+            all_speakers.add(beat.speaker)
+    for speaker in all_speakers:
+        assert f'Character("{speaker}")' in content, (
+            f"Speaker '{speaker}' must have a Character definition"
+        )
+
+
+@pytest.mark.asyncio
+async def test_dialogue_lines_use_safe_character_ids_not_raw_display_names(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Dialogue say-statements must use safe character ids, never raw display names."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_safe_say"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Raw speaker names must NOT appear as say-statement prefixes
+    for scene in scenes:
+        for beat in scene.dialogue_beats:
+            unsafe_pattern = f'    {beat.speaker} "'
+            assert unsafe_pattern not in content, (
+                f"Raw speaker name used in say statement: {unsafe_pattern}"
+            )
+
+    # Safe character ids must be used as say-statement prefixes
+    safe_say_lines = [l for l in content.splitlines() if "    char_" in l and '"' in l]
+    assert len(safe_say_lines) >= 1, (
+        f"Must use safe character ids for dialogue, got:\n{content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_dialogue_speaker_falls_back_safely_without_invalid_say_statement(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Unknown dialogue speakers must fallback to narration, not produce invalid say statements."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import (
+        PrototypeGenerationService, DialogueBeat,
+    )
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_unknown_speaker"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Inject an unknown speaker into dialogue beats
+    scenes[0].dialogue_beats.append(
+        DialogueBeat(speaker="UnknownStranger", intent="test", content_brief="Who am I?")
+    )
+    # But do NOT add UnknownStranger to characters_present
+    if "UnknownStranger" in scenes[0].characters_present:
+        scenes[0].characters_present.remove("UnknownStranger")
+
+    staging_path = service.write_script(project_name, chapter, scenes)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must not produce an invalid say statement with an undefined identifier
+    assert '    UnknownStranger "' not in content, (
+        f"Unknown speaker must not be used as raw say prefix: {content}"
+    )
+    # Must still include the dialogue content somehow (narration fallback)
+    assert "Who am I?" in content, (
+        f"Unknown speaker content must still appear as narration: {content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cjk_font_config_uses_define_style_and_only_when_font_exists(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """CJK font config must use 'define' statements and only when font file exists."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_cjk_define"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+
+    # Case 1: No font source available
+    proto_module._CJK_FONT_SOURCE = tmp_path / "nonexistent_font.ttf"
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+        assert config_path.exists()
+        content = config_path.read_text(encoding="utf-8")
+        assert "define gui.text_font" not in content, (
+            "Must NOT define fonts when source is missing"
+        )
+        assert config["configured"] is False
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+    # Case 2: Simulate font source by creating a dummy file
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        content = config_path.read_text(encoding="utf-8")
+        assert "define gui.text_font" in content, (
+            f"Must use define style, got:\n{content}"
+        )
+        assert "init python:" not in content, (
+            "Must NOT use init python block for font config"
+        )
+        assert config["configured"] is True
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+@pytest.mark.asyncio
+async def test_font_file_is_copied_into_project_before_font_config_is_enabled(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Font file must exist in the project before config claims it is configured."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_font_copy"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    # Simulate a system font by creating a dummy source
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+
+    import renpy_mcp.services.prototype_generation_service as proto_module
+    original_source = proto_module._CJK_FONT_SOURCE
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        config = service.ensure_cjk_font_config(project_name)
+        font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
+        assert font_path.exists(), "Font file must be copied into project"
+        assert config["configured"] is True
+        assert config["font_path"] == "game/fonts/simhei.ttf"
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+@pytest.mark.asyncio
+async def test_write_script_escapes_renpy_strings_safely(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Strings placed inside Ren'Py quotes must be safely escaped."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_escape"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Inject problematic strings across narration and dialogue paths
+    scenes[0].location = 'library "special"'
+    scenes[0].summary = 'He said "hello" to me.'
+    # Clear beats on scene 0 so summary is emitted as narration
+    scenes[0].dialogue_beats = []
+    scenes[1].dialogue_beats[0].content_brief = 'She asked "where?"'
+
+    staging_path = service.write_script(project_name, chapter, scenes)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    # Must contain escaped quotes, not raw quotes inside say strings
+    assert 'library \\"special\\"' in content, (
+        f"Location string must be escaped: {content}"
+    )
+    assert 'He said \\"hello\\" to me.' in content, (
+        f"Summary string must be escaped: {content}"
+    )
+    assert 'She asked \\"where?\\"' in content, (
+        f"Dialogue string must be escaped: {content}"
+    )
+    # Must not contain unescaped inner quotes that would break parsing
+    assert 'library "special"' not in content, (
+        f"Unescaped location string found: {content}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_script_emits_complete_location_and_character_hint_lines(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Location and character hint lines must be complete with closing brackets."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_hints"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+    staging_path = service.write_script(project_name, chapter, scenes)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    for scene in scenes:
+        assert f"【地点：{scene.location}】" in content, (
+            f"Complete location hint missing for {scene.scene_id}"
+        )
+        for char in scene.characters_present:
+            assert char in content, f"Character {char} must appear in script"
+
+
+@pytest.mark.asyncio
+async def test_write_script_uses_safe_background_image_tags(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Background image tags must be safe Ren'Py identifiers, not raw scene_ids."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import (
+        PrototypeGenerationService, _safe_image_tag,
+    )
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_safe_tag"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    # Create fake background files
+    bg_assets: dict[str, Path] = {}
+    for scene in scenes:
+        bg_path = tmp_path / project_name / "game" / "images" / "background" / f"bg_{scene.scene_id}.png"
+        bg_path.parent.mkdir(parents=True, exist_ok=True)
+        bg_path.write_bytes(b"fake")
+        bg_assets[scene.scene_id] = bg_path
+
+    staging_path = service.write_script(project_name, chapter, scenes, background_assets=bg_assets)
+    full_path = tmp_path / project_name / staging_path
+    content = full_path.read_text(encoding="utf-8")
+
+    for scene in scenes:
+        safe_tag = _safe_image_tag(scene.scene_id)
+        assert f"image bg_{safe_tag}" in content, (
+            f"Must use safe image tag for {scene.scene_id}"
+        )
+        assert f"scene bg_{safe_tag}" in content, (
+            f"Must use safe scene tag for {scene.scene_id}"
+        )
+        # Raw scene_id (with hyphens) must NOT be used as an image/scene tag
+        assert f"image bg_{scene.scene_id}" not in content, (
+            f"Must NOT use raw scene_id as image tag: {scene.scene_id}"
+        )
+        assert f"scene bg_{scene.scene_id}" not in content, (
+            f"Must NOT use raw scene_id as scene tag: {scene.scene_id}"
+        )

@@ -9,6 +9,44 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+
+def _safe_character_id(name: str) -> str:
+    """Convert a display name to a safe Ren'Py identifier.
+
+    Keeps ASCII alphanumerics; everything else becomes underscore.
+    Collapses consecutive underscores.  Falls back to empty string
+    for names with no ASCII chars (e.g. pure CJK).
+    """
+    result = "".join(c if c.isascii() and c.isalnum() else "_" for c in name)
+    while "__" in result:
+        result = result.replace("__", "_")
+    return result.strip("_")
+
+
+def _escape_renpy_string(text: str) -> str:
+    """Escape a string for safe use inside Ren'Py double-quoted strings."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _safe_image_tag(scene_id: str) -> str:
+    """Convert a scene_id to a safe Ren'Py image tag.
+
+    Non-alphanumeric characters become underscores.
+    """
+    return "".join(c if c.isalnum() else "_" for c in scene_id)
+
+
+def _to_renpy_asset_path(project_dir_relative_path: str) -> str:
+    """Strip the leading 'game/' segment from a project-relative path.
+
+    Ren'Py image references are resolved relative to the game/ directory,
+    so 'game/images/background/foo.png' must be written as
+    'images/background/foo.png' in the script.
+    """
+    if project_dir_relative_path.startswith("game/"):
+        return project_dir_relative_path[5:]
+    return project_dir_relative_path
+
 from pydantic import BaseModel, Field, ValidationError
 
 from renpy_mcp.blueprint.models import ChapterSummary, ProjectBlueprint
@@ -314,7 +352,8 @@ Requirements:
         """Ensure the project has CJK-safe font configuration.
 
         Copies a system CJK font into the project and writes a Ren'Py config
-        file that references it.
+        file that references it.  The config is only enabled when the font
+        file actually exists so the runtime never references a missing file.
 
         Returns:
             dict with keys: configured (bool), font_path (str | None), config_path (str)
@@ -338,23 +377,48 @@ Requirements:
         elif font_dest.exists():
             configured = True
 
-        # Write font config rpy
+        # Write font config rpy only when the font is actually available
         config_path = project_dir / "game" / "prototype_fonts.rpy"
-        lines = [
-            "# Auto-generated CJK font configuration for prototype",
-            "init python:",
-            '    gui.text_font = "fonts/simhei.ttf"',
-            '    gui.name_text_font = "fonts/simhei.ttf"',
-            '    gui.interface_text_font = "fonts/simhei.ttf"',
-            "",
-        ]
-        config_path.write_text("\n".join(lines), encoding="utf-8")
+        if font_dest.exists():
+            lines = [
+                "# Auto-generated CJK font configuration for prototype",
+                'define gui.text_font = "fonts/simhei.ttf"',
+                'define gui.name_text_font = "fonts/simhei.ttf"',
+                'define gui.interface_text_font = "fonts/simhei.ttf"',
+                "",
+            ]
+            config_path.write_text("\n".join(lines), encoding="utf-8")
+        else:
+            # Write a no-op stub so callers have a stable file path
+            config_path.write_text(
+                "# Auto-generated CJK font configuration for prototype\n"
+                "# Font file not available -- CJK fallback disabled.\n",
+                encoding="utf-8",
+            )
 
         return {
             "configured": configured,
             "font_path": font_dest.relative_to(project_dir).as_posix() if font_dest.exists() else None,
             "config_path": config_path.relative_to(project_dir).as_posix(),
         }
+    def _build_character_registry(self, scenes: list[PrototypeScene]) -> dict[str, str]:
+        """Map display names to safe Ren'Py character identifiers.
+
+        Only characters listed in characters_present are registered.
+        Dialogue speakers not in this registry will fall back to narration.
+        """
+        registry: dict[str, str] = {}
+        fallback_idx = 0
+        for scene in scenes:
+            for name in scene.characters_present:
+                if name and name not in registry:
+                    safe = _safe_character_id(name)
+                    if not safe or safe in registry.values():
+                        safe = f"char_{fallback_idx}"
+                        fallback_idx += 1
+                    registry[name] = safe
+        return registry
+
     def write_script(
         self,
         project_name: str,
@@ -388,9 +452,19 @@ Requirements:
         game_dir.mkdir(parents=True, exist_ok=True)
         staging_file = game_dir / Path(staging_path).name
 
+        # Build character registry for safe say-statement generation
+        char_registry = self._build_character_registry(scenes)
+
         lines: list[str] = []
         lines.append(f"# Prototype chapter: {chapter.name}")
         lines.append("")
+
+        # Emit character definitions
+        for display_name, safe_id in char_registry.items():
+            escaped_name = _escape_renpy_string(display_name)
+            lines.append(f'define {safe_id} = Character("{escaped_name}")')
+        if char_registry:
+            lines.append("")
 
         # Emit image definitions for backgrounds
         bg_assets = background_assets or {}
@@ -398,7 +472,9 @@ Requirements:
             bg_path = bg_assets.get(scene.scene_id)
             if bg_path and bg_path.exists():
                 rel_path = bg_path.relative_to(project_dir).as_posix()
-                lines.append(f'image bg_{scene.scene_id} = "{rel_path}"')
+                runtime_path = _to_renpy_asset_path(rel_path)
+                safe_tag = _safe_image_tag(scene.scene_id)
+                lines.append(f'image bg_{safe_tag} = "{runtime_path}"')
         if bg_assets:
             lines.append("")
 
@@ -406,20 +482,31 @@ Requirements:
             lines.append(f"label {scene.entry_label}:")
             # Use real background asset if available, else controlled fallback
             bg_path = bg_assets.get(scene.scene_id)
+            safe_tag = _safe_image_tag(scene.scene_id)
             if bg_path and bg_path.exists():
-                lines.append(f"    scene bg_{scene.scene_id}")
+                lines.append(f"    scene bg_{safe_tag}")
             else:
-                lines.append(f"    scene black  # PLACEHOLDER: {scene.location}")
+                escaped_loc = _escape_renpy_string(scene.location)
+                lines.append(f"    scene black  # PLACEHOLDER: {escaped_loc}")
             if scene.location:
-                safe_location = scene.location.replace('"', '\"')
-                lines.append(f'    "【地点：{safe_location}"')
+                escaped_loc = _escape_renpy_string(scene.location)
+                lines.append(f'    "【地点：{escaped_loc}】"')
             if scene.characters_present:
                 chars = "、".join(scene.characters_present)
-                safe_chars = chars.replace('"', '\"')
-                lines.append(f'    "【登场角色：{safe_chars}"')
-            # Use summary as narration text
-            narration = scene.summary.replace('"', '\"')
-            lines.append(f'    "{narration}"')
+                escaped_chars = _escape_renpy_string(chars)
+                lines.append(f'    "【登场角色：{escaped_chars}】"')
+            # Output dialogue beats as say statements
+            for beat in scene.dialogue_beats:
+                safe_id = char_registry.get(beat.speaker)
+                escaped_brief = _escape_renpy_string(beat.content_brief)
+                if safe_id:
+                    lines.append(f'    {safe_id} "{escaped_brief}"')
+                else:
+                    lines.append(f'    "{escaped_brief}"  # UNKNOWN SPEAKER: {beat.speaker}')
+            # If no dialogue beats, use summary as narration fallback
+            if not scene.dialogue_beats:
+                escaped_summary = _escape_renpy_string(scene.summary)
+                lines.append(f'    "{escaped_summary}"')
             if scene.next_scene_id:
                 next_scene = next((s for s in scenes if s.scene_id == scene.next_scene_id), None)
                 if next_scene:
