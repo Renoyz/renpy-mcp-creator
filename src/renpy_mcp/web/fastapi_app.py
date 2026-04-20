@@ -681,6 +681,30 @@ def create_app() -> FastAPI:
     # Prototype build endpoints (Phase 5 Round 2)
     # ---------------------------------------------------------------------------
 
+    def _has_prototype(project_name: str) -> bool:
+        """Check whether the project has generated prototype artifacts on disk."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            return False
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        index = pm.read_project_index(project_name)
+        proto_scenes = []
+        if index and isinstance(index.get("scenes"), dict):
+            proto_scenes = [
+                s for s in index["scenes"].values()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+        if not proto_scenes:
+            return False
+        script_paths = {s.get("file_path") for s in proto_scenes if s.get("file_path")}
+        script_exists = all(
+            (project_dir / p).exists() for p in script_paths
+        ) if script_paths else False
+        main_script = project_dir / "game" / "script.rpy"
+        wired = main_script.exists() and "# PROTOTYPE START (managed)" in main_script.read_text(encoding="utf-8")
+        return script_exists and wired
+
     @app.get("/api/projects/{project_name}/prototype/status")
     async def api_prototype_status(project_name: str):
         """Return whether the project has a generated prototype and its readiness."""
@@ -713,6 +737,57 @@ def create_app() -> FastAPI:
             "scene_count": len(proto_scenes),
             "script_exists": script_exists,
             "wired": wired,
+        }
+
+    @app.get("/api/projects/{project_name}/prototype/pipeline-status")
+    async def api_prototype_pipeline_status(project_name: str):
+        """Return the unified prototype pipeline stage derived from project state.
+
+        Stages:
+        - idle: no prototype artifacts
+        - prototype_generating: prototype generation is in progress (runtime session)
+        - prototype_ready: prototype exists but not built or build not successful
+        - prototype_building: build is currently running
+        - prototype_build_failed: last build failed
+        - prototype_preview_ready: build succeeded and output is previewable
+        """
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        has_proto = _has_prototype(project_name)
+        build_status = _read_build_status(project_name)
+
+        # Runtime session may indicate ongoing generation
+        runtime_stage: str | None = None
+        session_path = project_dir / "meta" / "blueprint_session.json"
+        if session_path.exists():
+            try:
+                session = json.loads(session_path.read_text(encoding="utf-8"))
+                runtime_stage = session.get("pipeline_stage")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Derive stage
+        if not has_proto:
+            stage = "idle"
+        elif runtime_stage == "generating":
+            stage = "prototype_generating"
+        elif build_status and build_status.get("status") == "building":
+            stage = "prototype_building"
+        elif build_status and build_status.get("status") == "failed":
+            stage = "prototype_build_failed"
+        elif build_status and build_status.get("status") == "success" and build_status.get("previewable"):
+            stage = "prototype_preview_ready"
+        else:
+            stage = "prototype_ready"
+
+        return {
+            "stage": stage,
+            "has_prototype": has_proto,
+            "previewable": build_status.get("previewable", False) if build_status else False,
+            "build_status": build_status.get("status", "idle") if build_status else "idle",
+            "message": build_status.get("message", "") if build_status else "",
         }
 
     @app.post("/api/projects/{project_name}/prototype/build")

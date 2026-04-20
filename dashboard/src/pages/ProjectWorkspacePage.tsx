@@ -43,6 +43,7 @@ export function ProjectWorkspacePage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewAvailable, setPreviewAvailable] = useState(false);
+  const [pipelineStage, setPipelineStage] = useState<string>("idle");
 
   // Derive the active project name as a stable primitive.
   // This prevents object-reference changes from re-triggering the load effect.
@@ -103,56 +104,52 @@ export function ProjectWorkspacePage() {
     setPreviewMessage("");
     setPreviewUrl(null);
     setPreviewAvailable(false);
+    setPipelineStage("idle");
     setActiveTab("blueprint");
   }, [name]);
 
-  // Poll build status (project-scoped)
+  // Load unified pipeline status on mount / project change
   useEffect(() => {
     if (!activeProjectName) return;
+    fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/prototype/pipeline-status`)
+      .then((r) => r.json())
+      .then((data) => {
+        setPipelineStage(data.stage || "idle");
+        if (data.build_status && data.build_status !== "idle") {
+          setBuildStatus(data.build_status);
+          setBuildMessage(data.message || "");
+        }
+        setPreviewAvailable(!!data.previewable);
+      })
+      .catch(() => {});
+  }, [activeProjectName]);
 
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    let pollCount = 0;
-    const MAX_POLLS = 30; // ~60 seconds max
+  // Poll build status ONLY when pipeline stage indicates an active build
+  useEffect(() => {
+    if (!activeProjectName || pipelineStage !== "prototype_building") return;
 
     const poll = () => {
-      pollCount += 1;
       fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/build/status`)
         .then((r) => r.json())
         .then((data) => {
-          if (data.status && data.status !== "idle") {
-            setBuildStatus(data.status);
-            setBuildMessage(data.message || "");
-            setPreviewAvailable(!!data.previewable);
-
-            // Keep polling while building; stop once terminal
-            if (data.status === "building" && !intervalId) {
-              intervalId = setInterval(poll, 2000);
-            } else if (data.status !== "building" && intervalId) {
-              clearInterval(intervalId);
-              intervalId = null;
-            }
-          }
-          // Stop after max polls to avoid infinite polling
-          if (pollCount >= MAX_POLLS && intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
+          setBuildStatus(data.status);
+          setBuildMessage(data.message || "");
+          setPreviewAvailable(!!data.previewable);
+          // Once build leaves building, refresh pipeline stage to know the terminal state
+          if (data.status !== "building") {
+            fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/prototype/pipeline-status`)
+              .then((r) => r.json())
+              .then((pipe) => setPipelineStage(pipe.stage || "idle"))
+              .catch(() => {});
           }
         })
         .catch(() => {});
     };
 
     poll();
-
-    // When entering editing from generating, auto-build may still be in progress.
-    // Start a short-interval poll to catch the status update.
-    if (blueprintPhase === "editing" && !intervalId) {
-      intervalId = setInterval(poll, 2000);
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [activeProjectName, blueprintPhase]);
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, [activeProjectName, pipelineStage]);
 
   const handleBuild = async () => {
     if (!activeProjectName) return;
@@ -181,10 +178,12 @@ export function ProjectWorkspacePage() {
         setBuildStatus("success");
         setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
         setPreviewAvailable(true);
+        setPipelineStage("prototype_preview_ready");
       } else {
         setBuildStatus("failed");
         setBuildMessage(data.error || "Build failed");
         setPreviewAvailable(false);
+        setPipelineStage("prototype_build_failed");
       }
     } catch (e) {
       setBuildStatus("failed");

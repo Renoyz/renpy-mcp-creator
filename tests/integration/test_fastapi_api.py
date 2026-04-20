@@ -1,5 +1,6 @@
 """Integration tests for FastAPI routes."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1792,3 +1793,177 @@ class TestProjectScopedBuildPreviewApi:
         # B should still be idle
         r_b = client.get(f"/api/projects/{project_b}/build/status")
         assert r_b.json()["status"] == "idle"
+
+
+class TestPrototypePipelineStatus:
+    """Tests for GET /api/projects/{name}/prototype/pipeline-status."""
+
+    def _seed_prototype(self, workspace: Path, project_name: str) -> None:
+        """Write prototype artifacts so the project has a playable prototype."""
+        meta_dir = workspace / project_name / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        game_dir = workspace / project_name / "game"
+        game_dir.mkdir(parents=True, exist_ok=True)
+
+        proto_script = (
+            'label prototype_ch1_start:\n'
+            '    scene black\n'
+            '    "Hello prototype."\n'
+            '    return\n'
+        )
+        (game_dir / "prototype_ch1_第一章.rpy").write_text(proto_script, encoding="utf-8")
+
+        (game_dir / "script.rpy").write_text(
+            "label start:\n"
+            "    # PROTOTYPE START (managed)\n"
+            "    call prototype_ch1_start\n"
+            "    return\n"
+            "    # PROTOTYPE END (managed)\n",
+            encoding="utf-8",
+        )
+
+        index = {
+            "scenes": {
+                "proto-ch1-s1": {
+                    "chapter_id": "ch1",
+                    "scene_id": "proto-ch1-s1",
+                    "title": "初次相遇",
+                    "summary": "主角在图书馆遇到配角。",
+                    "location": "library",
+                    "next_scene_id": None,
+                    "label": "prototype_ch1_start",
+                    "file_path": "game/prototype_ch1_第一章.rpy",
+                    "source": "prototype",
+                    "order": 1,
+                },
+            }
+        }
+        (meta_dir / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+    def test_pipeline_status_idle_when_no_prototype(self, client: TestClient, tmp_path: Path):
+        """A project with no prototype artifacts should report idle."""
+        project_name = "pipeline_idle"
+        client.post("/api/projects", json={"name": project_name})
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "idle"
+        assert data["has_prototype"] is False
+        assert data["previewable"] is False
+
+    def test_pipeline_status_returns_prototype_ready_when_prototype_exists_without_successful_build(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """A project with prototype but no successful build should report prototype_ready."""
+        project_name = "pipeline_ready"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_ready"
+        assert data["has_prototype"] is True
+        assert data["previewable"] is False
+        assert data["build_status"] == "idle"
+
+    def test_pipeline_status_returns_building_when_build_in_progress(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """When build-status.json says building, pipeline should report prototype_building."""
+        project_name = "pipeline_building"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        # Write a building status directly
+        logs_dir = tmp_path / project_name / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "build-status.json").write_text(
+            json.dumps({"status": "building", "message": "Building...", "previewable": False, "target": "web"}),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_building"
+        assert data["has_prototype"] is True
+        assert data["build_status"] == "building"
+
+    def test_pipeline_status_returns_build_failed_when_build_failed(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """When build-status.json says failed, pipeline should report prototype_build_failed."""
+        project_name = "pipeline_failed"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        logs_dir = tmp_path / project_name / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "build-status.json").write_text(
+            json.dumps({"status": "failed", "message": "Build failed", "previewable": False, "target": "web"}),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_build_failed"
+        assert data["has_prototype"] is True
+        assert data["build_status"] == "failed"
+        assert data["previewable"] is False
+
+    def test_pipeline_status_returns_preview_ready_when_build_success_is_previewable(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """When build succeeded and output is previewable, pipeline should report prototype_preview_ready."""
+        project_name = "pipeline_preview_ready"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        build_dir = tmp_path / f"{project_name}-dists" / f"{project_name}-web"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "index.html").write_text("<html>mock</html>", encoding="utf-8")
+
+        logs_dir = tmp_path / project_name / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "build-status.json").write_text(
+            json.dumps({
+                "status": "success",
+                "message": "Built successfully",
+                "output_path": str(build_dir),
+                "previewable": True,
+                "target": "web",
+            }),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_preview_ready"
+        assert data["has_prototype"] is True
+        assert data["build_status"] == "success"
+        assert data["previewable"] is True
+
+    def test_pipeline_status_returns_generating_when_runtime_session_indicates_generating(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """When blueprint_session.json indicates generating, pipeline should report prototype_generating."""
+        project_name = "pipeline_generating"
+        client.post("/api/projects", json={"name": project_name})
+        self._seed_prototype(tmp_path, project_name)
+
+        meta_dir = tmp_path / project_name / "meta"
+        (meta_dir / "blueprint_session.json").write_text(
+            json.dumps({"pipeline_stage": "generating", "awaiting_confirmation": False}),
+            encoding="utf-8",
+        )
+
+        r = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["stage"] == "prototype_generating"
+        assert data["has_prototype"] is True
+        assert data["build_status"] == "idle"

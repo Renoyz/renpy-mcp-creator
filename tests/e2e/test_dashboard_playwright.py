@@ -931,6 +931,40 @@ def test_workspace_prototype_build_and_preview(
     expect(preview_link).to_be_visible(timeout=10000)
 
 
+def test_no_blind_build_poll_for_idle_pipeline(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """When pipeline is prototype_ready (not building), workspace must not continuously poll /build/status."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_no_poll_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_prototype(e2e_workspace, project_name)
+
+    build_status_count = [0]
+
+    def handle_route(route, request):
+        if "/build/status" in request.url:
+            build_status_count[0] += 1
+        route.continue_()
+
+    page.route("**/api/projects/*/build/status", handle_route)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Ensure workspace shell is visible (editing state with prototype)
+    expect(page.locator("button", has_text=re.compile("Build"))).to_be_visible(timeout=10000)
+
+    # Wait a few seconds — blind polling would fire many requests
+    page.wait_for_timeout(5000)
+
+    # Pipeline is prototype_ready, so there should be zero /build/status polling
+    assert build_status_count[0] == 0, (
+        f"Expected 0 /build/status poll requests for idle pipeline, got {build_status_count[0]}"
+    )
+
+
 def test_workspace_shows_blueprint_chapters_and_scenes(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
