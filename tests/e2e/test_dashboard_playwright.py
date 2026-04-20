@@ -2869,3 +2869,76 @@ def test_blueprint_draft_from_mock_provider_in_reviewing(page: Page, e2e_workspa
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+# ---- Phase 5 Round 3: blueprint confirmation -> auto-build -> preview-ready E2E ----
+
+
+def test_blueprint_confirmation_auto_builds_and_reaches_preview_ready(
+    page: Page, mock_llm_server_url: str
+) -> None:
+    """End-to-end: confirm blueprint -> auto-build -> preview-ready -> click Preview."""
+    assert wait_for_server(mock_llm_server_url), "Server not ready"
+
+    project_name = f"playwright_p5_{int(time.time())}"
+    create_project_via_api(mock_llm_server_url, project_name)
+
+    page.goto(f"{mock_llm_server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    # Start collecting
+    page.locator("button", has_text="让 AI 生成蓝图").click()
+    # Backend sends "太好了！让我来帮你..." (not "太棒了")
+    expect(page.locator("text=太好了！让我来帮你")).to_be_visible(timeout=15000)
+
+    # Turn 1
+    page.locator("textarea").fill("我想写一个3章的校园恋爱故事，主角是高中生")
+    page.locator("button >> svg").last.click()
+    expect(page.locator("text=收到")).to_be_visible(timeout=10000)
+
+    # Turn 2 — triggers LLM draft generation
+    page.locator("textarea").fill("视觉风格是日系动漫，氛围轻松治愈")
+    page.locator("button >> svg").last.click()
+
+    # Wait for reviewing
+    chat_drawer = page.locator("[data-testid='chat-panel-docked']")
+    expect(chat_drawer.locator("text=蓝图草案确认")).to_be_visible(timeout=15000)
+
+    # Click confirm
+    confirmation_panel = chat_drawer.locator("[data-testid='chat-blueprint-confirmation']")
+    confirmation_panel.locator("button", has_text="确认并生成").click()
+
+    # Should enter generating state
+    expect(page.locator("text=正在生成蓝图")).to_be_visible(timeout=10000)
+
+    # Wait for generating -> editing transition (workspace loads)
+    expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
+
+    # Build status should eventually show success (auto-build after confirmation).
+    # Do NOT click Build manually — this test must fail if auto-build is not triggered.
+    build_button = page.locator("button", has_text=re.compile("Build|Building|Build OK"))
+    expect(build_button).to_be_visible(timeout=10000)
+
+    status_locator = page.locator("[data-testid='build-status']")
+    expect(status_locator).to_be_visible(timeout=30000)
+
+    status_text = status_locator.text_content() or ""
+    assert (
+        "Build" in status_text
+        or "Built" in status_text
+        or "succeeded" in status_text.lower()
+        or "preview" in status_text.lower()
+    ), f"Unexpected build status: {status_text}"
+
+    # Preview should be available
+    preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
+    preview_button.click()
+    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+
+    preview_link = page.locator("a[href*='127.0.0.1']")
+    expect(preview_link).to_be_visible(timeout=10000)
+    preview_url = preview_link.get_attribute("href") or ""
+    assert preview_url.startswith("http://127.0.0.1")
+
+    # Stop preview server to avoid port leaks
+    httpx.post(f"{mock_llm_server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)

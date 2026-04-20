@@ -109,17 +109,50 @@ export function ProjectWorkspacePage() {
   // Poll build status (project-scoped)
   useEffect(() => {
     if (!activeProjectName) return;
-    fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/build/status`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.status && data.status !== "idle") {
-          setBuildStatus(data.status);
-          setBuildMessage(data.message || "");
-          setPreviewAvailable(!!data.previewable);
-        }
-      })
-      .catch(() => {});
-  }, [activeProjectName]);
+
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let pollCount = 0;
+    const MAX_POLLS = 30; // ~60 seconds max
+
+    const poll = () => {
+      pollCount += 1;
+      fetch(`/api/projects/${encodeURIComponent(activeProjectName)}/build/status`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.status && data.status !== "idle") {
+            setBuildStatus(data.status);
+            setBuildMessage(data.message || "");
+            setPreviewAvailable(!!data.previewable);
+
+            // Keep polling while building; stop once terminal
+            if (data.status === "building" && !intervalId) {
+              intervalId = setInterval(poll, 2000);
+            } else if (data.status !== "building" && intervalId) {
+              clearInterval(intervalId);
+              intervalId = null;
+            }
+          }
+          // Stop after max polls to avoid infinite polling
+          if (pollCount >= MAX_POLLS && intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+        })
+        .catch(() => {});
+    };
+
+    poll();
+
+    // When entering editing from generating, auto-build may still be in progress.
+    // Start a short-interval poll to catch the status update.
+    if (blueprintPhase === "editing" && !intervalId) {
+      intervalId = setInterval(poll, 2000);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeProjectName, blueprintPhase]);
 
   const handleBuild = async () => {
     if (!activeProjectName) return;

@@ -83,7 +83,7 @@ def test_ws_chat_no_project_guardrail(monkeypatch, client: TestClient) -> None:
             websocket.send_json({"type": "user_message", "content": query})
             data = websocket.receive_json()
             assert data["type"] == "error", f"Expected error for: {query}"
-            assert "No active project" in data["message"], f"Wrong message for: {query}"
+            assert data["message"] in ("No active project selected.", "当前没有选中的项目。"), f"Wrong message for: {query}"
 
 
 def test_ws_chat_allowed_without_project(monkeypatch, client: TestClient) -> None:

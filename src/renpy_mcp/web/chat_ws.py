@@ -24,6 +24,8 @@ from ..blueprint.models import (
 from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvider
 from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
+from ..models import BuildRequest, BuildResult
+from ..services.build_manager import BuildManager
 from ..services.project_manager import ProjectManager
 from ..services.prototype_generation_service import PrototypeGenerationService
 
@@ -46,6 +48,28 @@ def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> No
     path = _chat_history_path(project_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"messages": messages}, indent=2), encoding="utf-8")
+
+
+def _write_build_status_for_project(
+    project_name: str,
+    status: str,
+    message: str,
+    output_path: Path | None = None,
+    target: str = "web",
+) -> None:
+    """Persist build status to the project's logs/build-status.json."""
+    settings = get_settings()
+    status_file = settings.workspace / project_name / "logs" / "build-status.json"
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "message": message,
+        "output_path": str(output_path) if output_path else None,
+        "previewable": output_path is not None and (Path(output_path) / "index.html").exists() if output_path else False,
+        "target": target,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    status_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +319,34 @@ def _get_provider():
                         }
                     return LLMResponse(
                         content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
+                        stop_reason="end_turn",
+                    )
+
+                # Prototype scene generation mock
+                prompt = messages[0].get("content", "") if messages else ""
+                if "Generate a JSON array of scenes" in prompt:
+                    scenes = [
+                        {
+                            "scene_id": "proto-ch1-s1",
+                            "title": "初次相遇",
+                            "summary": "主角在图书馆遇到配角。",
+                            "location": "library",
+                            "characters_present": ["Mock主角小明"],
+                            "entry_label": "prototype_ch1_start",
+                            "next_scene_id": "proto-ch1-s2",
+                        },
+                        {
+                            "scene_id": "proto-ch1-s2",
+                            "title": "深夜对话",
+                            "summary": "两人在咖啡厅讨论未来。",
+                            "location": "cafe",
+                            "characters_present": ["Mock主角小明", "Mock女主小樱"],
+                            "entry_label": "prototype_ch1_scene2",
+                            "next_scene_id": None,
+                        },
+                    ]
+                    return LLMResponse(
+                        content_blocks=[{"type": "text", "text": json.dumps(scenes, ensure_ascii=False)}],
                         stop_reason="end_turn",
                     )
 
@@ -755,6 +807,7 @@ Requirements:
                 {"step": _localized_text(lang, "正在构建章节大纲...", "Building the chapter outline..."), "percent": 55},
                 {"step": _localized_text(lang, "正在编排场景结构...", "Structuring the scene flow..."), "percent": 80},
                 {"step": _localized_text(lang, "正在完善分支与结局...", "Polishing branches and endings..."), "percent": 95},
+                {"step": _localized_text(lang, "正在构建可预览原型...", "Building playable prototype..."), "percent": 98},
             ]
 
             events: list[dict[str, Any]] = []
@@ -789,6 +842,7 @@ Requirements:
 
             # Generate prototype scenes and script (staged replace)
             prototype_error: str | None = None
+            build_error: str | None = None
             staging_path: str | None = None
             final_path: str | None = None
             new_scene_ids: list[str] = []
@@ -834,6 +888,68 @@ Requirements:
                             "Prototype rollback also failed for project %s", self.project_name
                         )
 
+                # Step 7: auto-build prototype if generation succeeded
+                if not prototype_error and self.pm is not None:
+                    try:
+                        _write_build_status_for_project(
+                            self.project_name,
+                            "building",
+                            _localized_text(lang, "正在构建可预览原型...", "Building playable prototype..."),
+                        )
+
+                        # Test-only mock build path (mirrors fastapi_app.py)
+                        if os.environ.get("RENPY_MCP_MOCK_BUILD"):
+                            settings = get_settings()
+                            build_dir = (
+                                settings.workspace
+                                / f"{self.project_name}-dists"
+                                / f"{self.project_name}-web"
+                            )
+                            build_dir.mkdir(parents=True, exist_ok=True)
+                            (build_dir / "index.html").write_text(
+                                "<html><body>mock preview</body></html>", encoding="utf-8"
+                            )
+                            build_result = BuildResult(
+                                project_name=self.project_name,
+                                target="web",
+                                success=True,
+                                output_path=build_dir,
+                            )
+                        else:
+                            build_manager = BuildManager(get_settings())
+                            build_result = await build_manager.build(
+                                BuildRequest(project_name=self.project_name, target="web")
+                            )
+
+                        if not build_result.success:
+                            build_error = build_result.error or _localized_text(
+                                lang, "构建失败", "Build failed"
+                            )
+                            _write_build_status_for_project(
+                                self.project_name,
+                                "failed",
+                                build_error,
+                            )
+                        else:
+                            _write_build_status_for_project(
+                                self.project_name,
+                                "success",
+                                _localized_text(
+                                    lang,
+                                    f"原型构建完成：{build_result.output_path}",
+                                    f"Prototype built to {build_result.output_path}",
+                                ),
+                                build_result.output_path,
+                            )
+                    except Exception as e:
+                        build_error = str(e)
+                        logger.exception("Prototype auto-build failed for project %s", self.project_name)
+                        _write_build_status_for_project(
+                            self.project_name,
+                            "failed",
+                            build_error,
+                        )
+
             self.phase = PipelineStage.EDITING
 
             if prototype_error:
@@ -842,11 +958,17 @@ Requirements:
                     f"蓝图已保存，但原型生成失败：{prototype_error}",
                     f"Blueprint saved, but prototype generation failed: {prototype_error}",
                 )
+            elif build_error:
+                assistant_content = _localized_text(
+                    lang,
+                    f"蓝图已保存，原型已生成，但构建失败：{build_error}",
+                    f"Blueprint saved, prototype generated, but build failed: {build_error}",
+                )
             else:
                 assistant_content = _localized_text(
                     lang,
-                    "蓝图生成完成！原型也已就绪，你现在可以在工作区中查看和编辑。",
-                    "Blueprint generation is complete. The prototype is ready, and you can now review and edit it in the workspace.",
+                    "蓝图生成完成！原型已构建完毕，可以预览了。",
+                    "Blueprint generation is complete. The prototype is built and ready for preview.",
                 )
             self.messages.append({
                 "role": "assistant",

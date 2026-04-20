@@ -303,9 +303,9 @@ def test_tool_confirmation_writes_runtime_session(monkeypatch, client: TestClien
     assert session["pipeline_stage"] == "awaiting_confirmation"
     assert session["awaiting_confirmation"] is True
     assert session["confirmation_id"].startswith("conf_0_generate_background")
-    assert session["confirmation_message"] == "已生成背景图，请确认是否保存。"
+    assert session["confirmation_message"] == "Generated a background image. Save it?"
     assert session["tool_name"] == "generate_background"
-    assert session.get("latest_progress") == {"step": "等待用户确认: generate_background", "percent": 0}
+    assert session.get("latest_progress") == {"step": "Waiting for user confirmation: generate_background", "percent": 0}
 
 
 def test_tool_confirmation_response_clears_session(monkeypatch, client: TestClient, tmp_path: Path) -> None:
@@ -481,7 +481,7 @@ def test_runtime_session_api_returns_tool_state(monkeypatch, client: TestClient,
     assert "confirmation_id" in session
     assert "confirmation_message" in session
     assert session["tool_name"] == "generate_background"
-    assert session.get("latest_progress") == {"step": "等待用户确认: generate_background", "percent": 0}
+    assert session.get("latest_progress") == {"step": "Waiting for user confirmation: generate_background", "percent": 0}
 
 
 def test_tool_start_updates_runtime_session(monkeypatch, client: TestClient, tmp_path: Path) -> None:
@@ -661,3 +661,129 @@ def test_tool_running_session_api_returns_progress_state(client: TestClient, tmp
     # Must NOT be misinterpreted as blueprint state
     assert "confirmation_id" not in session
     assert "draft" not in session
+
+
+def test_mock_provider_tool_flow_defaults_to_chinese_output(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Mock provider tool flow should default user-visible confirmation and final text to Chinese."""
+    project_name = "ws_mock_lang_zh"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+    monkeypatch.setenv("RENPY_MCP_MOCK_LLM", "1")
+
+    fake_result = type(
+        "R",
+        (),
+        {
+            "success": True,
+            "prompt": "a test",
+            "image_type": "background",
+            "files": [tmp_path / "assets" / "background" / "bg.png"],
+            "primary_file": tmp_path / "assets" / "background" / "bg.png",
+            "error": None,
+        },
+    )()
+    fake_result.model_dump = lambda mode="json": {
+        "success": True,
+        "prompt": "a test",
+        "image_type": "background",
+        "files": [str(tmp_path / "assets" / "background" / "bg.png")],
+        "primary_file": str(tmp_path / "assets" / "background" / "bg.png"),
+        "error": None,
+    }
+
+    with patch("renpy_mcp.tools.assets.image_service.is_available", return_value=True), patch(
+        "renpy_mcp.tools.assets.image_service.generate_image",
+        return_value=fake_result,
+    ), patch(
+        "renpy_mcp.tools.assets._project_manager.ensure_project_dir",
+        return_value=tmp_path,
+    ):
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"type": "user_message", "content": "生成一张庭院背景图", "project_name": project_name})
+            data = websocket.receive_json()
+            assert data["type"] == "awaiting_confirmation"
+            assert "确认" in data["message"]
+            confirmation_id = data["confirmation_id"]
+
+            websocket.send_json(
+                {
+                    "type": "confirmation_response",
+                    "confirmation_id": confirmation_id,
+                    "approved": True,
+                    "project_name": project_name,
+                }
+            )
+            websocket.receive_json()  # tool_start
+            websocket.receive_json()  # tool_result
+            data = websocket.receive_json()
+            assert data["type"] == "assistant_delta"
+            assert data["delta"] == "背景图已生成成功。"
+
+
+def test_mock_provider_tool_flow_uses_english_for_clearly_english_input(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Mock provider tool flow should switch to English for clearly English input."""
+    project_name = "ws_mock_lang_en"
+    game_dir = tmp_path / project_name / "game"
+    game_dir.mkdir(parents=True)
+    (game_dir / "script.rpy").write_text('label start:\n    "Hello."\n    return\n', encoding="utf-8")
+    monkeypatch.setenv("RENPY_MCP_MOCK_LLM", "1")
+
+    fake_result = type(
+        "R",
+        (),
+        {
+            "success": True,
+            "prompt": "a test",
+            "image_type": "background",
+            "files": [tmp_path / "assets" / "background" / "bg.png"],
+            "primary_file": tmp_path / "assets" / "background" / "bg.png",
+            "error": None,
+        },
+    )()
+    fake_result.model_dump = lambda mode="json": {
+        "success": True,
+        "prompt": "a test",
+        "image_type": "background",
+        "files": [str(tmp_path / "assets" / "background" / "bg.png")],
+        "primary_file": str(tmp_path / "assets" / "background" / "bg.png"),
+        "error": None,
+    }
+
+    with patch("renpy_mcp.tools.assets.image_service.is_available", return_value=True), patch(
+        "renpy_mcp.tools.assets.image_service.generate_image",
+        return_value=fake_result,
+    ), patch(
+        "renpy_mcp.tools.assets._project_manager.ensure_project_dir",
+        return_value=tmp_path,
+    ):
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json(
+                {
+                    "type": "user_message",
+                    "content": "Please generate a courtyard background for the opening scene.",
+                    "project_name": project_name,
+                }
+            )
+            data = websocket.receive_json()
+            assert data["type"] == "awaiting_confirmation"
+            assert data["message"] == "Generated a background image. Save it?"
+            confirmation_id = data["confirmation_id"]
+
+            websocket.send_json(
+                {
+                    "type": "confirmation_response",
+                    "confirmation_id": confirmation_id,
+                    "approved": True,
+                    "project_name": project_name,
+                }
+            )
+            websocket.receive_json()  # tool_start
+            websocket.receive_json()  # tool_result
+            data = websocket.receive_json()
+            assert data["type"] == "assistant_delta"
+            assert data["delta"] == "Background generated successfully."
