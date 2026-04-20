@@ -1730,3 +1730,65 @@ class TestProjectScopedBuildPreviewApi:
         r = client.post(f"/api/projects/{project_name}/preview", json={})
         assert r.status_code == 404
         assert "build" in r.json()["detail"].lower()
+
+    def test_project_scoped_generic_build_invokes_build_for_specific_project(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """POST /api/projects/{name}/build must invoke BuildManager for that specific project."""
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        project_a = "scoped_gen_a"
+        project_b = "scoped_gen_b"
+        client.post("/api/projects", json={"name": project_a})
+        client.post("/api/projects", json={"name": project_b})
+
+        seen_names: list[str] = []
+
+        async def _mock_build(self, request):
+            seen_names.append(request.project_name)
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        # Build project A explicitly via project-scoped endpoint
+        r = client.post(f"/api/projects/{project_a}/build", json={"target": "web"})
+        assert r.status_code == 200
+        assert seen_names == [project_a]
+
+    def test_project_scoped_generic_build_status_written_for_specific_project(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Project-scoped generic build must write status only to that project."""
+        from renpy_mcp.models import BuildResult
+        from renpy_mcp.services import build_manager as bm
+
+        project_a = "scoped_gen_status_a"
+        project_b = "scoped_gen_status_b"
+        client.post("/api/projects", json={"name": project_a})
+        client.post("/api/projects", json={"name": project_b})
+
+        async def _mock_build(self, request):
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=True,
+                output_path=Path("/fake/output"),
+            )
+
+        monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+
+        client.post(f"/api/projects/{project_a}/build", json={"target": "web"})
+
+        # A should have success status
+        r_a = client.get(f"/api/projects/{project_a}/build/status")
+        assert r_a.json()["status"] == "success"
+
+        # B should still be idle
+        r_b = client.get(f"/api/projects/{project_b}/build/status")
+        assert r_b.json()["status"] == "idle"

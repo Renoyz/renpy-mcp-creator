@@ -136,7 +136,7 @@ export function ProjectWorkspacePage() {
 
       const buildUrl = hasPrototype
         ? `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/build`
-        : "/api/projects/build";
+        : `/api/projects/${encodeURIComponent(activeProjectName)}/build`;
 
       let resp = await fetch(buildUrl, {
         method: "POST",
