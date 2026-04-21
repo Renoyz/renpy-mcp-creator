@@ -659,6 +659,7 @@ Requirements:
             ctx = char_scene_context.get(char_name, {})
             layout_mode = self._resolve_layout_mode(ctx.get("character_count", 1))
             framing = "medium shot" if layout_mode == "solo" else ("medium shot" if layout_mode == "duo" else "medium-long shot")
+            subject_height_guidance = self._character_subject_height_guidance(layout_mode)
 
             char_prompt = (
                 f"Portrait of {char_name}. "
@@ -670,9 +671,11 @@ Requirements:
                 f"Camera framing: {framing}, centered on character. "
                 "Visual novel character sprite style, one person only, single character, "
                 "standing pose, facing viewer, centered composition, white/plain background, minimal background, "
-                "full body visible, clean line art, anime style, subject fills most of the frame vertically. "
+                f"full body visible, clean line art, anime style, {subject_height_guidance}, "
+                "comfortable margin around the character, leave breathing room above the head and around the body. "
                 "No environment scene, no street, no room, no architecture, no skyline, no vehicles, no landscape. "
                 "Do not generate a poster, wide shot, cinematic environment plate, or character with scenery. "
+                "Not a close-up. No oversized character dominating the frame. "
                 "Same art direction, lighting, and color palette as the scene background. "
                 "Matching atmosphere for seamless visual novel composition."
             )
@@ -877,6 +880,13 @@ Requirements:
         elif char_count == 2:
             return "duo"
         return "trio"
+
+    def _character_subject_height_guidance(self, layout_mode: str) -> str:
+        if layout_mode == "solo":
+            return "subject occupies about 60-70% of frame height"
+        if layout_mode == "duo":
+            return "subject occupies about 50-60% of frame height"
+        return "subject occupies about 45-55% of frame height"
 
     def build_sprite_plan(
         self,
@@ -1124,38 +1134,38 @@ Requirements:
         lines.append("transform proto_center_solo:")
         lines.append("    xalign 0.5")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.75")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.60")
         lines.append("")
         lines.append("transform proto_left_duo:")
-        lines.append("    xalign 0.28")
+        lines.append("    xalign 0.30")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.62")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.48")
         lines.append("")
         lines.append("transform proto_right_duo:")
-        lines.append("    xalign 0.72")
+        lines.append("    xalign 0.70")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.62")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.48")
         lines.append("")
         lines.append("transform proto_left_trio:")
-        lines.append("    xalign 0.20")
+        lines.append("    xalign 0.22")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.52")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.40")
         lines.append("")
         lines.append("transform proto_center_trio:")
         lines.append("    xalign 0.5")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.52")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.40")
         lines.append("")
         lines.append("transform proto_right_trio:")
-        lines.append("    xalign 0.80")
+        lines.append("    xalign 0.78")
         lines.append("    yanchor 1.0")
-        lines.append("    ypos 0.88")
-        lines.append("    zoom 0.52")
+        lines.append("    ypos 0.92")
+        lines.append("    zoom 0.40")
         lines.append("")
 
         # Emit image definitions for backgrounds

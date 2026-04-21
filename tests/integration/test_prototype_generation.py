@@ -2314,7 +2314,7 @@ async def test_build_sprite_plan_assigns_layout_modes_for_solo_duo_trio(
 async def test_write_script_emits_prototype_runtime_transforms_for_sprite_layout(
     client: TestClient, tmp_path: Path
 ) -> None:
-    """Script must contain prototype-specific transforms that control zoom and anchor."""
+    """Script must contain prototype-specific transforms with more conservative default scale."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
     from renpy_mcp.services.project_manager import ProjectManager
@@ -2355,8 +2355,10 @@ async def test_write_script_emits_prototype_runtime_transforms_for_sprite_layout
     assert "transform proto_center_solo" in content, (
         f"Missing proto_center_solo transform. Content:\n{content}"
     )
-    assert "zoom" in content, "Transforms must control zoom"
-    assert "yanchor" in content or "ypos" in content, "Transforms must control vertical position"
+    assert "zoom 0.60" in content, f"Solo transform should be scaled down. Content:\n{content}"
+    assert "zoom 0.48" in content, f"Duo transform should be scaled down. Content:\n{content}"
+    assert "zoom 0.40" in content, f"Trio transform should be scaled down. Content:\n{content}"
+    assert "ypos 0.92" in content, "Transforms should place characters slightly lower after scale reduction"
 
 
 @pytest.mark.asyncio
@@ -2806,6 +2808,15 @@ async def test_character_generation_prompt_includes_scene_visual_context(
     )
     assert "no buildings" in prompt.lower() or "no street" in prompt.lower() or "no environment" in prompt.lower(), (
         f"Prompt must explicitly ban environment/background composition. Got: {prompt}"
+    )
+    assert "comfortable margin" in prompt.lower() or "breathing room" in prompt.lower(), (
+        f"Prompt must request more margin around the character. Got: {prompt}"
+    )
+    assert "55-70%" in prompt or "60-70%" in prompt or "subject occupies about" in prompt.lower(), (
+        f"Prompt must constrain subject size instead of filling the frame. Got: {prompt}"
+    )
+    assert "not a close-up" in prompt.lower() or "no oversized character" in prompt.lower(), (
+        f"Prompt must explicitly avoid near-camera composition. Got: {prompt}"
     )
 
 
