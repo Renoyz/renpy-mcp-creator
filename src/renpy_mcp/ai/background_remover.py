@@ -132,6 +132,11 @@ class BackgroundRemover:
                 )
                 total_pixels = img.width * img.height
                 visible_ratio = visible_pixels / total_pixels if total_pixels > 0 else 0.0
+                bbox_width = right - left
+                bbox_height = bottom - top
+                width_ratio = bbox_width / img.width if img.width > 0 else 0.0
+                height_ratio = bbox_height / img.height if img.height > 0 else 0.0
+                portrait_ratio = bbox_height / max(1, bbox_width)
 
                 # Crop to visible area
                 cropped = img.crop(bbox)
@@ -175,7 +180,13 @@ class BackgroundRemover:
                 elif cropped.width < 100 or cropped.height < 100:
                     renderable = False
                     reason = "sprite_too_small"
-                elif (bottom - top) / img.height < 0.3:
+                elif width_ratio > 0.55:
+                    renderable = False
+                    reason = "subject_too_wide"
+                elif portrait_ratio < 1.15:
+                    renderable = False
+                    reason = "not_portrait_sprite"
+                elif height_ratio < 0.3:
                     renderable = False
                     reason = "visible_region_too_narrow"
 

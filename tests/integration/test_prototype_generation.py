@@ -1952,6 +1952,25 @@ async def test_generate_character_assets_creates_sprite_when_generation_succeeds
         "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg
     )
 
+    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
+        from PIL import Image
+
+        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (900, 900), (255, 0, 0, 255)).save(out, "PNG")
+        return out, {
+            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+            "baseline_offset": 50,
+            "normalized_size": (900, 900),
+            "visible_ratio": 0.5,
+            "renderable": True,
+            "reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
+    )
+
     char_assets = await service.generate_character_assets(project_name, blueprint, scenes)
 
     assert len(char_assets) > 0, "Character assets should have been generated"
@@ -1960,6 +1979,9 @@ async def test_generate_character_assets_creates_sprite_when_generation_succeeds
         abs_path = tmp_path / project_name / info["path"]
         assert abs_path.exists(), f"Character file for {char_name} should exist"
         assert info["placeholder"] is False, f"Character {char_name} should not be placeholder"
+        assert abs_path.name.endswith("_normalized.png"), (
+            f"Runtime sprite path must point to normalized output, got {abs_path.name}"
+        )
 
 
 @pytest.mark.asyncio
@@ -2421,12 +2443,12 @@ async def test_cjk_font_config_covers_runtime_dialogue_styles(
         assert "gui.text_font" in content
         assert "gui.name_text_font" in content
 
-        # Must override say screen styles
-        assert "style.say_dialogue.font" in content, (
-            f"Must override say_dialogue style at runtime. Content:\n{content}"
+        # Must override say-related styles through guarded runtime loop
+        assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
+            f"Must override say-related styles at runtime. Content:\n{content}"
         )
-        assert "style.say_label.font" in content, (
-            f"Must override say_label style at runtime. Content:\n{content}"
+        assert 'try:' in content and 'except Exception:' in content, (
+            f"Must guard missing style names with try/except at runtime. Content:\n{content}"
         )
         assert config["configured"] is True
     finally:
@@ -2542,6 +2564,35 @@ def test_sprite_postprocess_rejects_empty_image() -> None:
     assert "no_visible_pixels" in meta.get("reason", ""), f"Expected no_visible_pixels reason, got {meta}"
 
     input_path.unlink(missing_ok=True)
+
+
+def test_sprite_postprocess_rejects_scene_like_slice() -> None:
+    """normalize_sprite must reject wide or environment-like cutouts that are not portrait sprites."""
+    from renpy_mcp.ai.background_remover import BackgroundRemover
+    from PIL import Image
+
+    remover = BackgroundRemover()
+
+    img = Image.new("RGBA", (832, 1248), (0, 0, 0, 0))
+    # Simulate a scenery slice: very wide, relatively short visible region.
+    wide_slice = Image.new("RGBA", (560, 260), (120, 160, 220, 220))
+    img.paste(wide_slice, (136, 700))
+
+    tmp_path = Path("tests/integration/.tmp_sprite_test")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    input_path = tmp_path / "scene_like_sprite.png"
+    img.save(input_path, "PNG")
+
+    result_path, meta = remover.normalize_sprite(input_path)
+
+    assert result_path is not None, "normalize_sprite still writes normalized output for debug"
+    assert meta.get("renderable") is False, f"Scene-like slice must be rejected. Meta: {meta}"
+    assert meta.get("reason") in {"subject_too_wide", "not_portrait_sprite"}, (
+        f"Expected portrait gate rejection reason, got {meta.get('reason')}"
+    )
+
+    input_path.unlink(missing_ok=True)
+    result_path.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
@@ -2750,6 +2801,112 @@ async def test_character_generation_prompt_includes_scene_visual_context(
     assert "Same art direction" in prompt or "lighting" in prompt.lower(), (
         f"Prompt must request matching art direction. Got: {prompt}"
     )
+    assert "single character" in prompt.lower() or "one person only" in prompt.lower(), (
+        f"Prompt must enforce single-character sprite framing. Got: {prompt}"
+    )
+    assert "no buildings" in prompt.lower() or "no street" in prompt.lower() or "no environment" in prompt.lower(), (
+        f"Prompt must explicitly ban environment/background composition. Got: {prompt}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_script_prefers_spoken_line_over_content_brief(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Script dialogue should use spoken_line when available instead of the planning summary."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import DialogueBeat, PrototypeGenerationService, PrototypeScene
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_spoken_line"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    scenes = [
+        PrototypeScene(
+            scene_id="s1",
+            title="Test",
+            summary="summary",
+            location="street",
+            characters_present=["Alice"],
+            dialogue_beats=[
+                DialogueBeat(
+                    speaker="Alice",
+                    intent="test",
+                    content_brief="询问对方是否也能听见剑的声音",
+                    spoken_line="你也能听见剑的声音吗？",
+                )
+            ],
+            entry_label="label_s1",
+            next_scene_id=None,
+        ),
+    ]
+
+    fake_path = tmp_path / project_name / "game" / "images" / "character" / "alice.png"
+    fake_path.parent.mkdir(parents=True, exist_ok=True)
+    fake_path.write_bytes(b"fake")
+    char_assets = {"Alice": {"path": fake_path, "placeholder": False, "renderable": True, "renderable_reason": "ok"}}
+    service.build_sprite_plan(scenes, char_assets)
+
+    staging_path = service.write_script(project_name, blueprint.chapters[0], scenes, character_assets=char_assets)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+
+    assert "你也能听见剑的声音吗？" in content
+    assert "询问对方是否也能听见剑的声音" not in content
+
+
+@pytest.mark.asyncio
+async def test_background_composition_gate_rejects_subject_heavy_generated_background(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Subject-heavy generated backgrounds must degrade to placeholder instead of entering runtime."""
+    from PIL import Image, ImageDraw
+
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.models import ImageGenerationResult
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+
+    project_name = "proto_background_gate"
+    _create_project(client, tmp_path, project_name)
+
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    pm = ProjectManager(get_settings())
+    service = PrototypeGenerationService(pm=pm, provider=_make_mock_scene_provider())
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    bad_bg = tmp_path / project_name / "game" / "images" / "background" / "bg_scene_1.png"
+    bad_bg.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (1280, 720), (25, 25, 35))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((430, 40, 1100, 715), fill=(240, 170, 40), outline=(255, 255, 255), width=16)
+    draw.ellipse((520, 90, 900, 470), fill=(20, 245, 20), outline=(255, 255, 255), width=12)
+    img.save(bad_bg, "PNG")
+
+    async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        return ImageGenerationResult(
+            success=True,
+            prompt=prompt,
+            image_type=image_type,
+            files=[bad_bg],
+            primary_file=bad_bg,
+        )
+
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
+    )
+
+    bg_assets = await service.generate_background_assets(project_name, [scenes[0]])
+    info = bg_assets[scenes[0].scene_id]
+
+    assert info["placeholder"] is False, f"Composition gate should warn only, not suppress runtime use: {info}"
+    assert info["source"] == "image_service", f"Generated background should still be treated as image_service output: {info}"
 
 
 @pytest.mark.asyncio
@@ -2788,15 +2945,24 @@ async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
             f"Must check font file existence at runtime. Content:\n{content}"
         )
 
-        # Must set style attributes directly (runtime chain)
-        assert "style.say_dialogue.font" in content, (
-            f"Must set style.say_dialogue.font at runtime. Content:\n{content}"
+        # Must set style attributes through guarded runtime chain
+        assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
+            f"Must iterate guarded style overrides at runtime. Content:\n{content}"
         )
-        assert "style.say_label.font" in content, (
-            f"Must set style.say_label.font at runtime. Content:\n{content}"
+        assert 'try:' in content and 'except Exception:' in content, (
+            f"Must guard missing style names with try/except at runtime. Content:\n{content}"
         )
-        assert "style.namebox.font" in content, (
-            f"Must set style.namebox.font at runtime. Content:\n{content}"
+        assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content, (
+            f"Must assign font through guarded getattr chain. Content:\n{content}"
+        )
+        assert "style.default.font" in content, (
+            f"Must set style.default.font to catch fallback chains. Content:\n{content}"
+        )
+        assert "config.font_replacement_map" in content, (
+            f"Must register font replacement map for stubborn runtime defaults. Content:\n{content}"
+        )
+        assert "DejaVuSans.ttf" in content, (
+            f"Must replace DejaVuSans runtime fallback. Content:\n{content}"
         )
 
         # Font file must actually exist in the project
@@ -2806,6 +2972,42 @@ async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
         # Config must claim configured
         assert config["configured"] is True
         assert config["font_path"] == "game/fonts/simhei.ttf"
+    finally:
+        proto_module._CJK_FONT_SOURCE = original_source
+
+
+@pytest.mark.asyncio
+async def test_write_script_embeds_runtime_cjk_overrides_when_font_configured(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Prototype script should embed CJK runtime overrides so preview does not depend solely on prototype_fonts.rpy."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+    import renpy_mcp.services.prototype_generation_service as proto_module
+
+    project_name = "proto_script_cjk_runtime"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    original_source = proto_module._CJK_FONT_SOURCE
+    fake_source = tmp_path / "fake_simhei.ttf"
+    fake_source.write_bytes(b"fakefont")
+    proto_module._CJK_FONT_SOURCE = fake_source
+    try:
+        cjk_font_config = service.ensure_cjk_font_config(project_name)
+        staging_path = service.write_script(project_name, chapter, scenes, cjk_font_config=cjk_font_config)
+        content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+        assert "style.default.font = \"fonts/simhei.ttf\"" in content
+        assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content
+        assert "config.font_replacement_map[\"DejaVuSans.ttf\"] = \"fonts/simhei.ttf\"" in content
     finally:
         proto_module._CJK_FONT_SOURCE = original_source
 

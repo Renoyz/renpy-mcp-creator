@@ -911,6 +911,95 @@ def test_get_provider_anthropic_model_fallback_to_default(monkeypatch) -> None:
     assert provider.default_model == "claude-3-5-sonnet"
 
 
+def test_get_provider_falls_back_to_deepseek_on_kimi_429(monkeypatch) -> None:
+    """When Kimi returns 429, wrapper provider must transparently fall back to DeepSeek."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-kimi")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+    monkeypatch.setenv("RENPY_MCP_DEEPSEEK_API_KEY", "sk-test-deepseek")
+    monkeypatch.delenv("RENPY_MCP_MOCK_LLM", raising=False)
+
+    from renpy_mcp.chat_engine.providers import LLMResponse
+    import renpy_mcp.web.chat_ws as chat_ws
+
+    class FakeKimiProvider:
+        tool_format = "anthropic"
+
+        def __init__(self, api_key=None, base_url=None, default_model=None):
+            self.api_key = api_key
+            self.base_url = base_url
+            self.default_model = default_model
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            raise RuntimeError("429 Too Many Requests")
+
+    class FakeDeepSeekProvider:
+        tool_format = "openai"
+
+        def __init__(self, api_key=None, base_url=None, default_model=None):
+            self.api_key = api_key
+            self.base_url = base_url
+            self.default_model = default_model
+            self.last_tools = None
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            self.last_tools = tools
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": "deepseek fallback ok"}],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr(chat_ws, "AnthropicProvider", FakeKimiProvider)
+    monkeypatch.setattr(chat_ws, "OpenAICompatibleProvider", FakeDeepSeekProvider)
+
+    provider = chat_ws._get_provider()
+    assert provider is not None
+
+    response = provider.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"name": "tool_a", "description": "demo", "input_schema": {"type": "object", "properties": {}}}],
+    )
+    assert response.text == "deepseek fallback ok"
+    assert provider.fallback.last_tools[0]["type"] == "function"
+    assert provider.fallback.last_tools[0]["function"]["name"] == "tool_a"
+
+
+def test_get_provider_does_not_fall_back_on_non_429_kimi_error(monkeypatch) -> None:
+    """Non-rate-limit Kimi errors must still surface instead of silently masking real failures."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-kimi")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+    monkeypatch.setenv("RENPY_MCP_DEEPSEEK_API_KEY", "sk-test-deepseek")
+    monkeypatch.delenv("RENPY_MCP_MOCK_LLM", raising=False)
+
+    import renpy_mcp.web.chat_ws as chat_ws
+
+    class FakeKimiProvider:
+        tool_format = "anthropic"
+
+        def __init__(self, api_key=None, base_url=None, default_model=None):
+            self.default_model = default_model
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            raise RuntimeError("401 Unauthorized")
+
+    class FakeDeepSeekProvider:
+        tool_format = "openai"
+
+        def __init__(self, api_key=None, base_url=None, default_model=None):
+            pass
+
+        def chat(self, messages, tools=None, system=None, model=None, max_tokens=1024, temperature=None):
+            raise AssertionError("DeepSeek fallback should not be used for non-429 errors")
+
+    monkeypatch.setattr(chat_ws, "AnthropicProvider", FakeKimiProvider)
+    monkeypatch.setattr(chat_ws, "OpenAICompatibleProvider", FakeDeepSeekProvider)
+
+    provider = chat_ws._get_provider()
+    assert provider is not None
+
+    with pytest.raises(RuntimeError, match="401 Unauthorized"):
+        provider.chat(messages=[{"role": "user", "content": "hello"}])
+
+
 def test_blueprint_draft_generation_retries_then_succeeds(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """First attempt returns invalid JSON, second attempt returns valid blueprint."""
     project_name = "bp_retry"

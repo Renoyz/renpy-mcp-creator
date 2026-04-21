@@ -201,11 +201,11 @@ async def test_failed_regeneration_preserves_previous_character_assets_when_same
     chapter = blueprint.chapters[0]
     scenes = await service.generate_scenes(chapter, blueprint)
 
-    fake_char_path = tmp_path / project_name / "game" / "images" / "character" / "char_Alice_neutral.png"
-    fake_char_path.parent.mkdir(parents=True, exist_ok=True)
-    fake_char_path.write_bytes(b"alice_v1")
-
     async def _mock_generate_image(self, project_dir, prompt, image_type, base_name=None, generate_emotions=False):
+        file_name = f"{base_name or 'char'}-mock.png"
+        fake_char_path = project_dir / "game" / "images" / "character" / file_name
+        fake_char_path.parent.mkdir(parents=True, exist_ok=True)
+        fake_char_path.write_bytes(b"alice_v1")
         return ImageGenerationResult(
             success=True, prompt=prompt, image_type=image_type,
             files=[fake_char_path], primary_file=fake_char_path,
@@ -216,7 +216,7 @@ async def test_failed_regeneration_preserves_previous_character_assets_when_same
     )
 
     def _mock_remove_bg(self, input_path):
-        return fake_char_path
+        return input_path
 
     monkeypatch.setattr(
         "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg
@@ -258,10 +258,12 @@ async def test_failed_regeneration_preserves_previous_character_assets_when_same
             final_char_paths.append(final_abs)
 
     assert len(final_char_paths) > 0, "Round-1 character files should exist"
+    assert all(p.name.endswith("_normalized.png") for p in final_char_paths), (
+        f"Round-1 runtime sprite paths should point to normalized files, got {final_char_paths}"
+    )
     round1_contents = {p: p.read_bytes() for p in final_char_paths}
 
     # --- Round 2: change mock content, fail after asset generation ---
-    fake_char_path.write_bytes(b"alice_v2")
     round2_id = "r2"
     char_assets_r2 = await service.generate_character_assets(project_name, blueprint, scenes, round_id=round2_id)
     staging_path_r2 = service.write_script(project_name, chapter, scenes, character_assets=char_assets_r2)
@@ -551,3 +553,118 @@ async def test_rollback_leaves_index_and_assets_consistent_after_post_asset_fail
     # No staging assets should exist
     staging_dir = tmp_path / project_name / "game" / "__staging__" / round_id
     assert not staging_dir.exists(), "Staging dir should be gone"
+
+
+@pytest.mark.asyncio
+async def test_write_script_shows_renderable_sprite_when_asset_exists_only_in_staging(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Pre-commit script generation must still emit show statements for staging-only sprites."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_stage_show"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    staging_sprite = tmp_path / project_name / "game" / "__staging__" / "rshow" / "images" / "character" / "bob_normalized.png"
+    staging_sprite.parent.mkdir(parents=True, exist_ok=True)
+    staging_sprite.write_bytes(b"fake")
+
+    char_assets = {
+        "Bob": {
+            "path": "game/images/character/bob_normalized.png",
+            "staging_path": "game/__staging__/rshow/images/character/bob_normalized.png",
+            "placeholder": False,
+            "renderable": True,
+            "renderable_reason": "ok",
+        }
+    }
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+
+    staging_script_path = service.write_script(
+        project_name,
+        chapter,
+        scenes,
+        character_assets=char_assets,
+    )
+
+    script_path = tmp_path / project_name / staging_script_path
+    script_text = script_path.read_text(encoding="utf-8")
+    assert "show Bob_neutral at proto_right_duo" in script_text
+
+
+@pytest.mark.asyncio
+async def test_update_index_uses_final_paths_when_assets_exist_only_in_staging(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Index should persist final project-relative paths even before staged assets are promoted."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "proto_stage_index"
+    _create_project(client, tmp_path, project_name)
+
+    pm = ProjectManager(get_settings())
+    blueprint = ProjectBlueprint(**_make_blueprint())
+    provider = _make_mock_scene_provider()
+    service = PrototypeGenerationService(pm=pm, provider=provider)
+
+    chapter = blueprint.chapters[0]
+    scenes = await service.generate_scenes(chapter, blueprint)
+
+    staging_bg = tmp_path / project_name / "game" / "__staging__" / "rindex" / "images" / "background" / "bg_proto-ch1-s1.png"
+    staging_bg.parent.mkdir(parents=True, exist_ok=True)
+    staging_bg.write_bytes(b"fakebg")
+
+    staging_sprite = tmp_path / project_name / "game" / "__staging__" / "rindex" / "images" / "character" / "bob_normalized.png"
+    staging_sprite.parent.mkdir(parents=True, exist_ok=True)
+    staging_sprite.write_bytes(b"fakesprite")
+
+    bg_assets = {
+        "proto-ch1-s1": {
+            "path": "game/images/background/bg_proto-ch1-s1.png",
+            "staging_path": "game/__staging__/rindex/images/background/bg_proto-ch1-s1.png",
+            "placeholder": False,
+            "source": "image_service",
+        }
+    }
+    char_assets = {
+        "Bob": {
+            "path": "game/images/character/bob_normalized.png",
+            "staging_path": "game/__staging__/rindex/images/character/bob_normalized.png",
+            "placeholder": False,
+            "renderable": True,
+            "renderable_reason": "ok",
+        }
+    }
+    service.build_sprite_plan(scenes, char_assets, project_name=project_name)
+
+    service.update_index(
+        project_name,
+        chapter,
+        scenes,
+        "game/prototype_ch1_Chapter1.rpy",
+        background_assets=bg_assets,
+        character_assets=char_assets,
+    )
+
+    index = pm.read_project_index(project_name)
+    assert index["scenes"]["proto-ch1-s1"]["background_asset_path"] == "game/images/background/bg_proto-ch1-s1.png"
+    assert index["character_assets"]["Bob"]["path"] == "game/images/character/bob_normalized.png"
+    sprite_plan_item = next(
+        sp for sp in index["scenes"]["proto-ch1-s1"]["sprite_plan"] if sp["character_name"] == "Bob"
+    )
+    assert sprite_plan_item["sprite_path"] == "game/images/character/bob_normalized.png"
+    assert "sprite_check_path" not in sprite_plan_item

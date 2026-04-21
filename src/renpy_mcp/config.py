@@ -63,6 +63,10 @@ class Settings(BaseSettings):
         default="qwen-image-2.1",
         description="DashScope image generation model. Default changed from qwen-image-2.0-pro to conserve quota.",
     )
+    dashscope_character_image_model: str = Field(
+        default="qwen-image-2.0",
+        description="DashScope character sprite generation model override. Characters default to qwen-image-2.0 unless explicitly changed.",
+    )
     session_secret: str | None = Field(
         default=None,
         description="Secret key for HTTP session signing. Falls back to SESSION_SECRET env var, then a random token generated at startup.",

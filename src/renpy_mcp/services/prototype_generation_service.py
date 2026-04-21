@@ -75,6 +75,7 @@ class DialogueBeat(BaseModel):
     speaker: str
     intent: str
     content_brief: str
+    spoken_line: str = ""
 
 
 class SpritePlanItem(BaseModel):
@@ -83,6 +84,7 @@ class SpritePlanItem(BaseModel):
     character_name: str
     character_id: str = ""
     sprite_path: str | None = None
+    sprite_check_path: str | None = None
     sprite_placeholder: bool = True
     sprite_renderable: bool = False
     sprite_quality_reason: str = ""
@@ -206,6 +208,7 @@ Generate a JSON array of scenes. Each scene must have these fields:
   - speaker: character name (must be in characters_present)
   - intent: what the character is trying to do or feel
   - content_brief: brief description of what they say
+  - spoken_line: the final in-character spoken dialogue line for the game UI
 - entry_label: Ren'Py label name for this scene (e.g., "prototype_ch1_start")
 - next_scene_id: scene_id of the next scene, or null for the last scene
 
@@ -213,6 +216,9 @@ Consistency rules:
 - Every dialogue_beats.speaker MUST be in characters_present.
 - The mood must be reflected in both the location_visual_brief and the dialogue beats.
 - If the location changes between scenes, the visual brief must also change.
+- spoken_line must be direct spoken dialogue, not narration or a third-person summary.
+- Do NOT write spoken_line like "询问对方...", "低声自语...", "展开双臂说...".
+- spoken_line should read like natural VN dialogue the character can say aloud in Chinese, 1-2 sentences max.
 
 Requirements:
 - 2 to 4 scenes total
@@ -277,6 +283,130 @@ Requirements:
         """Derive the final path from a staging prototype script path."""
         return staging_path.replace(".__staging__", "")
 
+    def _runtime_asset_relpath(self, project_dir: Path, asset_path: Path, round_id: str | None = None) -> str:
+        """Return the final project-relative path for a generated asset.
+
+        When an asset lives under game/__staging__/{round_id}/..., the runtime path
+        must point at the eventual promoted game/... location, not the staging file.
+        """
+        rel = asset_path.relative_to(project_dir)
+        if round_id:
+            staging_root = Path("game") / "__staging__" / round_id
+            if rel.parts[: len(staging_root.parts)] == staging_root.parts:
+                rel = Path("game") / Path(*rel.parts[len(staging_root.parts):])
+        return rel.as_posix()
+
+    def _assess_background_composition(self, image_path: Path) -> tuple[bool, str]:
+        """Reject obviously subject-heavy background plates.
+
+        The goal is not semantic accuracy; it is a conservative guardrail against
+        generated backgrounds that behave like key art with a dominant foreground
+        subject, leaving no usable space for sprite compositing.
+        """
+        try:
+            from collections import deque
+
+            from PIL import Image, ImageFilter
+
+            with Image.open(image_path) as img:
+                gray = img.convert("L").resize((128, 72), Image.Resampling.LANCZOS)
+                edges = gray.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.MaxFilter(5))
+                px = edges.load()
+                width, height = edges.size
+                threshold = 52
+                binary = [[1 if px[x, y] >= threshold else 0 for x in range(width)] for y in range(height)]
+
+                def _density(x0: int, x1: int, y0: int, y1: int) -> float:
+                    total = max(1, (x1 - x0) * (y1 - y0))
+                    count = 0
+                    for yy in range(y0, y1):
+                        row = binary[yy]
+                        count += sum(row[x0:x1])
+                    return count / total
+
+                visited = [[False] * width for _ in range(height)]
+                largest_component = 0
+                largest_bbox = (0, 0, 0, 0)
+                min_x = int(width * 0.15)
+                max_x = int(width * 0.85)
+                min_y = int(height * 0.10)
+                max_y = int(height * 0.97)
+
+                for y in range(min_y, max_y):
+                    for x in range(min_x, max_x):
+                        if not binary[y][x] or visited[y][x]:
+                            continue
+                        q = deque([(x, y)])
+                        visited[y][x] = True
+                        area = 0
+                        left = right = x
+                        top = bottom = y
+                        while q:
+                            cx, cy = q.popleft()
+                            area += 1
+                            left = min(left, cx)
+                            right = max(right, cx)
+                            top = min(top, cy)
+                            bottom = max(bottom, cy)
+                            for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                                if (
+                                    min_x <= nx < max_x
+                                    and min_y <= ny < max_y
+                                    and binary[ny][nx]
+                                    and not visited[ny][nx]
+                                ):
+                                    visited[ny][nx] = True
+                                    q.append((nx, ny))
+                        if area > largest_component:
+                            largest_component = area
+                            largest_bbox = (left, top, right, bottom)
+
+                focus_density = _density(int(width * 0.18), int(width * 0.82), int(height * 0.15), int(height * 0.95))
+                lower_focus_density = _density(int(width * 0.18), int(width * 0.82), int(height * 0.45), int(height * 0.98))
+                peripheral_density = (
+                    _density(0, int(width * 0.15), 0, height)
+                    + _density(int(width * 0.85), width, 0, height)
+                    + _density(0, width, 0, int(height * 0.18))
+                ) / 3.0
+
+                comp_ratio = largest_component / max(1, width * height)
+                bbox_w = max(0, largest_bbox[2] - largest_bbox[0] + 1)
+                bbox_h = max(0, largest_bbox[3] - largest_bbox[1] + 1)
+                if (
+                    comp_ratio > 0.11
+                    and bbox_w / width > 0.24
+                    and bbox_h / height > 0.34
+                    and lower_focus_density > 0.14
+                ):
+                    return False, "dominant_foreground_subject"
+                if focus_density > 0.19 and focus_density > peripheral_density * 1.55 and lower_focus_density > 0.13:
+                    return False, "foreground_too_busy"
+        except Exception as exc:
+            logger.warning("Background composition assessment failed for %s: %s", image_path, exc)
+        return True, "ok"
+
+    def _cjk_runtime_override_lines(self) -> list[str]:
+        """Return reusable runtime CJK font override lines."""
+        return [
+            "init python:",
+            '    import os',
+            '    _font_file = os.path.join(config.gamedir, "fonts", "simhei.ttf")',
+            '    if os.path.exists(_font_file):',
+            '        style.default.font = "fonts/simhei.ttf"',
+            '        gui.text_font = "fonts/simhei.ttf"',
+            '        gui.name_text_font = "fonts/simhei.ttf"',
+            '        gui.interface_text_font = "fonts/simhei.ttf"',
+            '        for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text"):',
+            '            try:',
+            '                getattr(style, _style_name).font = "fonts/simhei.ttf"',
+            '            except Exception:',
+            '                pass',
+            '        config.font_replacement_map["DejaVuSans.ttf"] = "fonts/simhei.ttf"',
+            '        config.font_replacement_map["DejaVuSans-Bold.ttf"] = "fonts/simhei.ttf"',
+            '        config.font_replacement_map["DejaVuSans-Oblique.ttf"] = "fonts/simhei.ttf"',
+            '        config.font_replacement_map["DejaVuSans-BoldOblique.ttf"] = "fonts/simhei.ttf"',
+        ]
+
     # ------------------------------------------------------------------
     # Background asset generation
     # ------------------------------------------------------------------
@@ -322,6 +452,7 @@ Requirements:
                 shutil.copy2(final_path, old_backup)
 
             image_generated = False
+            gate_rejected = False
             try:
                 from renpy_mcp.config import get_settings
                 from renpy_mcp.ai.image_service import ImageService
@@ -333,7 +464,9 @@ Requirements:
                         f"Background: {scene.location}. "
                         f"Visual: {scene.location_visual_brief}. "
                         f"Mood: {scene.mood}. "
-                        "Visual novel background style, 16:9, no characters, no text."
+                        "Visual novel background plate, 16:9, no characters, no text, no giant statues, "
+                        "no giant masks, no close foreground props, no dominant central subject, "
+                        "keep the lower foreground visually open for foreground sprites."
                     )
                     gen_result = await image_service.generate_image(
                         project_dir=project_dir,
@@ -343,11 +476,21 @@ Requirements:
                     )
                     if gen_result.success and gen_result.primary_file:
                         generated = gen_result.primary_file
+                        gate_check_path = generated
                         if round_id and staging_bg_dir:
-                            # Move generated file into staging; restore old asset
                             shutil.move(str(generated), str(staging_path))
                             if old_backup and old_backup.exists():
                                 shutil.copy2(old_backup, final_path)
+                            gate_check_path = staging_path
+                        passes_gate, gate_reason = self._assess_background_composition(gate_check_path)
+                        if not passes_gate:
+                            gate_rejected = True
+                            logger.warning(
+                                "Generated background for %s warned by composition gate but kept for runtime: %s",
+                                scene.scene_id,
+                                gate_reason,
+                            )
+                        if round_id and staging_bg_dir:
                             result[scene.scene_id] = {
                                 "path": rel_final,
                                 "staging_path": rel_staging,
@@ -374,14 +517,14 @@ Requirements:
                             "path": rel_final,
                             "staging_path": rel_staging,
                             "placeholder": True,
-                            "source": "pil_fallback",
+                            "source": "composition_warned_fallback" if gate_rejected else "pil_fallback",
                             "is_new_file": True,
                         }
                     else:
                         result[scene.scene_id] = {
                             "path": staging_path,
                             "placeholder": True,
-                            "source": "pil_fallback",
+                            "source": "composition_warned_fallback" if gate_rejected else "pil_fallback",
                             "is_new_file": True,
                         }
                 except Exception as exc:
@@ -525,9 +668,11 @@ Requirements:
                 f"Visual direction: {ctx.get('location_visual_brief', '')}. "
                 f"Mood: {ctx.get('mood', 'neutral')}. "
                 f"Camera framing: {framing}, centered on character. "
-                "Visual novel character sprite style, "
-                "standing pose, facing viewer, white/plain background, "
-                "full body visible, clean line art, anime style. "
+                "Visual novel character sprite style, one person only, single character, "
+                "standing pose, facing viewer, centered composition, white/plain background, minimal background, "
+                "full body visible, clean line art, anime style, subject fills most of the frame vertically. "
+                "No environment scene, no street, no room, no architecture, no skyline, no vehicles, no landscape. "
+                "Do not generate a poster, wide shot, cinematic environment plate, or character with scenery. "
                 "Same art direction, lighting, and color palette as the scene background. "
                 "Matching atmosphere for seamless visual novel composition."
             )
@@ -671,11 +816,12 @@ Requirements:
                 if not renderable:
                     logger.info("Sprite for %s marked unrenderable: %s", char_name, reason)
 
+                runtime_rel = self._runtime_asset_relpath(project_dir, final_sprite_path, round_id)
+                staging_rel = str(final_sprite_path.relative_to(project_dir).as_posix())
                 if round_id and staging_char_dir:
-                    rel_sprite = str(final_sprite_path.relative_to(project_dir).as_posix())
                     result[char_name] = {
-                        "path": rel_final,
-                        "staging_path": rel_sprite,
+                        "path": runtime_rel,
+                        "staging_path": staging_rel,
                         "placeholder": False,
                         "renderable": renderable,
                         "renderable_reason": reason,
@@ -685,9 +831,8 @@ Requirements:
                         "intermediate_paths": intermediate_paths,
                     }
                 else:
-                    rel_sprite = str(final_sprite_path.relative_to(project_dir).as_posix())
                     result[char_name] = {
-                        "path": rel_sprite,
+                        "path": runtime_rel,
                         "placeholder": False,
                         "renderable": renderable,
                         "renderable_reason": reason,
@@ -793,6 +938,7 @@ Requirements:
                     character_name=char_name,
                     character_id=safe_id,
                     sprite_path=str(sprite_path) if sprite_path else None,
+                    sprite_check_path=str(check_path) if check_path else None,
                     sprite_placeholder=is_placeholder,
                     sprite_renderable=is_renderable,
                     sprite_quality_reason=renderable_reason,
@@ -807,7 +953,7 @@ Requirements:
     # CJK font configuration
     # ------------------------------------------------------------------
 
-    def ensure_cjk_font_config(self, project_name: str) -> dict:
+    def ensure_cjk_font_config(self, project_name: str, round_id: str | None = None) -> dict:
         """Ensure the project has CJK-safe font configuration.
 
         Copies a system CJK font into the project and writes a Ren'Py config
@@ -824,38 +970,36 @@ Requirements:
         fonts_dir = project_dir / "game" / "fonts"
         fonts_dir.mkdir(parents=True, exist_ok=True)
 
+        staging_root = project_dir / "game" / "__staging__" / round_id if round_id else None
+        if staging_root:
+            staging_root.mkdir(parents=True, exist_ok=True)
+
         font_dest = fonts_dir / _CJK_FONT_DEST_NAME
+        staged_font_dest = staging_root / "fonts" / _CJK_FONT_DEST_NAME if staging_root else None
         configured = False
         new_files: list[str] = []
 
         if _CJK_FONT_SOURCE.exists() and not font_dest.exists():
             try:
-                shutil.copy2(_CJK_FONT_SOURCE, font_dest)
+                target_font_path = staged_font_dest or font_dest
+                target_font_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(_CJK_FONT_SOURCE, target_font_path)
                 configured = True
-                new_files.append(str(font_dest.relative_to(project_dir).as_posix()))
+                new_files.append(str(target_font_path.relative_to(project_dir).as_posix()))
             except OSError as exc:
                 logger.warning("Failed to copy CJK font: %s", exc)
         elif font_dest.exists():
             configured = True
 
         # Write font config rpy only when the font is actually available
-        config_path = project_dir / "game" / "prototype_fonts.rpy"
-        if font_dest.exists():
+        runtime_config_rel = "game/prototype_fonts.rpy"
+        config_path = (staging_root / "prototype_fonts.rpy") if staging_root else (project_dir / runtime_config_rel)
+        if font_dest.exists() or (staged_font_dest and staged_font_dest.exists()):
             lines = [
                 "# Auto-generated CJK font configuration for prototype",
                 "# Uses init python so the overrides apply AFTER gui.rpy defaults load.",
-                "init python:",
-                '    import os',
-                '    _font_file = os.path.join(config.gamedir, "fonts", "simhei.ttf")',
-                '    if os.path.exists(_font_file):',
-                '        gui.text_font = "fonts/simhei.ttf"',
-                '        gui.name_text_font = "fonts/simhei.ttf"',
-                '        gui.interface_text_font = "fonts/simhei.ttf"',
-                '        style.say_dialogue.font = "fonts/simhei.ttf"',
-                '        style.say_label.font = "fonts/simhei.ttf"',
-                '        style.namebox.font = "fonts/simhei.ttf"',
-                '        style.window.font = "fonts/simhei.ttf"',
             ]
+            lines.extend(self._cjk_runtime_override_lines())
             config_path.write_text("\n".join(lines), encoding="utf-8")
         else:
             # Write a no-op stub so callers have a stable file path
@@ -869,8 +1013,10 @@ Requirements:
 
         return {
             "configured": configured,
-            "font_path": font_dest.relative_to(project_dir).as_posix() if font_dest.exists() else None,
-            "config_path": config_path.relative_to(project_dir).as_posix(),
+            "font_path": (Path("game") / "fonts" / _CJK_FONT_DEST_NAME).as_posix()
+            if (font_dest.exists() or (staged_font_dest and staged_font_dest.exists()))
+            else None,
+            "config_path": runtime_config_rel,
             "new_files": new_files,
         }
     def _build_character_registry(self, scenes: list[PrototypeScene]) -> dict[str, str]:
@@ -906,6 +1052,7 @@ Requirements:
         scenes: list[PrototypeScene],
         background_assets: dict[str, Any] | None = None,
         character_assets: dict[str, dict] | None = None,
+        cjk_font_config: dict | None = None,
     ) -> str:
         """Generate and write a minimal executable .rpy script skeleton to a staging file.
 
@@ -941,6 +1088,10 @@ Requirements:
         lines: list[str] = []
         lines.append(f"# Prototype chapter: {chapter.name}")
         lines.append("")
+
+        if cjk_font_config and cjk_font_config.get("configured"):
+            lines.extend(self._cjk_runtime_override_lines())
+            lines.append("")
 
         # Emit character definitions
         for display_name, safe_id in char_registry.items():
@@ -1057,7 +1208,7 @@ Requirements:
             # Show sprites for characters in this scene (only when renderable)
             shown_sprites: list[str] = []
             for sp in scene.sprite_plan:
-                sprite_check_path = sp.sprite_path
+                sprite_check_path = sp.sprite_check_path or sp.sprite_path
                 sprite_abs = None
                 if sprite_check_path:
                     sprite_abs = project_dir / sprite_check_path if not Path(sprite_check_path).is_absolute() else Path(sprite_check_path)
@@ -1073,7 +1224,8 @@ Requirements:
             # Output dialogue beats as say statements
             for beat in scene.dialogue_beats:
                 safe_id = char_registry.get(beat.speaker)
-                escaped_brief = _escape_renpy_string(beat.content_brief)
+                line_text = beat.spoken_line or beat.content_brief
+                escaped_brief = _escape_renpy_string(line_text)
                 if safe_id:
                     lines.append(f'    {safe_id} "{escaped_brief}"')
                 else:
@@ -1386,15 +1538,22 @@ Requirements:
         for i, scene in enumerate(scenes):
             bg_asset = bg_assets.get(scene.scene_id)
             bg_path_raw = bg_asset.get("path") if isinstance(bg_asset, dict) else bg_asset
-            bg_placeholder = True
+            bg_check_raw = bg_asset.get("staging_path") if isinstance(bg_asset, dict) else None
+            bg_placeholder = bg_asset.get("placeholder", True) if isinstance(bg_asset, dict) else True
             bg_path_str: str | None = None
             if isinstance(bg_path_raw, Path):
-                bg_placeholder = not bg_path_raw.exists()
-                if bg_path_raw.exists():
+                if bg_path_raw.exists() or (
+                    isinstance(bg_check_raw, str) and (project_dir / bg_check_raw).exists()
+                ) or (
+                    isinstance(bg_check_raw, Path) and bg_check_raw.exists()
+                ):
                     bg_path_str = str(bg_path_raw.relative_to(project_dir).as_posix())
             elif isinstance(bg_path_raw, str):
-                bg_placeholder = not (project_dir / bg_path_raw).exists()
-                if (project_dir / bg_path_raw).exists():
+                if (project_dir / bg_path_raw).exists() or (
+                    isinstance(bg_check_raw, str) and (project_dir / bg_check_raw).exists()
+                ) or (
+                    isinstance(bg_check_raw, Path) and bg_check_raw.exists()
+                ):
                     bg_path_str = bg_path_raw
 
             entry = {
@@ -1407,7 +1566,7 @@ Requirements:
                 "mood": scene.mood,
                 "characters_present": scene.characters_present,
                 "dialogue_beats": [b.model_dump() for b in scene.dialogue_beats],
-                "sprite_plan": [sp.model_dump() for sp in scene.sprite_plan],
+                "sprite_plan": [sp.model_dump(exclude={"sprite_check_path"}) for sp in scene.sprite_plan],
                 "next_scene_id": scene.next_scene_id,
                 "label": scene.entry_label,
                 "file_path": script_path,
@@ -1422,10 +1581,23 @@ Requirements:
         if char_assets:
             def _char_asset_path(info: dict) -> str | None:
                 p = info.get("path")
+                check = info.get("staging_path") or p
                 if isinstance(p, str):
-                    return p if (project_dir / p).exists() else None
+                    if (project_dir / p).exists():
+                        return p
+                    if isinstance(check, str) and (project_dir / check).exists():
+                        return p
+                    if isinstance(check, Path) and check.exists():
+                        return p
+                    return None
                 if isinstance(p, Path):
-                    return str(p.relative_to(project_dir).as_posix()) if p.exists() else None
+                    if p.exists():
+                        return str(p.relative_to(project_dir).as_posix())
+                    if isinstance(check, str) and (project_dir / check).exists():
+                        return str(p.relative_to(project_dir).as_posix())
+                    if isinstance(check, Path) and check.exists():
+                        return str(p.relative_to(project_dir).as_posix())
+                    return None
                 return None
 
             index["character_assets"] = {

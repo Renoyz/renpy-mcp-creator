@@ -34,6 +34,85 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _is_rate_limited_429(exc: Exception) -> bool:
+    """Return True when an exception clearly indicates a 429 rate limit."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 429:
+        return True
+    text = str(exc).lower()
+    return "429" in text and ("too many requests" in text or "rate limit" in text)
+
+
+def _anthropic_tools_to_openai(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Convert Anthropic tool schema to OpenAI function-calling schema."""
+    if tools is None:
+        return None
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and "function" in tool:
+            converted.append(tool)
+            continue
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                },
+            }
+        )
+    return converted
+
+
+class _Kimi429FallbackProvider:
+    """Anthropic-compatible primary with automatic DeepSeek fallback on Kimi 429."""
+
+    tool_format = "anthropic"
+
+    def __init__(self, primary: AnthropicProvider, fallback: OpenAICompatibleProvider) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.default_model = getattr(primary, "default_model", None)
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
+        model: str | None = None,
+        max_tokens: int = 1024,
+        temperature: float | None = None,
+    ):
+        try:
+            return self.primary.chat(
+                messages=messages,
+                tools=tools,
+                system=system,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            if not _is_rate_limited_429(exc):
+                raise
+            logger.warning("Kimi provider hit 429 Too Many Requests; falling back to DeepSeek")
+            fallback_tools = _anthropic_tools_to_openai(tools)
+            return self.fallback.chat(
+                messages=messages,
+                tools=fallback_tools,
+                system=system,
+                model=None,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+
 def _chat_history_path(project_name: str) -> Path:
     settings = get_settings()
     return settings.workspace / project_name / "meta" / "chat_history.json"
@@ -378,11 +457,19 @@ def _get_provider():
     anthropic_base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
     anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet")
     if anthropic_key:
-        return AnthropicProvider(
+        primary = AnthropicProvider(
             api_key=anthropic_key,
             base_url=anthropic_base,
             default_model=anthropic_model,
         )
+        if settings.deepseek_api_key:
+            fallback = OpenAICompatibleProvider(
+                api_key=settings.deepseek_api_key,
+                base_url="https://api.deepseek.com/v1",
+                default_model="deepseek-chat",
+            )
+            return _Kimi429FallbackProvider(primary=primary, fallback=fallback)
+        return primary
 
     # Fallback 1: DeepSeek (OpenAI-compatible)
     if settings.deepseek_api_key:
@@ -914,7 +1001,7 @@ Requirements:
                     service.build_sprite_plan(scenes, char_assets, project_name=self.project_name)
 
                     # Step 5: ensure CJK-safe font configuration
-                    cjk_font_config = service.ensure_cjk_font_config(self.project_name)
+                    cjk_font_config = service.ensure_cjk_font_config(self.project_name, round_id=round_id)
 
                     # Step 6: write new prototype script to staging file
                     step = {
@@ -934,6 +1021,7 @@ Requirements:
                     staging_path = service.write_script(
                         self.project_name, chapter, scenes,
                         background_assets=bg_assets, character_assets=char_assets,
+                        cjk_font_config=cjk_font_config,
                     )
                     final_path = service._final_path_from_staging(staging_path)
 
