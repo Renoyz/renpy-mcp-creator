@@ -45,9 +45,9 @@
 - [ ] 先补前端组件/页面级测试或最小可验证用例，再迁移对应 UI。
 - [ ] 确认生产前端继续使用 `dashboard/` 作为唯一构建入口。
 - [ ] 以 `new_design/design1_extracted/app` 的工作区布局为目标，重建 `dashboard/src/pages/ProjectWorkspacePage.tsx`。
-- [ ] 将 `BlueprintView`、`ChapterTimeline`、`MainContent`、`SceneView`、`StoryMapView`、`AuditReportView` 的结构迁移到 `dashboard/src/`。
-- [ ] 将 `BlueprintCard`、`ProgressCard`、`AuditReportCard`、`ResourceCandidateCard` 的卡片体系迁移到 `dashboard/src/components/`。
-- [ ] 重构 `dashboard/src/context/ProjectContext.tsx`，让它能加载 `meta`、`blueprint`、`scenes`、`storymap`、`audit`。
+- [ ] 将 `BlueprintView`、`ChapterTimeline`、`MainContent`、`SceneView`、`StoryMapView` 的结构迁移到 `dashboard/src/`；审计视图延后到 Phase 7。
+- [ ] 将 `BlueprintCard`、`ProgressCard`、`ResourceCandidateCard` 的卡片体系迁移到 `dashboard/src/components/`；审计卡片延后到 Phase 7。
+- [ ] 重构 `dashboard/src/context/ProjectContext.tsx`，让它能加载 `meta`、`blueprint`、`scenes`、`storymap`；审计数据接入延后到 Phase 7。
 - [ ] 允许引入更适合新工作区复杂度的状态层组织方式，但禁止保留本地 `simulate*` 流程。
 - [ ] 不迁移 `new_design` 的 mock 数据、伪生成逻辑和本地状态推进逻辑。
 - [ ] `ProjectWorkspacePage.tsx` 不再沿用“Build/Preview + 3 张入口卡片”的旧范式。
@@ -58,11 +58,11 @@
 ## Phase 4：重做 Chat 协议与 Blueprint 流程
 - [ ] 先为 WS/SSE 协议和 Blueprint 阶段流转写失败测试，再实现编排逻辑。
 - [ ] 保留 `/ws/chat` 作为唯一聊天入口。
-- [ ] 将服务端事件协议升级为 `message`、`blueprint_draft`、`confirmation_request`、`progress`、`audit_completed`、`error`。
+- [ ] 将服务端事件协议升级为 `message`、`blueprint_draft`、`confirmation_request`、`progress`、`error`；`audit_completed` 延后到 Phase 7。
 - [ ] 保持客户端请求协议只有 `user_message` 和 `confirmation_response`。
 - [ ] 让后端在事件中显式返回 `pipeline_stage`，前端不再用关键字猜阶段。
 - [ ] 重构 `dashboard/src/components/ChatDrawer.tsx` 或其替代组件，使其支持结构化卡片渲染。
-- [ ] 让前端能渲染 `BlueprintCard`、`ProgressCard`、`AuditReportCard` 和普通文本消息。
+- [ ] 让前端能渲染 `BlueprintCard`、`ProgressCard` 和普通文本消息；`AuditReportCard` 延后到 Phase 7。
 - [ ] 原 `tool_start`、`tool_result` 仅保留为兼容兜底显示。
 - [ ] 在 `src/renpy_mcp/web/chat_ws.py` 中实现最小 Orchestrator。
 - [ ] 让最小 Orchestrator 支持 `idle -> collecting -> reviewing -> generating -> editing`。
@@ -96,17 +96,28 @@
 - [ ] 为“原型生成失败时的安全回退”补测试：失败时要么停在可恢复阶段，要么给出明确错误，不得留下半损坏的主流程状态。
 - [ ] 把 `ChatEngine` 中后续会复用的“工具白名单”和“系统提示生成”抽离为更清晰的可复用接口，但以服务当前原型生成流水线为限，不提前做双 Agent 架构。
 
-## Phase 6：完善质量、审计与扩展能力
+## Phase 6：多章节生成与一致性扩展
+- [ ] 先为“Blueprint -> 多章节 -> 多 Scene -> 多脚本 -> Build/Preview”主链路写失败测试，再实现多章节编排。
+- [ ] 在 Phase 5 的“单章节可读可视原型”基础上，扩展到多章节生成，保证章节索引、章节顺序和章节入口可持久化。
+- [ ] 明确多章节生成的最小交付目标：至少能稳定生成 2-3 个章节，每章包含可读 Scene、可执行脚本和可预览入口。
+- [ ] 为多章节建立稳定的 `chapter_id -> scenes -> file + label` 映射，确保 `meta/index.json`、脚本文件和 API 快照一致。
+- [ ] 让 StoryMap、Workspace 和 Scene 脚本读取能力从单章节快照扩展到多章节视图，不引入新的 mock 数据流。
+- [ ] 扩展 Blueprint/Prototype 编排逻辑，使其能基于项目级约束连续生成多章内容，而不是把每章视为孤立任务。
+- [ ] 落地项目级 + 章节级的生成前约束层，优先覆盖文本、背景图和角色图，确保多章节中的视觉语言、人物形象和对白气质保持一致。
+- [ ] 允许章节级受控偏移，仅在情绪、色温、光照、节奏等范围内变化，不破坏项目级视觉和文风基线。
+- [ ] 将背景、角色和脚本的生成链路从单章节最小资产扩展到多章节复用与增量重生成，保持现有 rollback / staged-replacement 语义不被破坏。
+- [ ] 强化多章节下的 continuity、branching、asset binding 和 script/index 一致性，避免章节扩展后出现剧情断裂、资源丢失或入口失联。
+- [ ] 为多章节 build / preview 补 E2E，覆盖从已确认 Blueprint 到多章节原型生成、构建和预览的主路径。
+
+## Phase 7：审计、质量闭环与后续 Agent 扩展
 - [ ] 先为 `AuditReport` 持久化、读取和前端消费写失败测试，再实现功能。
 - [ ] 在后端实现 `AuditReport` 的持久化与读取接口。
 - [ ] 第一版允许将现有 lint、graph、asset 检查结果汇总成结构化 `AuditReport`。
 - [ ] 让 Dashboard 主页面增加 Audit 标签页。
 - [ ] 让工作区页面和聊天面板消费同一份 `AuditReport`。
 - [ ] 点击 issue 时能跳转或定位到对应 `scene_id`。
-- [ ] 在 Phase 5 的“单章节可读可视原型”基础上，扩展到多章节生成、更完整的角色立绘/CG/音频资源覆盖、增量重生成、失败恢复和质量提升能力。
 - [ ] 将审计流程接入生成流水线，形成“生成 -> 检查 -> 修正 -> 再验证”的可扩展闭环。
 - [ ] 将资源链路从“最小背景资源”扩展到更完整的资产体系：角色立绘、CG、UI 资源、音频与资源一致性检查。
-- [ ] 强化 continuity / branching / asset binding / script quality 的系统性校验，避免多章节扩展后出现剧情断裂、资源丢失或脚本不可运行问题。
 - [ ] 为后续 `CreatorAgent` / `AuditorAgent` 预留不破坏现有协议的接管点。
 - [ ] 双 Agent 真正落地时遵循 `docs/dual-agent-design.md`，但在本阶段仍以渐进接入为原则，不做脱离现有主线的大重写。
 
@@ -117,6 +128,6 @@
 - [ ] 前端构建通过。
 - [ ] 后端应用启动通过。
 - [ ] 新工作区页面能读取真实项目、Blueprint、章节、StoryMap、Scene 脚本。
-- [ ] 聊天面板能渲染真实的 Blueprint、进度消息；审计消息的完整接入允许延后到 Phase 6。
+- [ ] 聊天面板能渲染真实的 Blueprint、进度消息；审计消息的完整接入允许延后到 Phase 7。
 - [ ] Phase 5 完成时，至少有一个项目能从已确认 Blueprint 自动生成单章节原型，满足以下条件：2-4 个场景、中文在 workspace 与 web preview 中正常显示、至少一个真实背景资源已生成并接入脚本、并成功 build / preview。
 - [ ] 旧页面仍可在迁移期作为兜底入口使用。
