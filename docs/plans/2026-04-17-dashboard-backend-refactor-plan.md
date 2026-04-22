@@ -45,9 +45,9 @@
 - [ ] 先补前端组件/页面级测试或最小可验证用例，再迁移对应 UI。
 - [ ] 确认生产前端继续使用 `dashboard/` 作为唯一构建入口。
 - [ ] 以 `new_design/design1_extracted/app` 的工作区布局为目标，重建 `dashboard/src/pages/ProjectWorkspacePage.tsx`。
-- [ ] 将 `BlueprintView`、`ChapterTimeline`、`MainContent`、`SceneView`、`StoryMapView` 的结构迁移到 `dashboard/src/`；审计视图延后到 Phase 7。
-- [ ] 将 `BlueprintCard`、`ProgressCard`、`ResourceCandidateCard` 的卡片体系迁移到 `dashboard/src/components/`；审计卡片延后到 Phase 7。
-- [ ] 重构 `dashboard/src/context/ProjectContext.tsx`，让它能加载 `meta`、`blueprint`、`scenes`、`storymap`；审计数据接入延后到 Phase 7。
+- [ ] 将 `BlueprintView`、`ChapterTimeline`、`MainContent`、`SceneView`、`StoryMapView` 的结构迁移到 `dashboard/src/`；审计视图延后到 Phase 8。
+- [ ] 将 `BlueprintCard`、`ProgressCard`、`ResourceCandidateCard` 的卡片体系迁移到 `dashboard/src/components/`；审计卡片延后到 Phase 8。
+- [ ] 重构 `dashboard/src/context/ProjectContext.tsx`，让它能加载 `meta`、`blueprint`、`scenes`、`storymap`；审计数据接入延后到 Phase 8。
 - [ ] 允许引入更适合新工作区复杂度的状态层组织方式，但禁止保留本地 `simulate*` 流程。
 - [ ] 不迁移 `new_design` 的 mock 数据、伪生成逻辑和本地状态推进逻辑。
 - [ ] `ProjectWorkspacePage.tsx` 不再沿用“Build/Preview + 3 张入口卡片”的旧范式。
@@ -58,11 +58,11 @@
 ## Phase 4：重做 Chat 协议与 Blueprint 流程
 - [ ] 先为 WS/SSE 协议和 Blueprint 阶段流转写失败测试，再实现编排逻辑。
 - [ ] 保留 `/ws/chat` 作为唯一聊天入口。
-- [ ] 将服务端事件协议升级为 `message`、`blueprint_draft`、`confirmation_request`、`progress`、`error`；`audit_completed` 延后到 Phase 7。
+- [ ] 将服务端事件协议升级为 `message`、`blueprint_draft`、`confirmation_request`、`progress`、`error`；`audit_completed` 延后到 Phase 8。
 - [ ] 保持客户端请求协议只有 `user_message` 和 `confirmation_response`。
 - [ ] 让后端在事件中显式返回 `pipeline_stage`，前端不再用关键字猜阶段。
 - [ ] 重构 `dashboard/src/components/ChatDrawer.tsx` 或其替代组件，使其支持结构化卡片渲染。
-- [ ] 让前端能渲染 `BlueprintCard`、`ProgressCard` 和普通文本消息；`AuditReportCard` 延后到 Phase 7。
+- [ ] 让前端能渲染 `BlueprintCard`、`ProgressCard` 和普通文本消息；`AuditReportCard` 延后到 Phase 8。
 - [ ] 原 `tool_start`、`tool_result` 仅保留为兼容兜底显示。
 - [ ] 在 `src/renpy_mcp/web/chat_ws.py` 中实现最小 Orchestrator。
 - [ ] 让最小 Orchestrator 支持 `idle -> collecting -> reviewing -> generating -> editing`。
@@ -109,14 +109,35 @@
 - [ ] 强化多章节下的 continuity、branching、asset binding 和 script/index 一致性，避免章节扩展后出现剧情断裂、资源丢失或入口失联。
 - [ ] 为多章节 build / preview 补 E2E，覆盖从已确认 Blueprint 到多章节原型生成、构建和预览的主路径。
 
-## Phase 7：审计、质量闭环与后续 Agent 扩展
+## Phase 7：分层需求细化与 Blueprint 冻结
+- [ ] 先为 `Project Brief`、`Chapter Outline` 与状态门禁写失败测试，再实现分层需求细化流程。
+- [ ] 新增从聊天粗需求到 `Project Brief Draft` 的结构化沉淀层，不再让“少量聊天轮次”直接等价为可执行 Blueprint。
+- [ ] 新增 `meta/project_brief.json` 持久化，至少覆盖项目 premise、受众/类型、文风/主题、视觉方向、世界规则、核心角色、禁止项。
+- [ ] 让 `Project Brief` 采用逐卡确认机制：每张卡可编辑、可重写、可单独确认，但必须全部确认后才能进入下游正式流程。
+- [ ] 新增 `meta/chapter_outline.json` 持久化，至少覆盖章节名、章节目标、核心冲突、情绪弧线、关键信息揭示、章节终点状态。
+- [ ] 让 `Chapter Outline` 支持逐章编辑、逐章确认、手动新增章节、删除章节和调整章节顺序。
+- [ ] 在项目状态机中新增明确状态：`idea_collecting`、`brief_draft`、`brief_reviewing`、`brief_confirmed`、`chapter_outline_draft`、`chapter_outline_reviewing`、`chapter_outline_confirmed`、`blueprint_ready`。
+- [ ] 未完成 `brief_confirmed` 时，禁止正式完成章节大纲确认。
+- [ ] 未完成 `chapter_outline_confirmed` 时，禁止执行 Blueprint Freeze、scene package 生成和 prototype 生成。
+- [ ] 将 `Blueprint` 调整为冻结产物，而不是聊天直接生成的第一版正式结构；正式 `meta/blueprint.yaml` 应从已确认的 brief + chapter outline 组装得到。
+- [ ] 为 Workspace 增加明确的 `Brief`、`Chapters`、`Blueprint` 三层工作面：前两者负责编辑与确认，后一者负责冻结视图与下游 handoff。
+- [ ] 聊天继续负责粗需求采集、补问和局部重写建议，但不得绕过结构化确认关卡直接进入下游生成。
+- [ ] 为上游编辑导致下游失效的状态传播补测试：brief 修改后 chapter outline/blueprint 必须显式标 stale 或重新进入 review，不允许静默沿用旧冻结结果。
+- [ ] 为“未到 `blueprint_ready` 不允许进入 scene package / prototype 生成”补集成测试和 E2E。
+
+## Phase 8：审计、质量闭环与后续 Agent 扩展
+- [ ] 先为 preview 运行证据采集写失败测试，再实现 `preview inspector / evidence capture` 能力。
+- [ ] 新增面向调试与审计的 preview inspector，允许在 build / preview 成功后自动巡检关键场景，而不是依赖人工截图。
+- [ ] 让 preview inspector 产出结构化 evidence bundle，至少包含截图、`scene_id`、脚本摘要、背景/角色资源绑定、suppressed sprite 信息和关键 warning。
+- [ ] 为 evidence bundle 定义稳定的持久化目录和 schema，建议落在项目 `meta/evidence/<run_id>/` 下，供后续审计与回归直接消费。
+- [ ] 新增读取 evidence bundle 的后端接口或内部服务层，避免审计逻辑直接拼接文件路径和零散日志。
 - [ ] 先为 `AuditReport` 持久化、读取和前端消费写失败测试，再实现功能。
 - [ ] 在后端实现 `AuditReport` 的持久化与读取接口。
 - [ ] 第一版允许将现有 lint、graph、asset 检查结果汇总成结构化 `AuditReport`。
 - [ ] 让 Dashboard 主页面增加 Audit 标签页。
 - [ ] 让工作区页面和聊天面板消费同一份 `AuditReport`。
 - [ ] 点击 issue 时能跳转或定位到对应 `scene_id`。
-- [ ] 将审计流程接入生成流水线，形成“生成 -> 检查 -> 修正 -> 再验证”的可扩展闭环。
+- [ ] 让审计流程直接消费 evidence bundle、脚本快照和项目索引，而不是只依赖文本日志，形成“生成 -> 留证据 -> 检查 -> 修正 -> 再验证”的可扩展闭环。
 - [ ] 将资源链路从“最小背景资源”扩展到更完整的资产体系：角色立绘、CG、UI 资源、音频与资源一致性检查。
 - [ ] 为后续 `CreatorAgent` / `AuditorAgent` 预留不破坏现有协议的接管点。
 - [ ] 双 Agent 真正落地时遵循 `docs/dual-agent-design.md`，但在本阶段仍以渐进接入为原则，不做脱离现有主线的大重写。
@@ -128,6 +149,6 @@
 - [ ] 前端构建通过。
 - [ ] 后端应用启动通过。
 - [ ] 新工作区页面能读取真实项目、Blueprint、章节、StoryMap、Scene 脚本。
-- [ ] 聊天面板能渲染真实的 Blueprint、进度消息；审计消息的完整接入允许延后到 Phase 7。
+- [ ] 聊天面板能渲染真实的 Blueprint、进度消息；审计消息的完整接入允许延后到 Phase 8。
 - [ ] Phase 5 完成时，至少有一个项目能从已确认 Blueprint 自动生成单章节原型，满足以下条件：2-4 个场景、中文在 workspace 与 web preview 中正常显示、至少一个真实背景资源已生成并接入脚本、并成功 build / preview。
 - [ ] 旧页面仍可在迁移期作为兜底入口使用。
