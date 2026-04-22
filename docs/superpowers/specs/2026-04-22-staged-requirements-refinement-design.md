@@ -9,6 +9,7 @@ It covers:
 - chat-driven idea intake
 - structured `Project Brief` drafting and review
 - structured `Chapter Outline` drafting and review
+- stronger character-identity refinement before blueprint freeze
 - mandatory confirmation gates before blueprint freeze
 - chapter-level editing, add/delete, and reordering
 - product-state gating before scene package / prototype generation
@@ -32,6 +33,8 @@ The new goal is to force the product to distinguish:
 
 Only after those layers are explicitly confirmed should the system allow downstream generation.
 
+This refinement must also lock character identity earlier than the current flow, so downstream generation does not invent or drift major character presentation after only minimal chat clarification.
+
 ## Product Requirement
 
 The product must no longer treat “a few rounds of chat” as equivalent to “requirements are ready for generation”.
@@ -52,6 +55,8 @@ Advancement is global:
 
 - all brief cards must be confirmed before chapter outline review can be completed
 - all chapter cards must be confirmed before blueprint freeze can complete
+
+The `Project Brief` gate must be strong enough to define who the main cast are, what they must remain like, and what kinds of character drift are unacceptable before any formal chapter planning is frozen.
 
 ## Design Summary
 
@@ -106,6 +111,8 @@ Suggested cards:
 - Visual Style
 - World Rules
 - Core Cast
+- Character Identity
+- Character Relationship Baselines
 - Constraints / No-Go
 
 Each card supports:
@@ -114,6 +121,17 @@ Each card supports:
 - user edits
 - regenerate / rewrite assistance
 - explicit confirmation
+
+At this stage, character work must go beyond “list the names”.
+
+The draft should capture at least for protagonist and major supporting cast:
+
+- narrative role
+- core motivation
+- personality anchors
+- visual identity anchors
+- relationship baseline
+- hard no-go drift
 
 ### Step 3. Project Brief Review Gate
 
@@ -138,6 +156,9 @@ Each chapter card should include at least:
 - `reveals`
 - `end_state`
 - `mood_or_pacing_bias`
+- `character_focus`
+- `relationship_shift`
+- `character_presentation_notes`
 
 ### Step 5. Chapter Outline Review Gate
 
@@ -241,6 +262,34 @@ Suggested shape:
       "content": "...",
       "confirmed": false
     },
+    "character_identity": {
+      "content": {
+        "characters": [
+          {
+            "character_id": "protagonist",
+            "name": "...",
+            "story_role": "...",
+            "core_motivation": "...",
+            "personality_anchors": ["..."],
+            "visual_identity_anchors": ["..."],
+            "forbidden_drift": ["..."]
+          }
+        ]
+      },
+      "confirmed": false
+    },
+    "relationship_baselines": {
+      "content": {
+        "relationships": [
+          {
+            "pair": ["protagonist", "deuteragonist"],
+            "baseline": "...",
+            "must_preserve": ["..."]
+          }
+        ]
+      },
+      "confirmed": false
+    },
     "constraints": {
       "content": "...",
       "confirmed": false
@@ -271,6 +320,9 @@ Suggested shape:
       "reveals": "...",
       "end_state": "...",
       "mood_or_pacing_bias": "...",
+      "character_focus": ["protagonist", "deuteragonist"],
+      "relationship_shift": "...",
+      "character_presentation_notes": "...",
       "confirmed": false
     }
   ],
@@ -289,6 +341,44 @@ But its source changes:
 - no direct chat-to-blueprint path
 - blueprint is assembled from confirmed upstream layers
 
+The frozen blueprint should carry forward character-shaping outputs from the brief and chapter outline rather than forcing downstream generation to infer them again from raw chat.
+
+## Character Refinement Requirements
+
+Character definition must become a first-class part of staged refinement, not an implicit side effect of later generation.
+
+### Project-Level Character Requirements
+
+Before `brief_confirmed`, the product should have stable draft coverage for:
+
+- protagonist identity
+- major supporting cast identity
+- role in story
+- motivation
+- personality anchors
+- visual identity anchors
+- relationship baseline
+- forbidden drift
+
+This is still lighter than a full production character bible, but it must be strong enough to stabilize:
+
+- blueprint chapter planning
+- downstream text voice
+- later sprite / presentation consistency work
+
+### Chapter-Level Character Requirements
+
+Chapter outline should not redefine characters.
+
+It may only express chapter-bounded character movement such as:
+
+- which characters are in focus
+- what relationship shift occurs in this chapter
+- what emotional pressure changes
+- what presentation emphasis is relevant in this chapter
+
+It must not silently replace project-level identity anchors.
+
 ## Editing Rules
 
 ### Project Brief
@@ -299,6 +389,8 @@ If a confirmed brief card is edited:
 
 - that card returns to unconfirmed
 - downstream chapter outline should be marked stale or sent back to draft-review state if the edit is material
+
+Edits to character identity, relationship baseline, or forbidden drift should be treated as materially invalidating for downstream chapter planning unless explicitly proven otherwise.
 
 ### Chapter Outline
 
@@ -317,6 +409,11 @@ If a confirmed chapter is edited, moved, or regenerated:
 If chapter additions, deletions, or reordering materially affect project structure:
 
 - blueprint freeze must be invalidated until the outline is reconfirmed
+
+If chapter-level character focus, relationship shift, or presentation notes change:
+
+- that chapter returns to unconfirmed
+- blueprint freeze must be invalidated until the affected chapter set is reconfirmed
 
 ## Gating Rules
 
@@ -379,6 +476,14 @@ Chat is responsible for:
 - rewriting individual cards
 - helping the user refine language
 
+Chat should explicitly gather enough character detail to populate the brief draft, including:
+
+- who the protagonist is
+- who the indispensable supporting cast are
+- what each major character wants
+- what must remain recognizable about each major character
+- what relationship baselines must not drift early
+
 Chat is not responsible for:
 
 - silently treating rough answers as executable final requirements
@@ -394,6 +499,8 @@ The exact API shape can be refined in implementation planning, but the design re
 - status endpoints that expose whether a project is blocked by missing confirmations
 
 The backend should enforce the gate conditions, not rely on frontend-only workflow discipline.
+
+The backend should also validate that character-identity cards are present before allowing `brief_confirmed`, rather than treating a sparse name-only cast list as sufficient.
 
 ## Failure and Rollback Semantics
 
@@ -420,12 +527,14 @@ At minimum, implementation should cover:
 2. per-card brief confirmation rules
 3. chapter outline persistence and readback
 4. chapter add/delete/reorder behavior
-5. chapter confirmation gating rules
-6. upstream edit invalidates downstream readiness
-7. blueprint freeze is blocked before all confirmations complete
-8. blueprint freeze succeeds only from confirmed upstream layers
-9. scene package / prototype generation endpoints reject requests before `blueprint_ready`
-10. workspace status endpoints reflect the new refinement states accurately
+5. character identity and relationship baseline persistence
+6. chapter confirmation gating rules
+7. upstream edit invalidates downstream readiness
+8. character-identity edits invalidate downstream chapter / blueprint readiness
+9. blueprint freeze is blocked before all confirmations complete
+10. blueprint freeze succeeds only from confirmed upstream layers
+11. scene package / prototype generation endpoints reject requests before `blueprint_ready`
+12. workspace status endpoints reflect the new refinement states accurately
 
 ## Recommended Rollout
 
