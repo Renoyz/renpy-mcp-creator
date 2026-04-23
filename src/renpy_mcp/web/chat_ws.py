@@ -16,9 +16,12 @@ from pydantic import ValidationError
 from ..blueprint.models import (
     BlueprintCharacter,
     ChapterSummary,
+    IntakePhase,
+    IntakeSlot,
     PipelineStage,
     ProjectBlueprint,
     ProjectStatus,
+    RefinementIntake,
     SceneSummary,
 )
 from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvider
@@ -580,6 +583,76 @@ class BlueprintOrchestrator:
     def _save_history(self) -> None:
         _write_chat_history(self.project_name, self.messages)
 
+    def _project_intake_slot_keys(self) -> list[str]:
+        return [
+            "core_premise",
+            "audience_genre",
+            "tone_themes",
+            "visual_style",
+            "world_rules",
+            "core_cast",
+            "character_identity",
+            "relationship_baselines",
+            "constraints",
+        ]
+
+    def _write_refinement_intake(self, *, latest_user_content: str | None = None) -> None:
+        if self.phase == PipelineStage.REVIEWING and self.draft is not None:
+            characters = [
+                {
+                    "character_id": re.sub(r"[^a-z0-9]+", "_", ch.name.lower()).strip("_") or f"char_{idx + 1}",
+                    "name": ch.name,
+                    "story_role": ch.role,
+                    "core_motivation": "",
+                    "personality_anchors": [ch.personality] if ch.personality else [],
+                    "visual_identity_anchors": [ch.appearance] if ch.appearance else [],
+                    "forbidden_drift": [],
+                }
+                for idx, ch in enumerate(self.draft.characters)
+            ]
+            slots = {
+                "core_premise": IntakeSlot(
+                    value=f"{self.draft.genre} story in {self.draft.worldview}".strip(),
+                    complete=bool(self.draft.genre or self.draft.worldview),
+                ),
+                "audience_genre": IntakeSlot(value=self.draft.genre, complete=bool(self.draft.genre)),
+                "tone_themes": IntakeSlot(value=", ".join(self.draft.themes), complete=bool(self.draft.themes)),
+                "visual_style": IntakeSlot(value=self.draft.art_style, complete=bool(self.draft.art_style)),
+                "world_rules": IntakeSlot(value=self.draft.worldview, complete=bool(self.draft.worldview)),
+                "core_cast": IntakeSlot(
+                    value=", ".join(ch.name for ch in self.draft.characters),
+                    complete=bool(self.draft.characters),
+                ),
+                "character_identity": IntakeSlot(
+                    value={"characters": characters},
+                    complete=bool(characters),
+                ),
+                "relationship_baselines": IntakeSlot(value={"relationships": []}, complete=False),
+                "constraints": IntakeSlot(value="", complete=False),
+            }
+            current_summary = f"{self.draft.genre} in {self.draft.worldview}".strip()
+            phase = IntakePhase.BRIEF_READY
+            brief_draft_ready = True
+        else:
+            latest = (latest_user_content or "").strip()
+            slots = {key: IntakeSlot() for key in self._project_intake_slot_keys()}
+            if latest:
+                slots["core_premise"] = IntakeSlot(value=latest, complete=True)
+            current_summary = latest
+            phase = IntakePhase.PROJECT
+            brief_draft_ready = False
+
+        missing_slots = [key for key, slot in slots.items() if not slot.complete]
+        intake = RefinementIntake(
+            phase=phase,
+            current_summary=current_summary,
+            missing_slots=missing_slots,
+            slots=slots,
+            brief_draft_ready=brief_draft_ready,
+            updated_at=datetime.utcnow().isoformat(),
+        )
+        self.pm.write_refinement_intake(self.project_name, intake)
+
     async def _generate_draft_via_llm(self) -> ProjectBlueprint:
         """Generate a blueprint draft by calling the LLM provider.
 
@@ -716,6 +789,7 @@ Requirements:
             )
             self.messages.append({"role": "assistant", "content": assistant_content})
             self._save_history()
+            self._write_refinement_intake()
             self._save_session()
             return [
                 {
@@ -750,6 +824,7 @@ Requirements:
 
                 self.messages.append({"role": "assistant", "content": assistant_content})
                 self._save_history()
+                self._write_refinement_intake(latest_user_content=content)
                 self._save_session()
                 return [
                     {
@@ -816,6 +891,7 @@ Requirements:
                 "confirmation_id": self.confirmation_id,
             })
             self._save_history()
+            self._write_refinement_intake()
             self._save_session()
 
             return [

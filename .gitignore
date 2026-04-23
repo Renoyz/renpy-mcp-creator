@@ -50,6 +50,8 @@ dashboard/.vite/
 
 # Workspace data
 workspace/
+!dashboard/src/components/workspace/
+!dashboard/src/components/workspace/**
 builds/
 *.log
 

@@ -28,11 +28,13 @@ from ..blueprint.models import (
     ChapterSummary,
     FlowEdge,
     FlowNode,
+    IntakePhase,
     PipelineStage,
     ProjectBlueprint,
     ProjectBrief,
     ProjectMeta,
     ProjectStatus,
+    RefinementIntake,
     RefinementState,
     SceneScript,
 )
@@ -636,6 +638,34 @@ def create_app() -> FastAPI:
             return ""
         return card.content
 
+    def _intake_slot_content(
+        intake: RefinementIntake,
+        key: str,
+        default: str | dict,
+    ) -> str | dict:
+        slot = intake.slots.get(key)
+        if slot is None or slot.value is None:
+            return default
+        return slot.value
+
+    def _materialize_brief_from_intake(intake: RefinementIntake) -> ProjectBrief:
+        cards = {
+            "core_premise": BriefCard(content=_intake_slot_content(intake, "core_premise", "")),
+            "audience_genre": BriefCard(content=_intake_slot_content(intake, "audience_genre", "")),
+            "tone_themes": BriefCard(content=_intake_slot_content(intake, "tone_themes", "")),
+            "visual_style": BriefCard(content=_intake_slot_content(intake, "visual_style", "")),
+            "world_rules": BriefCard(content=_intake_slot_content(intake, "world_rules", "")),
+            "core_cast": BriefCard(content=_intake_slot_content(intake, "core_cast", "")),
+            "character_identity": BriefCard(
+                content=_intake_slot_content(intake, "character_identity", {"characters": []})
+            ),
+            "relationship_baselines": BriefCard(
+                content=_intake_slot_content(intake, "relationship_baselines", {"relationships": []})
+            ),
+            "constraints": BriefCard(content=_intake_slot_content(intake, "constraints", "")),
+        }
+        return ProjectBrief(cards=cards, updated_at=datetime.utcnow().isoformat())
+
     def _assemble_frozen_blueprint(
         project_name: str,
         brief: ProjectBrief,
@@ -686,6 +716,73 @@ def create_app() -> FastAPI:
             characters=characters,
             chapters=chapters,
         )
+
+    @app.get("/api/projects/{project_name}/refinement-intake")
+    async def api_project_refinement_intake_get(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            intake = pm.read_refinement_intake(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if intake is None:
+            raise HTTPException(status_code=404, detail="Refinement intake not found")
+        return intake.model_dump(mode="json")
+
+    @app.post("/api/projects/{project_name}/brief/promote-draft")
+    async def api_project_brief_promote_draft(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            intake = pm.read_refinement_intake(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if intake is None:
+            raise HTTPException(status_code=404, detail="Refinement intake not found")
+        if not intake.brief_draft_ready:
+            raise HTTPException(status_code=409, detail="Project Brief draft is not ready yet")
+
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        brief = _materialize_brief_from_intake(intake)
+        target_state = _compute_refinement_state(brief, outline)
+        target_freeze_status = _freeze_status_after_upstream_change(
+            meta.blueprint_freeze_status if meta else None
+        )
+
+        brief_path = project_dir / "meta" / "project_brief.json"
+        meta_path = project_dir / "meta" / "project.json"
+        old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            pm.write_project_brief(project_name, brief)
+            _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        except Exception as exc:
+            if old_brief_text is not None:
+                brief_path.write_text(old_brief_text, encoding="utf-8")
+            else:
+                brief_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True}
 
     @app.get("/api/projects/{project_name}/brief")
     async def api_project_brief_get(project_name: str):
@@ -1050,6 +1147,10 @@ def create_app() -> FastAPI:
             meta = pm.read_project_meta(project_name)
         except ValueError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            intake = pm.read_refinement_intake(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
         target_state = _compute_refinement_state(brief, outline)
         freeze_status = _compute_blueprint_freeze_status(meta, brief, outline)
 
@@ -1058,6 +1159,7 @@ def create_app() -> FastAPI:
         blueprint_ready = target_state == RefinementState.BLUEPRINT_READY
         freeze_allowed = blueprint_ready
 
+        has_blueprint = False
         if brief is None and outline is None:
             try:
                 has_blueprint = pm.read_blueprint(project_name) is not None
@@ -1069,6 +1171,8 @@ def create_app() -> FastAPI:
                 blueprint_ready and freeze_status == BlueprintFreezeStatus.FROZEN
             )
 
+        intake_required = brief is None and not has_blueprint
+
         return {
             "refinement_state": target_state.value if target_state else None,
             "brief_fully_confirmed": brief_fully_confirmed,
@@ -1077,6 +1181,9 @@ def create_app() -> FastAPI:
             "freeze_allowed": freeze_allowed,
             "blueprint_freeze_status": freeze_status.value if freeze_status else None,
             "generation_allowed": generation_allowed,
+            "intake_phase": intake.phase.value if intake else None,
+            "brief_draft_ready": intake.brief_draft_ready if intake else False,
+            "intake_required": intake_required,
         }
 
     @app.post("/api/projects/{project_name}/scene-packages/generate")

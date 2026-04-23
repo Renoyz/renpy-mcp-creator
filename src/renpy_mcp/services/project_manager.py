@@ -21,9 +21,9 @@ from renpy_mcp.blueprint.models import (
     ProjectMeta,
     ProjectStatus,
     ProjectStyleBible,
+    RefinementIntake,
     ScenePackagesSnapshot,
 )
-from pydantic import ValidationError
 from renpy_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -502,5 +502,42 @@ class ProjectManager:
         path = meta_dir / "chapter_outline.json"
         path.write_text(
             outline.model_dump_json(indent=2, by_alias=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Refinement intake persistence
+    # -----------------------------------------------------------------------
+
+    def read_refinement_intake(self, name: str) -> RefinementIntake | None:
+        """Read meta/refinement_intake.json for a project, if it exists.
+
+        Returns ``None`` when the file is missing. Existing unreadable or
+        invalid files raise ``ValueError`` so callers can distinguish "no
+        intake" from "broken intake".
+        """
+        path = self._project_dir(name) / "meta" / "refinement_intake.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read refinement_intake.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"refinement_intake.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return RefinementIntake.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"refinement_intake.json for project {name!r} has an invalid structure") from exc
+
+    def write_refinement_intake(self, name: str, intake: RefinementIntake) -> None:
+        """Persist meta/refinement_intake.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "refinement_intake.json"
+        path.write_text(
+            intake.model_dump_json(indent=2, by_alias=False),
             encoding="utf-8",
         )

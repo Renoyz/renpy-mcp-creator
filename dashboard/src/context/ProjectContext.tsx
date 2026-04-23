@@ -86,6 +86,23 @@ export interface RefinementStatus {
   freeze_allowed: boolean;
   blueprint_freeze_status: string | null;
   generation_allowed: boolean;
+  intake_phase?: string | null;
+  brief_draft_ready?: boolean;
+  intake_required?: boolean;
+}
+
+export interface IntakeSlot {
+  value: string | Record<string, unknown> | null;
+  complete: boolean;
+}
+
+export interface RefinementIntake {
+  phase: string;
+  current_summary: string;
+  missing_slots: string[];
+  slots: Record<string, IntakeSlot>;
+  brief_draft_ready: boolean;
+  updated_at: string;
 }
 
 export interface DialogueBeat {
@@ -203,9 +220,11 @@ interface ProjectContextValue {
   brief: ProjectBrief | null;
   chapterOutline: ChapterOutline | null;
   refinementStatus: RefinementStatus | null;
+  refinementIntake: RefinementIntake | null;
   briefError: string | null;
   chapterOutlineError: string | null;
   refinementStatusError: string | null;
+  refinementIntakeError: string | null;
   refresh: () => Promise<void>;
   selectProject: (name: string) => Promise<CurrentProject | null>;
   loadProjectData: (name: string) => Promise<void>;
@@ -223,7 +242,9 @@ interface ProjectContextValue {
   saveChapterOutline: (name: string, outline: ChapterOutline) => Promise<void>;
   confirmChapter: (name: string, chapterId: string) => Promise<void>;
   loadRefinementStatus: (name: string) => Promise<void>;
+  loadRefinementIntake: (name: string) => Promise<void>;
   freezeBlueprint: (name: string) => Promise<void>;
+  promoteBriefDraft: (name: string) => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextValue | undefined>(undefined);
@@ -253,9 +274,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [brief, setBrief] = useState<ProjectBrief | null>(null);
   const [chapterOutline, setChapterOutline] = useState<ChapterOutline | null>(null);
   const [refinementStatus, setRefinementStatus] = useState<RefinementStatus | null>(null);
+  const [refinementIntake, setRefinementIntake] = useState<RefinementIntake | null>(null);
   const [briefError, setBriefError] = useState<string | null>(null);
   const [chapterOutlineError, setChapterOutlineError] = useState<string | null>(null);
   const [refinementStatusError, setRefinementStatusError] = useState<string | null>(null);
+  const [refinementIntakeError, setRefinementIntakeError] = useState<string | null>(null);
   const blueprintConfirmationSenderRef = useRef<((approved: boolean) => boolean) | null>(null);
   const blueprintStartSenderRef = useRef<(() => void) | null>(null);
   const pendingStartRef = useRef(false);
@@ -347,16 +370,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setBrief(null);
     setChapterOutline(null);
     setRefinementStatus(null);
+    setRefinementIntake(null);
     setBriefError(null);
     setChapterOutlineError(null);
     setRefinementStatusError(null);
+    setRefinementIntakeError(null);
     if (genTimerRef.current) {
       clearInterval(genTimerRef.current);
       genTimerRef.current = null;
     }
 
     try {
-      const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp] = await Promise.all([
+      const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp, intakeResp] = await Promise.all([
         fetch(`/api/projects/${encodeURIComponent(name)}/meta`),
         fetch(`/api/projects/${encodeURIComponent(name)}/blueprint`),
         fetch(`/api/projects/${encodeURIComponent(name)}/scenes`),
@@ -365,6 +390,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         fetch(`/api/projects/${encodeURIComponent(name)}/brief`),
         fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline`),
         fetch(`/api/projects/${encodeURIComponent(name)}/refinement-status`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/refinement-intake`),
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
@@ -443,6 +469,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       } else {
         const err = await refinementResp.json().catch(() => ({}));
         setRefinementStatusError(err.detail || `Failed to load refinement status: ${refinementResp.status}`);
+      }
+
+      if (intakeResp.ok) {
+        const intakeJson = await intakeResp.json();
+        setRefinementIntake(intakeJson);
+        setRefinementIntakeError(null);
+      } else if (intakeResp.status === 404) {
+        setRefinementIntake(null);
+        setRefinementIntakeError(null);
+      } else {
+        const err = await intakeResp.json().catch(() => ({}));
+        setRefinementIntakeError(err.detail || `Failed to load refinement intake: ${intakeResp.status}`);
       }
 
       let sessionData: any = null;
@@ -677,6 +715,25 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loadRefinementIntake = useCallback(async (name: string) => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/refinement-intake`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setRefinementIntake(data);
+        setRefinementIntakeError(null);
+      } else if (resp.status === 404) {
+        setRefinementIntake(null);
+        setRefinementIntakeError(null);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setRefinementIntakeError(err.detail || `Failed to load refinement intake: ${resp.status}`);
+      }
+    } catch (e) {
+      setRefinementIntakeError(e instanceof Error ? e.message : "Network error");
+    }
+  }, []);
+
   const freezeBlueprint = useCallback(async (name: string) => {
     const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/blueprint/freeze`, {
       method: "POST",
@@ -685,6 +742,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.detail || `Freeze blueprint failed: ${resp.status}`);
+    }
+    await loadProjectData(name);
+  }, [loadProjectData]);
+
+  const promoteBriefDraft = useCallback(async (name: string) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/brief/promote-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Promote brief draft failed: ${resp.status}`);
     }
     await loadProjectData(name);
   }, [loadProjectData]);
@@ -835,9 +904,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         brief,
         chapterOutline,
         refinementStatus,
+        refinementIntake,
         briefError,
         chapterOutlineError,
         refinementStatusError,
+        refinementIntakeError,
         refresh,
         selectProject,
         loadProjectData,
@@ -855,7 +926,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         saveChapterOutline,
         confirmChapter,
         loadRefinementStatus,
+        loadRefinementIntake,
         freezeBlueprint,
+        promoteBriefDraft,
       }}
     >
       {children}
