@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from renpy_mcp.blueprint.models import IntakePhase
 from renpy_mcp.web.fastapi_app import create_app
 
 
@@ -74,6 +75,12 @@ def _drain_events(websocket, expected_count: int) -> list[dict]:
     for _ in range(expected_count):
         events.append(websocket.receive_json())
     return events
+
+
+def _read_refinement_intake(tmp_path: Path, project_name: str) -> dict:
+    path = tmp_path / project_name / "meta" / "refinement_intake.json"
+    assert path.exists(), f"missing refinement intake at {path}"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _make_mock_smart_provider(title: str = "DEFAULT", **overrides) -> object:
@@ -151,6 +158,26 @@ def test_blueprint_start_trigger_returns_first_collecting_message(monkeypatch, c
         assert events[0]["pipeline_stage"] == "collecting"
 
 
+def test_start_blueprint_collection_initializes_project_intake_state(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    project_name = "bp_intake_start"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == IntakePhase.PROJECT.value
+    assert intake["brief_draft_ready"] is False
+    assert isinstance(intake["missing_slots"], list)
+    assert "core_premise" in intake["slots"]
+    assert intake["slots"]["core_premise"]["complete"] is False
+
+
 def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """Sending user_message to a project without blueprint should enter collecting and eventually reviewing."""
     project_name = "bp_collect"
@@ -191,6 +218,57 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         req_event = next(e for e in events if e["type"] == "confirmation_request")
         assert req_event["confirmation_id"]
         assert req_event["pipeline_stage"] == "reviewing"
+
+
+def test_collecting_turn_updates_refinement_intake_summary_and_slots(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    project_name = "bp_intake_collect"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+        websocket.send_json(
+            {
+                "type": "user_message",
+                "content": "Three chapters, sci-fi mystery, Elena searches for her missing brother in a regulated FTL society.",
+                "project_name": project_name,
+            }
+        )
+        _drain_events(websocket, 1)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == IntakePhase.PROJECT.value
+    assert intake["brief_draft_ready"] is False
+    assert intake["current_summary"]
+    assert intake["slots"]["core_premise"]["complete"] is True
+    assert "Elena" in str(intake["slots"]["core_premise"]["value"])
+
+
+def test_reviewing_transition_marks_brief_draft_ready_in_intake(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    project_name = "bp_intake_ready"
+    _create_project(client, tmp_path, project_name)
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+        websocket.send_json({"type": "user_message", "content": "hello", "project_name": project_name})
+        _drain_events(websocket, 1)
+        websocket.send_json({"type": "user_message", "content": "final info", "project_name": project_name})
+        _drain_events(websocket, 3)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == IntakePhase.BRIEF_READY.value
+    assert intake["brief_draft_ready"] is True
+    assert intake["current_summary"]
 
 
 def test_blueprint_confirmation_approve_generates_and_edits(monkeypatch, client: TestClient, tmp_path: Path) -> None:

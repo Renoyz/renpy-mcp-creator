@@ -467,3 +467,33 @@ class ChapterOutline(BaseModel):
 
     chapters: list[ChapterOutlineEntry] = Field(default_factory=list)
     updated_at: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 Round 4A: Agent-led project intake
+# ---------------------------------------------------------------------------
+
+
+class IntakePhase(StrEnum):
+    """Current phase of the agent-led intake flow."""
+
+    PROJECT = "project"
+    BRIEF_READY = "brief_ready"
+
+
+class IntakeSlot(BaseModel):
+    """A single collected slot in the intake state."""
+
+    value: str | dict | None = None
+    complete: bool = False
+
+
+class RefinementIntake(BaseModel):
+    """Project-scoped intake artifact persisted in meta/refinement_intake.json."""
+
+    phase: IntakePhase = IntakePhase.PROJECT
+    current_summary: str = ""
+    missing_slots: list[str] = Field(default_factory=list)
+    slots: dict[str, IntakeSlot] = Field(default_factory=dict)
+    brief_draft_ready: bool = False
+    updated_at: str = ""

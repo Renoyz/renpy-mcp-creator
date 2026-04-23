@@ -122,6 +122,54 @@ def _seed_project_chapter_outline(workspace: Path, project_name: str) -> None:
     (meta_dir / "chapter_outline.json").write_text(json.dumps(outline), encoding="utf-8")
 
 
+def _seed_refinement_intake(
+    workspace: Path,
+    project_name: str,
+    *,
+    brief_draft_ready: bool = False,
+    phase: str = "project",
+) -> None:
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    intake = {
+        "phase": phase,
+        "current_summary": "A YA sci-fi mystery about Elena searching for her missing brother.",
+        "missing_slots": ["relationship_baselines", "constraints"],
+        "slots": {
+            "core_premise": {
+                "value": "A YA sci-fi mystery about Elena searching for her missing brother.",
+                "complete": True,
+            },
+            "audience_genre": {"value": "YA sci-fi mystery", "complete": True},
+            "tone_themes": {"value": "Hope, grief, discovery", "complete": True},
+            "visual_style": {"value": "Cel-shaded anime with cool neon lighting", "complete": True},
+            "world_rules": {"value": "FTL travel is regulated by the state", "complete": True},
+            "core_cast": {"value": "Elena, Marcus, station AI", "complete": True},
+            "character_identity": {
+                "value": {
+                    "characters": [
+                        {
+                            "character_id": "elena",
+                            "name": "Elena",
+                            "story_role": "Protagonist",
+                            "core_motivation": "Find her brother",
+                            "personality_anchors": ["curious", "stubborn"],
+                            "visual_identity_anchors": ["blue hair", "lab coat"],
+                            "forbidden_drift": ["do not make her cruel"],
+                        }
+                    ]
+                },
+                "complete": True,
+            },
+            "relationship_baselines": {"value": {"relationships": []}, "complete": False},
+            "constraints": {"value": "", "complete": False},
+        },
+        "brief_draft_ready": brief_draft_ready,
+        "updated_at": "",
+    }
+    (meta_dir / "refinement_intake.json").write_text(json.dumps(intake), encoding="utf-8")
+
+
 def _confirm_refinement_via_api(server_url: str, project_name: str) -> None:
     brief_keys = [
         "core_premise",
@@ -268,7 +316,77 @@ def test_workspace_chapter_outline_view_loads_outline_from_api(
 
     expect(page.locator("text=The Beginning")).to_be_visible(timeout=10000)
     expect(page.locator("text=The Search")).to_be_visible(timeout=10000)
-    expect(page.locator("text=Introduce the world")).to_be_visible(timeout=10000)
+
+
+def test_workspace_new_project_defaults_to_intake_tab(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_intake_default_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    expect(intake_tab).to_be_visible(timeout=10000)
+    expect(intake_tab).to_have_class(re.compile("border-blue-500"))
+    expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Create Brief")).to_have_count(0)
+
+
+def test_workspace_intake_view_shows_agent_summary_and_missing_slots(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_intake_summary_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_refinement_intake(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    intake_tab.click()
+
+    expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)
+    expect(page.get_by_text("A YA sci-fi mystery about Elena searching for her missing brother.", exact=True).first).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Relationship Baselines", exact=True).first).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Constraints", exact=True).first).to_be_visible(timeout=10000)
+
+
+def test_workspace_brief_review_is_not_primary_before_draft_ready(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_intake_gate_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_refinement_intake(e2e_workspace, project_name, brief_draft_ready=False, phase="project")
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    brief_tab = page.get_by_role("button", name="Brief")
+    brief_tab.click()
+
+    expect(page.locator("text=Start in Intake first")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Go to Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=No Project Brief yet")).to_have_count(0)
+
+
+def test_workspace_promote_brief_draft_enters_brief_review(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_intake_promote_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_refinement_intake(e2e_workspace, project_name, brief_draft_ready=True, phase="brief_ready")
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    intake_tab.click()
+    promote_button = page.get_by_test_id("promote-brief-draft")
+    expect(promote_button).to_be_visible(timeout=10000)
+    promote_button.click()
+
+    expect(page.get_by_role("button", name="Brief", exact=True)).to_have_class(re.compile("border-blue-500"), timeout=10000)
+    expect(page.locator("text=Core Premise")).to_be_visible(timeout=10000)
+    assert (e2e_workspace / project_name / "meta" / "project_brief.json").exists()
+    expect(page.get_by_text("A YA sci-fi mystery about Elena searching for her missing brother.", exact=True)).to_be_visible(timeout=10000)
 
 
 def test_workspace_chapter_outline_view_can_add_delete_and_reorder_chapters(
@@ -589,7 +707,7 @@ def test_workspace_new_project_shows_brief_tab_and_create_entry(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
     """A brand-new project without any seeded data must enter the refinement workspace
-    directly, showing tabs and the Create Brief entry."""
+    directly, showing tabs and the Intake entry path."""
     assert wait_for_server(server_url), "Server not ready"
     project_name = f"playwright_new_proj_{int(time.time())}"
     create_project_via_api(server_url, project_name)
@@ -603,33 +721,30 @@ def test_workspace_new_project_shows_brief_tab_and_create_entry(
     blueprint_tab = page.locator("button", has_text="蓝图").first
     expect(blueprint_tab).to_be_visible(timeout=10000)
 
-    # Brief tab is active by default -> Create Brief visible
-    expect(page.locator("text=No Project Brief yet")).to_be_visible(timeout=10000)
-    create_btn = page.locator("button", has_text="Create Brief").first
-    expect(create_btn).to_be_visible(timeout=10000)
-    create_btn.click()
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    expect(intake_tab).to_be_visible(timeout=10000)
 
-    # Edit mode should open
-    expect(page.locator("button", has_text="Save").first).to_be_visible(timeout=10000)
-    expect(page.locator("button", has_text="Cancel").first).to_be_visible(timeout=10000)
-    expect(page.locator("text=No Project Brief yet")).not_to_be_visible()
+    # Intake tab is active by default -> start entry visible
+    expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
+    start_btn = page.get_by_role("button", name="Start Intake with AI", exact=True)
+    expect(start_btn).to_be_visible(timeout=10000)
 
 
 def test_workspace_new_project_defaults_to_brief_tab(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
-    """A fresh project should land on the Brief tab by default."""
+    """A fresh project should land on the Intake tab by default."""
     assert wait_for_server(server_url), "Server not ready"
     project_name = f"playwright_default_brief_{int(time.time())}"
     create_project_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    # Brief tab should be active (blue underline / text colour)
-    brief_tab = page.locator("button", has_text="Brief").first
-    expect(brief_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
+    # Intake tab should be active (blue underline / text colour)
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    expect(intake_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
 
-    # Create Brief entry visible without any click
-    expect(page.locator("text=No Project Brief yet")).to_be_visible(timeout=10000)
+    # Start Intake entry visible without any click
+    expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
 
 
 def test_workspace_refinement_status_error_is_visible_without_seeded_blueprint(

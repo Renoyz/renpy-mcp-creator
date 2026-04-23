@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from renpy_mcp.blueprint.models import RefinementIntake
 
 from renpy_mcp.web.fastapi_app import create_app
 
@@ -115,6 +116,59 @@ def _make_valid_outline() -> dict:
     }
 
 
+def _make_valid_intake() -> dict:
+    """Return a project-level refinement intake snapshot."""
+    return {
+        "phase": "project",
+        "current_summary": "A YA sci-fi mystery about a missing brother and a regulated FTL society.",
+        "missing_slots": ["relationship_baselines", "constraints"],
+        "slots": {
+            "core_premise": {
+                "value": "A YA sci-fi mystery about a missing brother.",
+                "complete": True,
+            },
+            "audience_genre": {
+                "value": "YA sci-fi mystery",
+                "complete": True,
+            },
+            "tone_themes": {
+                "value": "Hope, grief, discovery",
+                "complete": True,
+            },
+            "visual_style": {
+                "value": "Cel-shaded anime with cool neon lighting",
+                "complete": True,
+            },
+            "world_rules": {
+                "value": "Interstellar travel exists but is tightly regulated",
+                "complete": True,
+            },
+            "core_cast": {
+                "value": "Elena, Marcus, station AI",
+                "complete": True,
+            },
+            "character_identity": {
+                "value": {
+                    "characters": [
+                        {
+                            "character_id": "elena",
+                            "name": "Elena",
+                            "story_role": "Protagonist",
+                            "core_motivation": "Find her brother",
+                            "personality_anchors": ["curious", "stubborn"],
+                            "visual_identity_anchors": ["blue hair", "lab coat"],
+                            "forbidden_drift": ["do not make her cruel"],
+                        }
+                    ]
+                },
+                "complete": True,
+            },
+        },
+        "brief_draft_ready": False,
+        "updated_at": "2026-04-23T00:00:00Z",
+    }
+
+
 def _confirm_all_brief_cards(client: TestClient, project_name: str, brief: dict) -> None:
     for key in brief["cards"]:
         response = client.post(
@@ -204,6 +258,147 @@ class TestChapterOutlinePersistence:
         r = client.get("/api/projects/outline_bad/chapter-outline")
         assert r.status_code == 500
         assert "invalid" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# B2. Refinement intake persistence
+# ---------------------------------------------------------------------------
+
+
+class TestRefinementIntakePersistence:
+    def test_refinement_intake_roundtrip_uses_structured_model(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "intake_rt")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        payload = _make_valid_intake()
+        pm.write_refinement_intake("intake_rt", RefinementIntake.model_validate(payload))
+
+        intake = pm.read_refinement_intake("intake_rt")
+        assert intake is not None
+        assert intake.phase == "project"
+        assert intake.current_summary.startswith("A YA sci-fi mystery")
+        assert intake.slots["core_premise"].complete is True
+        assert intake.slots["core_premise"].value == "A YA sci-fi mystery about a missing brother."
+
+    def test_get_refinement_intake_returns_404_when_missing(self, client: TestClient, tmp_path: Path):
+        _create_project(client, tmp_path, "intake_missing")
+        r = client.get("/api/projects/intake_missing/refinement-intake")
+        assert r.status_code == 404
+        assert "intake" in r.json()["detail"].lower()
+
+    def test_invalid_refinement_intake_file_raises_value_error(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "intake_bad")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        intake_path = tmp_path / "intake_bad" / "meta" / "refinement_intake.json"
+        intake_path.write_text("not json", encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            pm.read_refinement_intake("intake_bad")
+
+
+# ---------------------------------------------------------------------------
+# B3. Refinement intake API and brief promotion
+# ---------------------------------------------------------------------------
+
+
+class TestRefinementIntakeApi:
+    def test_refinement_intake_status_returns_structured_project_intake(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "intake_status")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+        pm.write_refinement_intake("intake_status", RefinementIntake.model_validate(_make_valid_intake()))
+
+        r = client.get("/api/projects/intake_status/refinement-intake")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["phase"] == "project"
+        assert data["current_summary"].startswith("A YA sci-fi mystery")
+        assert data["slots"]["core_premise"]["complete"] is True
+
+    def test_promote_brief_draft_materializes_project_brief(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "promote_ok")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+        payload = _make_valid_intake()
+        payload["brief_draft_ready"] = True
+        payload["phase"] = "brief_ready"
+        pm.write_refinement_intake("promote_ok", RefinementIntake.model_validate(payload))
+
+        r = client.post("/api/projects/promote_ok/brief/promote-draft")
+        assert r.status_code == 200, r.text
+
+        r = client.get("/api/projects/promote_ok/brief")
+        assert r.status_code == 200, r.text
+        brief = r.json()
+        assert brief["cards"]["core_premise"]["content"] == payload["slots"]["core_premise"]["value"]
+        assert brief["cards"]["audience_genre"]["content"] == payload["slots"]["audience_genre"]["value"]
+        assert brief["cards"]["character_identity"]["content"]["characters"][0]["name"] == "Elena"
+        assert brief["cards"]["core_premise"]["confirmed"] is False
+
+        r = client.get("/api/projects/promote_ok/refinement-status")
+        data = r.json()
+        assert data["refinement_state"] == "brief_reviewing"
+        assert data["intake_phase"] == "brief_ready"
+        assert data["brief_draft_ready"] is True
+        assert data["intake_required"] is False
+
+    def test_promote_brief_draft_requires_brief_draft_ready(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "promote_blocked")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+        pm.write_refinement_intake(
+            "promote_blocked",
+            RefinementIntake.model_validate(_make_valid_intake()),
+        )
+
+        r = client.post("/api/projects/promote_blocked/brief/promote-draft")
+        assert r.status_code == 409, r.text
+        assert "draft" in r.json()["detail"].lower()
+
+    def test_refinement_status_for_new_project_exposes_intake_entry_state(self, client: TestClient, tmp_path: Path):
+        _create_project(client, tmp_path, "intake_entry")
+
+        r = client.get("/api/projects/intake_entry/refinement-status")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["refinement_state"] is None
+        assert data["intake_phase"] is None
+        assert data["brief_draft_ready"] is False
+        assert data["intake_required"] is True
+        assert data["generation_allowed"] is False
 
 
 # ---------------------------------------------------------------------------

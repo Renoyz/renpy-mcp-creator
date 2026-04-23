@@ -10,6 +10,7 @@ import { WorkspaceOnboardingView } from "../components/workspace/WorkspaceOnboar
 import { BriefWorkspaceView } from "../components/workspace/BriefWorkspaceView";
 import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutlineWorkspaceView";
 import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
+import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
 import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
 
 type Status = "idle" | "running" | "success" | "failed";
@@ -32,9 +33,11 @@ export function ProjectWorkspacePage() {
     brief,
     chapterOutline,
     refinementStatus,
+    refinementIntake,
     briefError,
     chapterOutlineError,
     refinementStatusError,
+    refinementIntakeError,
     selectProject,
     loadProjectData,
     selectScene,
@@ -44,12 +47,13 @@ export function ProjectWorkspacePage() {
     saveChapterOutline,
     confirmChapter,
     freezeBlueprint,
+    promoteBriefDraft,
   } = useProject();
 
   const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   const snapshotLoadTokenRef = useRef(0);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("brief");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("intake");
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
@@ -118,8 +122,17 @@ export function ProjectWorkspacePage() {
     setPreviewUrl(null);
     setPreviewAvailable(false);
     setPipelineStage("idle");
-    setActiveTab("brief");
+    setActiveTab("intake");
   }, [name]);
+
+  useEffect(() => {
+    if (snapshotLoading || !activeProjectName) return;
+    if (!brief) {
+      setActiveTab("intake");
+      return;
+    }
+    setActiveTab("brief");
+  }, [snapshotLoading, activeProjectName, brief]);
 
   // Load unified pipeline status on mount / project change
   useEffect(() => {
@@ -265,6 +278,12 @@ export function ProjectWorkspacePage() {
   const handleFreezeBlueprint = async () => {
     if (!activeProjectName) return;
     await freezeBlueprint(activeProjectName);
+  };
+
+  const handlePromoteBriefDraft = async () => {
+    if (!activeProjectName) return;
+    await promoteBriefDraft(activeProjectName);
+    setActiveTab("brief");
   };
 
   if (!name) {
@@ -432,14 +451,45 @@ export function ProjectWorkspacePage() {
             onBackToOverview={() => setActiveTab("blueprint")}
           />
           <div className="flex-1 overflow-hidden">
-            {activeTab === "brief" && (
-              <BriefWorkspaceView
-                brief={brief}
+            {activeTab === "intake" && (
+              <IntakeWorkspaceView
+                intake={refinementIntake}
+                error={refinementIntakeError}
                 projectName={activeProjectName}
-                onSave={saveBrief}
-                onConfirmCard={confirmCard}
-                error={briefError}
+                onPromoteBriefDraft={handlePromoteBriefDraft}
+                onStartAI={() => {
+                  startBlueprintCollection();
+                  window.dispatchEvent(new CustomEvent("open-chat-drawer"));
+                }}
               />
+            )}
+            {activeTab === "brief" && (
+              !brief && refinementStatus?.intake_required ? (
+                <div className="h-full overflow-auto p-6">
+                  <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50 p-6">
+                    <h2 className="text-base font-semibold text-blue-900">Start in Intake first</h2>
+                    <p className="mt-2 text-sm text-blue-800">
+                      The agent needs to collect project-level inputs and prepare a Project Brief draft before full
+                      Brief review starts.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("intake")}
+                      className="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Go to Intake
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <BriefWorkspaceView
+                  brief={brief}
+                  projectName={activeProjectName}
+                  onSave={saveBrief}
+                  onConfirmCard={confirmCard}
+                  error={briefError}
+                />
+              )
             )}
             {activeTab === "outline" && (
               <ChapterOutlineWorkspaceView
