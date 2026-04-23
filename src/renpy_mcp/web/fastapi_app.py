@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -20,17 +21,28 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from ..config import RenPyConfig, _current_project_path, get_settings, resolve_project_dir
 from ..blueprint.models import (
+    BlueprintCharacter,
+    BlueprintFreezeStatus,
+    BriefCard,
+    ChapterOutline,
+    ChapterSummary,
     FlowEdge,
     FlowNode,
+    PipelineStage,
     ProjectBlueprint,
+    ProjectBrief,
     ProjectMeta,
+    ProjectStatus,
+    RefinementState,
     SceneScript,
 )
 from ..models import BuildRequest, BuildResult
 from ..services.build_manager import BuildManager
 from ..services.preview_manager import PreviewManager
 from ..services.project_manager import ProjectManager
+from ..services.prototype_generation_service import PrototypeGenerationService
 from .server import _parse_script_blocks
+from .chat_ws import _get_provider
 
 STATIC_DIR = Path(__file__).parent / "static"
 DASHBOARD_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
@@ -116,6 +128,34 @@ def _resolve_current_project_name(request: Request, body: dict | None = None) ->
         )
 
     return session_name
+
+
+def _sanitize_sprite_plan_for_api(sprite_plan: list[Any] | None) -> list[dict]:
+    """Strip internal fields from sprite_plan items before API exposure.
+
+    Ensures that staging / check paths (e.g. ``sprite_check_path``) never leak
+    through the ``/scenes`` endpoint regardless of whether the data originated
+    from scene_packages, prototype index enrichment, index-only scenes, or the
+    legacy fallback branch.
+    """
+    if not sprite_plan:
+        return []
+    result: list[dict] = []
+    for item in sprite_plan:
+        if isinstance(item, dict):
+            cleaned = dict(item)
+            cleaned.pop("sprite_check_path", None)
+            result.append(cleaned)
+        elif hasattr(item, "model_dump"):
+            result.append(item.model_dump(mode="json", exclude={"sprite_check_path"}))
+        else:
+            try:
+                cleaned = dict(item)  # type: ignore[call-overload]
+                cleaned.pop("sprite_check_path", None)
+                result.append(cleaned)
+            except Exception:
+                continue
+    return result
 
 
 def _previewable_output_path(path: Path | None) -> Path | None:
@@ -409,8 +449,720 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=f"Invalid blueprint: {exc}")
         settings = get_settings()
         pm = ProjectManager(settings)
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if brief is not None or outline is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Manual blueprint updates are blocked for refinement-managed projects. "
+                    "Use /api/projects/{name}/blueprint/freeze after confirming Project Brief "
+                    "and Chapter Outline."
+                ),
+            )
         pm.write_blueprint(project_name, blueprint)
         return {"success": True}
+
+    # -----------------------------------------------------------------------
+    # Phase 7 Round 1: Requirements refinement endpoints
+    # -----------------------------------------------------------------------
+
+    def _check_generation_gate(pm: ProjectManager, project_name: str) -> None:
+        """Raise HTTPException(403) if downstream generation is not allowed.
+
+        Legacy projects without project_brief.json / chapter_outline.json fall
+        back to checking for an existing blueprint.  New-flow projects must
+        reach ``blueprint_ready``.
+        """
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        # Legacy-compatible path: no brief/outline means the project predates
+        # the refinement flow.  Allow generation if a blueprint exists.
+        if brief is None and outline is None:
+            try:
+                blueprint = pm.read_blueprint(project_name)
+            except ValueError as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            if blueprint is not None:
+                return
+            raise HTTPException(
+                status_code=403,
+                detail="Project has no blueprint. Complete requirements refinement or create a blueprint first.",
+            )
+
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        target_state = _compute_refinement_state(brief, outline)
+        freeze_status = _compute_blueprint_freeze_status(meta, brief, outline)
+        if target_state != RefinementState.BLUEPRINT_READY:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Generation blocked: refinement state is '{target_state.value if target_state else 'none'}'. Reach 'blueprint_ready' before generating scenes or prototypes.",
+            )
+        if freeze_status != BlueprintFreezeStatus.FROZEN:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Generation blocked: blueprint freeze status is '{freeze_status.value if freeze_status else 'none'}'. Freeze the blueprint before generating scenes or prototypes.",
+            )
+
+    def _is_brief_fully_confirmed(brief: ProjectBrief) -> bool:
+        if not brief.cards:
+            return False
+        for card_key, card in brief.cards.items():
+            if not card.confirmed:
+                return False
+            if card_key == "character_identity":
+                if not _is_character_identity_card_valid(card):
+                    return False
+        return True
+
+    def _is_character_identity_card_valid(card: BriefCard) -> bool:
+        """Reject name-only character identity cards."""
+        if not isinstance(card.content, dict):
+            return False
+        characters = card.content.get("characters", [])
+        if not characters:
+            return False
+        for entry in characters:
+            # Must have at least one substantive anchor beyond name/character_id
+            has_substance = bool(
+                entry.get("story_role", "").strip()
+                or entry.get("core_motivation", "").strip()
+                or entry.get("personality_anchors", [])
+                or entry.get("visual_identity_anchors", [])
+                or entry.get("forbidden_drift", [])
+            )
+            if not has_substance:
+                return False
+        return True
+
+    def _is_outline_fully_confirmed(outline: ChapterOutline) -> bool:
+        if not outline.chapters:
+            return False
+        return all(ch.confirmed for ch in outline.chapters)
+
+    def _compute_refinement_state(
+        brief: ProjectBrief | None,
+        outline: ChapterOutline | None,
+    ) -> RefinementState | None:
+        """Compute the canonical refinement state from brief/outline confirmations.
+        This is a pure function: it reads nothing and writes nothing.
+        """
+        brief_fully_confirmed = _is_brief_fully_confirmed(brief) if brief else False
+        outline_fully_confirmed = _is_outline_fully_confirmed(outline) if outline else False
+
+        if brief is None and outline is None:
+            return None
+        elif brief is not None and not brief_fully_confirmed:
+            return RefinementState.BRIEF_REVIEWING
+        elif brief is not None and brief_fully_confirmed:
+            if outline is None or not outline.chapters:
+                return RefinementState.BRIEF_CONFIRMED
+            elif not outline_fully_confirmed:
+                return RefinementState.CHAPTER_OUTLINE_REVIEWING
+            else:
+                return RefinementState.BLUEPRINT_READY
+        else:
+            # outline exists but no brief (edge case)
+            return RefinementState.IDEA_COLLECTING
+
+    def _compute_blueprint_freeze_status(
+        meta: ProjectMeta | None,
+        brief: ProjectBrief | None,
+        outline: ChapterOutline | None,
+    ) -> BlueprintFreezeStatus | None:
+        """Compute the current freeze status without mutating disk."""
+        if brief is None and outline is None:
+            return meta.blueprint_freeze_status if meta else None
+        if meta and meta.blueprint_freeze_status in {
+            BlueprintFreezeStatus.FROZEN,
+            BlueprintFreezeStatus.STALE,
+        }:
+            return meta.blueprint_freeze_status
+        return BlueprintFreezeStatus.NOT_FROZEN
+
+    def _persist_refinement_metadata(
+        pm: ProjectManager,
+        project_name: str,
+        target_state: RefinementState | None,
+        target_freeze_status: BlueprintFreezeStatus | None,
+    ) -> None:
+        """Persist refinement and freeze status to meta/project.json if changed."""
+        meta = pm.read_project_meta(project_name)
+        current_state = meta.refinement_state if meta else None
+        current_freeze_status = meta.blueprint_freeze_status if meta else None
+        if target_state == current_state and target_freeze_status == current_freeze_status:
+            return
+        if meta is None:
+            meta = ProjectMeta(
+                name=project_name,
+                path=Path("."),
+                status=ProjectStatus.DRAFT,
+                pipeline_stage=PipelineStage.IDLE,
+            )
+        meta = meta.model_copy(
+            update={
+                "refinement_state": target_state,
+                "blueprint_freeze_status": target_freeze_status,
+            }
+        )
+        pm.write_project_meta(project_name, meta)
+
+    def _freeze_status_after_upstream_change(
+        current_status: BlueprintFreezeStatus | None,
+    ) -> BlueprintFreezeStatus:
+        if current_status in {BlueprintFreezeStatus.FROZEN, BlueprintFreezeStatus.STALE}:
+            return BlueprintFreezeStatus.STALE
+        return BlueprintFreezeStatus.NOT_FROZEN
+
+    def _brief_card_text(brief: ProjectBrief, key: str) -> str:
+        card = brief.cards.get(key)
+        if card is None or not isinstance(card.content, str):
+            return ""
+        return card.content
+
+    def _assemble_frozen_blueprint(
+        project_name: str,
+        brief: ProjectBrief,
+        outline: ChapterOutline,
+    ) -> ProjectBlueprint:
+        """Assemble the authoritative frozen blueprint from confirmed upstream data."""
+        if not _is_brief_fully_confirmed(brief) or not _is_outline_fully_confirmed(outline):
+            raise ValueError("Cannot freeze blueprint before brief and outline are fully confirmed")
+
+        char_card = brief.cards.get("character_identity")
+        char_entries = []
+        if char_card and isinstance(char_card.content, dict):
+            char_entries = char_card.content.get("characters", [])
+
+        characters = [
+            BlueprintCharacter(
+                name=entry.get("name", ""),
+                role=entry.get("story_role", ""),
+                personality=", ".join(entry.get("personality_anchors", [])),
+                appearance=", ".join(entry.get("visual_identity_anchors", [])),
+                variants=None,
+            )
+            for entry in char_entries
+        ]
+
+        chapters = [
+            ChapterSummary(
+                id=ch.chapter_id,
+                name=ch.chapter_name,
+                order=ch.order,
+                scenes=[],
+            )
+            for ch in sorted(outline.chapters, key=lambda c: c.order)
+        ]
+
+        tone_themes = _brief_card_text(brief, "tone_themes")
+        themes = [part.strip() for part in re.split(r"[,\n]", tone_themes) if part.strip()]
+
+        return ProjectBlueprint(
+            title=project_name,
+            genre=_brief_card_text(brief, "audience_genre") or "Unknown",
+            worldview=_brief_card_text(brief, "world_rules") or "Unknown",
+            themes=themes,
+            target_audience=_brief_card_text(brief, "audience_genre"),
+            estimated_play_time="",
+            art_style=_brief_card_text(brief, "visual_style"),
+            audio_style="",
+            characters=characters,
+            chapters=chapters,
+        )
+
+    @app.get("/api/projects/{project_name}/brief")
+    async def api_project_brief_get(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Project brief not found")
+        return brief.model_dump(mode="json")
+
+    @app.put("/api/projects/{project_name}/brief")
+    async def api_project_brief_put(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid brief: malformed JSON ({exc})")
+        try:
+            brief = ProjectBrief.model_validate(body)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid brief: {exc}")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        # Normalize: PUT is an edit interface, never a confirm interface
+        for card in brief.cards.values():
+            card.confirmed = False
+
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        target_state = _compute_refinement_state(brief, outline)
+        target_freeze_status = _freeze_status_after_upstream_change(
+            meta.blueprint_freeze_status if meta else None
+        )
+
+        # Backup old files for rollback
+        brief_path = project_dir / "meta" / "project_brief.json"
+        meta_path = project_dir / "meta" / "project.json"
+        old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            pm.write_project_brief(project_name, brief)
+            _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        except Exception as exc:
+            if old_brief_text is not None:
+                brief_path.write_text(old_brief_text, encoding="utf-8")
+            else:
+                brief_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True}
+
+    @app.post("/api/projects/{project_name}/brief/confirm-card")
+    async def api_project_brief_confirm_card(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid request: malformed JSON ({exc})")
+        card_key = body.get("card_key", "").strip()
+        if not card_key:
+            raise HTTPException(status_code=400, detail="card_key is required")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if brief is None:
+            raise HTTPException(status_code=404, detail="Project brief not found")
+        if card_key not in brief.cards:
+            raise HTTPException(status_code=400, detail=f"Card '{card_key}' not found in brief")
+
+        # Character identity gate: reject empty shells
+        if card_key == "character_identity":
+            if not _is_character_identity_card_valid(brief.cards[card_key]):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Character identity card is incomplete. Each character needs at least story_role, core_motivation, personality_anchors, visual_identity_anchors, or forbidden_drift.",
+                )
+
+        brief.cards[card_key].confirmed = True
+
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        target_state = _compute_refinement_state(brief, outline)
+        target_freeze_status = _freeze_status_after_upstream_change(
+            meta.blueprint_freeze_status if meta else None
+        )
+
+        # Backup old files for rollback
+        brief_path = project_dir / "meta" / "project_brief.json"
+        meta_path = project_dir / "meta" / "project.json"
+        old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            pm.write_project_brief(project_name, brief)
+            _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        except Exception as exc:
+            if old_brief_text is not None:
+                brief_path.write_text(old_brief_text, encoding="utf-8")
+            else:
+                brief_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True, "card_key": card_key, "confirmed": True}
+
+    @app.get("/api/projects/{project_name}/chapter-outline")
+    async def api_project_chapter_outline_get(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if outline is None:
+            raise HTTPException(status_code=404, detail="Chapter outline not found")
+        return outline.model_dump(mode="json")
+
+    @app.put("/api/projects/{project_name}/chapter-outline")
+    async def api_project_chapter_outline_put(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid outline: malformed JSON ({exc})")
+        try:
+            outline = ChapterOutline.model_validate(body)
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid outline: {exc}")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        # Normalize: PUT is an edit interface, never a confirm interface
+        for ch in outline.chapters:
+            ch.confirmed = False
+
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        target_state = _compute_refinement_state(brief, outline)
+        target_freeze_status = _freeze_status_after_upstream_change(
+            meta.blueprint_freeze_status if meta else None
+        )
+
+        # Backup old files for rollback
+        outline_path = project_dir / "meta" / "chapter_outline.json"
+        meta_path = project_dir / "meta" / "project.json"
+        old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            pm.write_chapter_outline(project_name, outline)
+            _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        except Exception as exc:
+            if old_outline_text is not None:
+                outline_path.write_text(old_outline_text, encoding="utf-8")
+            else:
+                outline_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True}
+
+    @app.post("/api/projects/{project_name}/chapter-outline/confirm-chapter")
+    async def api_project_chapter_outline_confirm_chapter(request: Request, project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid request: malformed JSON ({exc})")
+        chapter_id = body.get("chapter_id", "").strip()
+        if not chapter_id:
+            raise HTTPException(status_code=400, detail="chapter_id is required")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if outline is None:
+            raise HTTPException(status_code=404, detail="Chapter outline not found")
+
+        # Hard gate: brief must be fully confirmed before any chapter can be confirmed
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if brief is None or not _is_brief_fully_confirmed(brief):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot confirm chapter outline before all brief cards are confirmed.",
+            )
+
+        for ch in outline.chapters:
+            if ch.chapter_id == chapter_id:
+                ch.confirmed = True
+
+                target_state = _compute_refinement_state(brief, outline)
+                try:
+                    meta = pm.read_project_meta(project_name)
+                except ValueError as exc:
+                    raise HTTPException(status_code=500, detail=str(exc))
+                target_freeze_status = _freeze_status_after_upstream_change(
+                    meta.blueprint_freeze_status if meta else None
+                )
+
+                # Backup old files for rollback
+                outline_path = project_dir / "meta" / "chapter_outline.json"
+                meta_path = project_dir / "meta" / "project.json"
+                old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
+                old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+                try:
+                    pm.write_chapter_outline(project_name, outline)
+                    _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+                except Exception as exc:
+                    if old_outline_text is not None:
+                        outline_path.write_text(old_outline_text, encoding="utf-8")
+                    else:
+                        outline_path.unlink(missing_ok=True)
+                    if old_meta_text is not None:
+                        meta_path.write_text(old_meta_text, encoding="utf-8")
+                    else:
+                        meta_path.unlink(missing_ok=True)
+                    raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+                return {"success": True, "chapter_id": chapter_id, "confirmed": True}
+
+        raise HTTPException(status_code=400, detail=f"Chapter '{chapter_id}' not found")
+
+    @app.post("/api/projects/{project_name}/blueprint/freeze")
+    async def api_project_blueprint_freeze(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        target_state = _compute_refinement_state(brief, outline)
+        if brief is None or outline is None or target_state != RefinementState.BLUEPRINT_READY:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot freeze blueprint before all Project Brief cards and Chapter Outline chapters are confirmed.",
+            )
+
+        blueprint = _assemble_frozen_blueprint(project_name, brief, outline)
+        blueprint_path = project_dir / "meta" / "blueprint.yaml"
+        backup_path = project_dir / "meta" / "blueprint.previous.yaml"
+        meta_path = project_dir / "meta" / "project.json"
+        old_blueprint_text = blueprint_path.read_text(encoding="utf-8") if blueprint_path.exists() else None
+        old_backup_text = backup_path.read_text(encoding="utf-8") if backup_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            if old_blueprint_text is not None:
+                backup_path.write_text(old_blueprint_text, encoding="utf-8")
+            pm.write_blueprint(project_name, blueprint)
+            _persist_refinement_metadata(
+                pm,
+                project_name,
+                RefinementState.BLUEPRINT_READY,
+                BlueprintFreezeStatus.FROZEN,
+            )
+        except Exception as exc:
+            if old_blueprint_text is not None:
+                blueprint_path.write_text(old_blueprint_text, encoding="utf-8")
+            else:
+                blueprint_path.unlink(missing_ok=True)
+            if old_backup_text is not None:
+                backup_path.write_text(old_backup_text, encoding="utf-8")
+            else:
+                backup_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True, "blueprint_freeze_status": "frozen"}
+
+    @app.get("/api/projects/{project_name}/refinement-status")
+    async def api_project_refinement_status(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        target_state = _compute_refinement_state(brief, outline)
+        freeze_status = _compute_blueprint_freeze_status(meta, brief, outline)
+
+        brief_fully_confirmed = _is_brief_fully_confirmed(brief) if brief else False
+        outline_fully_confirmed = _is_outline_fully_confirmed(outline) if outline else False
+        blueprint_ready = target_state == RefinementState.BLUEPRINT_READY
+        freeze_allowed = blueprint_ready
+
+        if brief is None and outline is None:
+            try:
+                has_blueprint = pm.read_blueprint(project_name) is not None
+            except ValueError as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+            generation_allowed = has_blueprint
+        else:
+            generation_allowed = (
+                blueprint_ready and freeze_status == BlueprintFreezeStatus.FROZEN
+            )
+
+        return {
+            "refinement_state": target_state.value if target_state else None,
+            "brief_fully_confirmed": brief_fully_confirmed,
+            "outline_fully_confirmed": outline_fully_confirmed,
+            "blueprint_ready": blueprint_ready,
+            "freeze_allowed": freeze_allowed,
+            "blueprint_freeze_status": freeze_status.value if freeze_status else None,
+            "generation_allowed": generation_allowed,
+        }
+
+    @app.post("/api/projects/{project_name}/scene-packages/generate")
+    async def api_generate_scene_packages(project_name: str):
+        """Generate multi-chapter scene packages from the project blueprint.
+
+        This is a dedicated Phase 6 entry point. It reads the current blueprint,
+        generates structured scenes for every chapter (each with its own
+        generation contract), and persists the result to
+        ``meta/scene_packages.json``.  No build or preview is performed.
+        """
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        _check_generation_gate(pm, project_name)
+
+        try:
+            blueprint = pm.read_blueprint(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if blueprint is None:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+
+        provider = _get_provider()
+        service = PrototypeGenerationService(pm=pm, provider=provider)
+
+        try:
+            packages = await service.generate_all_chapter_scenes(project_name, blueprint)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
+        return {
+            "success": True,
+            "chapters": [
+                {
+                    "chapter_id": ch_id,
+                    "scene_count": len(scenes),
+                }
+                for ch_id, scenes in packages.items()
+            ],
+        }
+
+    @app.post("/api/projects/{project_name}/prototype/multi-chapter/generate")
+    async def api_generate_multi_chapter_scripts(project_name: str):
+        """Generate multi-chapter prototype scripts from scene_packages.
+
+        This is the Phase 6 script generation entry point.  It reads the
+        persisted ``meta/scene_packages.json`` and writes one ``.rpy`` per
+        chapter, chains them with ``jump`` labels, updates
+        ``meta/index.json``, and wires ``game/script.rpy`` to the first
+        chapter.  No asset generation, build, or preview is performed.
+        """
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        _check_generation_gate(pm, project_name)
+
+        try:
+            blueprint = pm.read_blueprint(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if blueprint is None:
+            raise HTTPException(status_code=404, detail="Blueprint not found")
+
+        # Scene packages must exist first
+        scene_packages = pm.read_scene_packages(project_name)
+        if scene_packages is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Scene packages not found. Run /scene-packages/generate first.",
+            )
+
+        service = PrototypeGenerationService(pm=pm, provider=None)
+
+        try:
+            result = service.generate_multi_chapter_scripts(project_name, blueprint)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
+        return {"success": True, **result}
 
     @app.get("/api/projects/{project_name}/scenes")
     async def api_project_scenes(project_name: str):
@@ -420,7 +1172,129 @@ def create_app() -> FastAPI:
         settings = get_settings()
         pm = ProjectManager(settings)
 
-        # Prefer prototype scenes from index when available
+        # Phase 6: Merge multi-chapter scene packages with richer prototype index
+        try:
+            scene_packages = pm.read_scene_packages(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if scene_packages is not None:
+            # Build base chapters from scene_packages
+            chapters: list[dict] = []
+            for ch in scene_packages.chapters:
+                scenes = []
+                for s in ch.scenes:
+                    scenes.append({
+                        "id": s.scene_id,
+                        "name": s.title,
+                        "order": s.scene_order,
+                        "characters": s.characters_present,
+                        "backgrounds": [],
+                        "music": None,
+                        "choices": None,
+                        "ending_name": None,
+                        "status": "pending",
+                        "type": "normal",
+                        "is_ending": None,
+                        "location": s.location,
+                        "location_visual_brief": s.location_visual_brief,
+                        "mood": s.mood,
+                        "dialogue_beats": [beat.model_dump(mode="json") for beat in s.dialogue_beats],
+                        "summary": s.summary,
+                        "sprite_plan": _sanitize_sprite_plan_for_api(s.sprite_plan),
+                    })
+                chapters.append({
+                    "id": ch.chapter_id,
+                    "name": ch.chapter_name or ch.chapter_id,
+                    "order": ch.chapter_order,
+                    "scenes": scenes,
+                })
+
+            # Prepare chapter metadata fallback from blueprint for index-only scenes
+            chapter_names: dict[str, str] = {}
+            chapter_orders: dict[str, int] = {}
+            try:
+                blueprint = pm.read_blueprint(project_name)
+                if blueprint:
+                    for ch in blueprint.chapters:
+                        chapter_names[ch.id] = ch.name
+                        chapter_orders[ch.id] = ch.order
+            except ValueError:
+                pass
+
+            # Enrich with prototype index data when available
+            index = pm.read_project_index(project_name)
+            if index and isinstance(index.get("scenes"), dict):
+                prototype_scenes = {
+                    sid: s for sid, s in index["scenes"].items()
+                    if isinstance(s, dict) and s.get("source") == "prototype"
+                }
+                # Build lookups
+                scene_lookup: dict[str, dict] = {}
+                chapter_lookup: dict[str, dict] = {}
+                for ch in chapters:
+                    chapter_lookup[ch["id"]] = ch
+                    for s in ch["scenes"]:
+                        scene_lookup[s["id"]] = s
+
+                for sid, idx_scene in prototype_scenes.items():
+                    if sid in scene_lookup:
+                        s = scene_lookup[sid]
+                        # Richer fields from prototype index take precedence
+                        if "order" in idx_scene:
+                            s["order"] = idx_scene["order"]
+                        if idx_scene.get("background_asset_path"):
+                            s["backgrounds"] = [idx_scene["background_asset_path"]]
+                        if idx_scene.get("background_placeholder") is not None:
+                            s["background_placeholder"] = idx_scene["background_placeholder"]
+                        if idx_scene.get("dialogue_beats"):
+                            s["dialogue_beats"] = idx_scene["dialogue_beats"]
+                        if idx_scene.get("sprite_plan"):
+                            s["sprite_plan"] = _sanitize_sprite_plan_for_api(idx_scene["sprite_plan"])
+                        if idx_scene.get("characters_present"):
+                            s["characters"] = idx_scene["characters_present"]
+                        for field in ("location", "location_visual_brief", "mood", "summary"):
+                            if idx_scene.get(field) is not None:
+                                s[field] = idx_scene[field]
+                    else:
+                        # Index-only scene: append to its chapter (create chapter container if needed)
+                        ch_id = idx_scene.get("chapter_id", "")
+                        if ch_id not in chapter_lookup:
+                            chapters.append({
+                                "id": ch_id,
+                                "name": chapter_names.get(ch_id, ch_id),
+                                "order": chapter_orders.get(ch_id, 99),
+                                "scenes": [],
+                            })
+                            chapter_lookup[ch_id] = chapters[-1]
+                        chapter_lookup[ch_id]["scenes"].append({
+                            "id": sid,
+                            "name": idx_scene.get("title", sid),
+                            "order": idx_scene.get("order", 0),
+                            "characters": idx_scene.get("characters_present", []),
+                            "backgrounds": [idx_scene["background_asset_path"]] if idx_scene.get("background_asset_path") else [],
+                            "music": None,
+                            "choices": None,
+                            "ending_name": None,
+                            "status": "pending",
+                            "type": "normal",
+                            "is_ending": None,
+                            "location": idx_scene.get("location"),
+                            "location_visual_brief": idx_scene.get("location_visual_brief"),
+                            "mood": idx_scene.get("mood"),
+                            "dialogue_beats": idx_scene.get("dialogue_beats", []),
+                            "summary": idx_scene.get("summary"),
+                            "background_placeholder": idx_scene.get("background_placeholder"),
+                            "sprite_plan": _sanitize_sprite_plan_for_api(idx_scene.get("sprite_plan")),
+                        })
+
+                # Sort scenes within chapters and chapters themselves
+                for ch in chapters:
+                    ch["scenes"].sort(key=lambda s: s.get("order", 0))
+                chapters.sort(key=lambda ch: ch.get("order", 0))
+
+            return {"chapters": chapters}
+
+        # Fallback: prefer prototype scenes from index when available
         index = pm.read_project_index(project_name)
         if index and isinstance(index.get("scenes"), dict):
             prototype_scenes = [
@@ -467,8 +1341,8 @@ def create_app() -> FastAPI:
                                 "mood": s.get("mood"),
                                 "dialogue_beats": s.get("dialogue_beats", []),
                                 "summary": s.get("summary"),
-                                "background_placeholder": s.get("background_placeholder", True),
-                                "sprite_plan": s.get("sprite_plan", []),
+                                "background_placeholder": s.get("background_placeholder"),
+                                "sprite_plan": _sanitize_sprite_plan_for_api(s.get("sprite_plan")),
                             }
                             for s in scenes
                         ],
@@ -712,6 +1586,26 @@ def create_app() -> FastAPI:
         wired = main_script.exists() and "# PROTOTYPE START (managed)" in main_script.read_text(encoding="utf-8")
         return script_exists and wired
 
+    @app.post("/api/projects/{project_name}/prototype/multi-chapter/activate")
+    async def api_activate_multi_chapter_prototype(project_name: str):
+        """Activate a previously generated multi-chapter prototype as the runtime entry."""
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        service = PrototypeGenerationService(pm=pm, provider=None)
+
+        try:
+            result = service.activate_multi_chapter_prototype(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+
+        return result
+
     @app.get("/api/projects/{project_name}/prototype/status")
     async def api_prototype_status(project_name: str):
         """Return whether the project has a generated prototype and its readiness."""
@@ -721,39 +1615,23 @@ def create_app() -> FastAPI:
 
         settings = get_settings()
         pm = ProjectManager(settings)
-        index = pm.read_project_index(project_name)
-        proto_scenes = []
-        if index and isinstance(index.get("scenes"), dict):
-            proto_scenes = [
-                s for s in index["scenes"].values()
-                if isinstance(s, dict) and s.get("source") == "prototype"
-            ]
+        service = PrototypeGenerationService(pm=pm, provider=None)
 
-        script_paths = {s.get("file_path") for s in proto_scenes if s.get("file_path")}
-        script_exists = all(
-            (project_dir / p).exists() for p in script_paths
-        ) if script_paths else False
+        try:
+            status = service.get_prototype_runtime_status(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
 
-        wired = False
-        main_script = project_dir / "game" / "script.rpy"
-        if main_script.exists():
-            wired = "# PROTOTYPE START (managed)" in main_script.read_text(encoding="utf-8")
-
-        return {
-            "has_prototype": len(proto_scenes) > 0,
-            "scene_count": len(proto_scenes),
-            "script_exists": script_exists,
-            "wired": wired,
-        }
+        return status
 
     @app.get("/api/projects/{project_name}/prototype/pipeline-status")
     async def api_prototype_pipeline_status(project_name: str):
         """Return the unified prototype pipeline stage derived from project state.
 
         Stages:
-        - idle: no prototype artifacts
+        - idle: no active prototype (includes candidate and inconsistent states)
         - prototype_generating: prototype generation is in progress (runtime session)
-        - prototype_ready: prototype exists but not built or build not successful
+        - prototype_ready: prototype is active, consistent, and buildable
         - prototype_building: build is currently running
         - prototype_build_failed: last build failed
         - prototype_preview_ready: build succeeded and output is previewable
@@ -762,7 +1640,22 @@ def create_app() -> FastAPI:
         if not project_dir:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        has_proto = _has_prototype(project_name)
+        # Manifest-driven readiness contract (Phase 6 Round 4)
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        service = PrototypeGenerationService(pm=pm, provider=None)
+        try:
+            proto_status = service.get_prototype_runtime_status(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        # Backward compat: when no manifest exists, fall back to legacy heuristic
+        has_manifest = proto_status.get("has_manifest", False)
+        if has_manifest:
+            has_proto = proto_status["is_buildable"] or proto_status["is_active"]
+        else:
+            has_proto = _has_prototype(project_name)
+
         build_status = _read_build_status(project_name)
 
         # Runtime session may indicate ongoing generation
@@ -810,6 +1703,11 @@ def create_app() -> FastAPI:
             "previewable": build_status.get("previewable", False) if build_status else False,
             "build_status": build_status.get("status", "idle") if build_status else "idle",
             "message": message,
+            "has_manifest": proto_status.get("has_manifest"),
+            "mode": proto_status.get("mode"),
+            "is_active": proto_status.get("is_active"),
+            "is_buildable": proto_status.get("is_buildable"),
+            "manifest_consistent": proto_status.get("manifest_consistent"),
         }
 
     @app.post("/api/projects/{project_name}/prototype/build")
@@ -861,6 +1759,33 @@ def create_app() -> FastAPI:
                 status_code=400,
                 detail="Main script is not wired to a prototype",
             )
+
+        # 4. Validate manifest active mode and entry label consistency
+        try:
+            manifest = pm.read_prototype_manifest(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if manifest is not None:
+            if manifest.mode not in ("single_chapter", "multi_chapter"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="No active prototype mode. Activate a prototype first.",
+                )
+            if manifest.entry_file and not (project_dir / manifest.entry_file).exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Prototype entry file missing: {manifest.entry_file}",
+                )
+            service = PrototypeGenerationService(pm=pm, provider=None)
+            wired_label = service._read_managed_entry_label(project_name)
+            if wired_label != manifest.entry_label:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Active prototype entry is inconsistent with manifest. "
+                        f"Wired label: {wired_label}, manifest expects: {manifest.entry_label}"
+                    ),
+                )
 
         target = "web"
 

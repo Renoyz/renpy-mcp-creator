@@ -13,11 +13,17 @@ import yaml
 from pydantic import ValidationError
 
 from renpy_mcp.blueprint.models import (
+    ChapterOutline,
+    ChapterStyleProfiles,
     PipelineStage,
     ProjectBlueprint,
+    ProjectBrief,
     ProjectMeta,
     ProjectStatus,
+    ProjectStyleBible,
+    ScenePackagesSnapshot,
 )
+from pydantic import ValidationError
 from renpy_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -273,5 +279,228 @@ class ProjectManager:
         index_path = meta_dir / "index.json"
         index_path.write_text(
             json.dumps(index, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Style bible persistence
+    # -----------------------------------------------------------------------
+
+    def read_style_bible(self, name: str) -> ProjectStyleBible | None:
+        """Read meta/style_bible.json for a project.
+
+        Returns ``None`` only when the file is missing.  Existing files that are
+        unreadable, syntactically invalid, or fail model validation raise
+        ``ValueError`` so callers can distinguish "no config" from "broken config".
+        """
+        path = self._project_dir(name) / "meta" / "style_bible.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read style_bible.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"style_bible.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return ProjectStyleBible.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"style_bible.json for project {name!r} has an invalid structure") from exc
+
+    def write_style_bible(self, name: str, bible: ProjectStyleBible) -> None:
+        """Persist meta/style_bible.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "style_bible.json"
+        path.write_text(
+            json.dumps(bible.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Chapter style profiles persistence
+    # -----------------------------------------------------------------------
+
+    def read_chapter_style_profiles(self, name: str) -> ChapterStyleProfiles | None:
+        """Read meta/chapter_style_profiles.json for a project.
+
+        Returns ``None`` only when the file is missing.  Existing files that are
+        unreadable, syntactically invalid, or fail model validation raise
+        ``ValueError`` so callers can distinguish "no config" from "broken config".
+        """
+        path = self._project_dir(name) / "meta" / "chapter_style_profiles.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read chapter_style_profiles.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"chapter_style_profiles.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return ChapterStyleProfiles.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"chapter_style_profiles.json for project {name!r} has an invalid structure") from exc
+
+    def write_chapter_style_profiles(self, name: str, profiles: ChapterStyleProfiles) -> None:
+        """Persist meta/chapter_style_profiles.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "chapter_style_profiles.json"
+        path.write_text(
+            json.dumps(profiles.model_dump(mode="json"), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Scene packages persistence
+    # -----------------------------------------------------------------------
+
+    def read_scene_packages(self, name: str) -> ScenePackagesSnapshot | None:
+        """Read meta/scene_packages.json for a project, if it exists.
+
+        Returns ``None`` when the file is missing.  Existing unreadable or
+        invalid files raise ``ValueError``.
+        """
+        path = self._project_dir(name) / "meta" / "scene_packages.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read scene_packages.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"scene_packages.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return ScenePackagesSnapshot.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"Project {name!r} has invalid meta/scene_packages.json") from exc
+
+    def write_scene_packages(self, name: str, snapshot: ScenePackagesSnapshot) -> None:
+        """Persist meta/scene_packages.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "scene_packages.json"
+        path.write_text(
+            snapshot.model_dump_json(indent=2, by_alias=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Prototype manifest persistence
+    # -----------------------------------------------------------------------
+
+    def read_prototype_manifest(self, name: str) -> PrototypeManifest | None:
+        """Read meta/prototype_manifest.json for a project, if it exists.
+
+        Returns ``None`` when the file is missing.  Existing unreadable or
+        invalid files raise ``ValueError`` so callers can distinguish "no
+        manifest" from "broken manifest".
+        """
+        from renpy_mcp.blueprint.models import PrototypeManifest
+
+        path = self._project_dir(name) / "meta" / "prototype_manifest.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read prototype_manifest.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"prototype_manifest.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return PrototypeManifest.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"Project {name!r} has invalid meta/prototype_manifest.json") from exc
+
+    def write_prototype_manifest(self, name: str, manifest: PrototypeManifest) -> None:
+        """Persist meta/prototype_manifest.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "prototype_manifest.json"
+        path.write_text(
+            manifest.model_dump_json(indent=2, by_alias=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Project brief persistence
+    # -----------------------------------------------------------------------
+
+    def read_project_brief(self, name: str) -> ProjectBrief | None:
+        """Read meta/project_brief.json for a project, if it exists.
+
+        Returns ``None`` when the file is missing.  Existing unreadable or
+        invalid files raise ``ValueError`` so callers can distinguish "no
+        brief" from "broken brief".
+        """
+        path = self._project_dir(name) / "meta" / "project_brief.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read project_brief.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"project_brief.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return ProjectBrief.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"project_brief.json for project {name!r} has an invalid structure") from exc
+
+    def write_project_brief(self, name: str, brief: ProjectBrief) -> None:
+        """Persist meta/project_brief.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "project_brief.json"
+        path.write_text(
+            brief.model_dump_json(indent=2, by_alias=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Chapter outline persistence
+    # -----------------------------------------------------------------------
+
+    def read_chapter_outline(self, name: str) -> ChapterOutline | None:
+        """Read meta/chapter_outline.json for a project, if it exists.
+
+        Returns ``None`` when the file is missing.  Existing unreadable or
+        invalid files raise ``ValueError`` so callers can distinguish "no
+        outline" from "broken outline".
+        """
+        path = self._project_dir(name) / "meta" / "chapter_outline.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read chapter_outline.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"chapter_outline.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return ChapterOutline.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"chapter_outline.json for project {name!r} has an invalid structure") from exc
+
+    def write_chapter_outline(self, name: str, outline: ChapterOutline) -> None:
+        """Persist meta/chapter_outline.json for a project."""
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "chapter_outline.json"
+        path.write_text(
+            outline.model_dump_json(indent=2, by_alias=False),
             encoding="utf-8",
         )

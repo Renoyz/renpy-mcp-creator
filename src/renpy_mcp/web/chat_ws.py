@@ -941,6 +941,12 @@ Requirements:
                     chapter = service.select_prototype_chapter(self.draft)
                     round_id = f"r{uuid.uuid4().hex[:8]}"
 
+                    # Build generation contract so that project-level style
+                    # constraints are respected across scene/asset generation.
+                    contract = service.build_generation_contract(
+                        self.project_name, self.draft, chapter
+                    )
+
                     # Step 1: generate scenes
                     step = {
                         "step": _localized_text(lang, "正在生成场景...", "Generating scenes..."),
@@ -956,7 +962,7 @@ Requirements:
                     self._save_history()
                     self._save_session_with_progress(step["step"], step["percent"])
                     yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    scenes = await service.generate_scenes(chapter, self.draft)
+                    scenes = await service.generate_scenes(chapter, self.draft, contract=contract)
                     new_scene_ids = [s.scene_id for s in scenes]
 
                     # Step 2: generate background assets
@@ -975,7 +981,7 @@ Requirements:
                     self._save_session_with_progress(step["step"], step["percent"])
                     yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     bg_assets = await service.generate_background_assets(
-                        self.project_name, scenes, round_id=round_id
+                        self.project_name, scenes, round_id=round_id, contract=contract
                     )
 
                     # Step 3: generate character sprite assets
@@ -994,7 +1000,7 @@ Requirements:
                     self._save_session_with_progress(step["step"], step["percent"])
                     yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     char_assets = await service.generate_character_assets(
-                        self.project_name, self.draft, scenes, round_id=round_id
+                        self.project_name, self.draft, scenes, round_id=round_id, contract=contract
                     )
 
                     # Step 4: build sprite plans for each scene
@@ -1055,6 +1061,15 @@ Requirements:
                     yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
                     service.commit_prototype_replacement(
                         self.project_name, new_scene_ids, staging_path, round_id=round_id
+                    )
+
+                    # Step 10b: update manifest to reflect active single-chapter mode
+                    service.activate_single_chapter_prototype(
+                        self.project_name,
+                        entry_label=scenes[0].entry_label,
+                        entry_file=final_path,
+                        chapter_ids=[chapter.id],
+                        script_files=[final_path],
                     )
 
                 except Exception as e:

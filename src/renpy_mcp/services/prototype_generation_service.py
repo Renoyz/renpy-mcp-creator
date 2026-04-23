@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -60,38 +61,36 @@ def _to_renpy_asset_path(project_dir_relative_path: str) -> str:
 
 from pydantic import BaseModel, Field, ValidationError
 
-from renpy_mcp.blueprint.models import ChapterSummary, ProjectBlueprint
+from renpy_mcp.blueprint.models import (
+    ChapterStyleProfile,
+    ChapterStyleProfiles,
+    ChapterSummary,
+    CharacterBible,
+    CharacterContract,
+    CharacterStyleEntry,
+    ContinuityBible,
+    ContinuityContract,
+    DialogueBeat,
+    GenerationContract,
+    PrototypeManifest,
+    ProjectBlueprint,
+    ProjectStyleBible,
+    ScenePackageChapter,
+    ScenePackageScene,
+    ScenePackageSpritePlanItem,
+    ScenePackagesSnapshot,
+    SpritePlanItem,
+    ToneBible,
+    ToneContract,
+    VisualBible,
+    VisualContract,
+)
 from renpy_mcp.services.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
 _CJK_FONT_SOURCE = Path(r"C:\Windows\Fonts\simhei.ttf")
 _CJK_FONT_DEST_NAME = "simhei.ttf"
-
-
-class DialogueBeat(BaseModel):
-    """A single dialogue beat within a scene."""
-
-    speaker: str
-    intent: str
-    content_brief: str
-    spoken_line: str = ""
-
-
-class SpritePlanItem(BaseModel):
-    """A single character sprite placement within a scene."""
-
-    character_name: str
-    character_id: str = ""
-    sprite_path: str | None = None
-    sprite_check_path: str | None = None
-    sprite_placeholder: bool = True
-    sprite_renderable: bool = False
-    sprite_quality_reason: str = ""
-    position: str = "center"
-    expression: str = "neutral"
-    layout_mode: str = "solo"
-    transform_name: str = "proto_center_solo"
 
 
 class PrototypeScene(BaseModel):
@@ -132,6 +131,739 @@ class PrototypeGenerationService:
         return blueprint.chapters[0]
 
     # ------------------------------------------------------------------
+    # Phase 6: Style bible inference and contract assembly
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def infer_style_bible_from_blueprint(blueprint: ProjectBlueprint) -> ProjectStyleBible:
+        """Infer a minimal project style bible from blueprint data.
+
+        This is used as a safe fallback when no style_bible.json exists.
+        The inferred data is marked as generated defaults, not user-authored truth.
+        """
+        characters = []
+        for c in blueprint.characters:
+            characters.append(CharacterStyleEntry(
+                name=c.name,
+                identity_anchors=[c.appearance] if c.appearance else [],
+                default_costume="casual",
+                forbidden_drift=[],
+            ))
+        return ProjectStyleBible(
+            visual_bible=VisualBible(
+                art_direction=blueprint.art_style or "anime visual novel style",
+                palette_baseline="neutral",
+                camera_language="mid-distance readable staging",
+                background_complexity_budget="medium",
+                forbidden_visual_drift=[],
+            ),
+            character_bible=CharacterBible(characters=characters),
+            tone_bible=ToneBible(
+                narration_style="clean, readable",
+                dialogue_style="direct spoken dialogue",
+                dialogue_density="short to medium",
+                forbidden_tone_drift=[],
+            ),
+            continuity_bible=ContinuityBible(
+                world_rules=[blueprint.worldview] if blueprint.worldview else [],
+                relationship_baselines=[],
+                must_preserve_facts=[],
+            ),
+        )
+
+    @staticmethod
+    def infer_chapter_profiles_from_blueprint(blueprint: ProjectBlueprint) -> ChapterStyleProfiles:
+        """Infer minimal chapter style profiles from blueprint chapter summaries."""
+        profiles = []
+        for ch in blueprint.chapters:
+            profiles.append(ChapterStyleProfile(
+                chapter_id=ch.id,
+                mood_target="neutral",
+                temperature_bias="neutral",
+                lighting_bias="neutral",
+                pacing_bias="measured",
+                emotional_bias="neutral",
+                location_motifs=[],
+                allowed_variation={
+                    "palette_shift_max": "small",
+                    "contrast_shift_max": "small",
+                    "dialogue_intensity_shift_max": "small",
+                },
+            ))
+        return ChapterStyleProfiles(chapters=profiles)
+
+    def build_generation_contract(
+        self,
+        project_name: str,
+        blueprint: ProjectBlueprint,
+        chapter: ChapterSummary,
+    ) -> GenerationContract:
+        """Assemble a generation contract from project bible + chapter profile.
+
+        Merge rules:
+        - Project-level hard constraints always win.
+        - Chapter-level soft overrides are allowed only for mood, lighting,
+          pacing, temperature, emotional_bias, and location_motifs.
+        - Chapter CANNOT override: art_direction, character identity_anchors,
+          dialogue_style, continuity-critical facts.
+        """
+        # Load or infer project style bible
+        bible: ProjectStyleBible
+        if self.pm is not None:
+            loaded_bible = self.pm.read_style_bible(project_name)
+            bible = loaded_bible if loaded_bible is not None else self.infer_style_bible_from_blueprint(blueprint)
+        else:
+            bible = self.infer_style_bible_from_blueprint(blueprint)
+
+        # Load or infer chapter profiles
+        profiles: ChapterStyleProfiles
+        if self.pm is not None:
+            loaded_profiles = self.pm.read_chapter_style_profiles(project_name)
+            profiles = loaded_profiles if loaded_profiles is not None else self.infer_chapter_profiles_from_blueprint(blueprint)
+        else:
+            profiles = self.infer_chapter_profiles_from_blueprint(blueprint)
+
+        # Find chapter profile for this chapter
+        chapter_profile: ChapterStyleProfile | None = None
+        for cp in profiles.chapters:
+            if cp.chapter_id == chapter.id:
+                chapter_profile = cp
+                break
+        if chapter_profile is None:
+            chapter_profile = ChapterStyleProfile(chapter_id=chapter.id)
+
+        vb = bible.visual_bible
+        cb = bible.character_bible
+        tb = bible.tone_bible
+        ctb = bible.continuity_bible
+
+        # Build visual contract: project hard + chapter soft
+        visual_contract = VisualContract(
+            art_direction=vb.art_direction,
+            palette_baseline=vb.palette_baseline,
+            camera_language=vb.camera_language,
+            background_complexity_budget=vb.background_complexity_budget,
+            forbidden_visual_drift=vb.forbidden_visual_drift,
+            # Chapter soft overrides
+            mood_target=chapter_profile.mood_target or vb.mood_target,
+            temperature_bias=chapter_profile.temperature_bias or vb.temperature_bias,
+            lighting_bias=chapter_profile.lighting_bias or vb.lighting_bias,
+            location_motifs=chapter_profile.location_motifs or vb.location_motifs,
+        )
+
+        # Build character contract: project hard only; chapter cannot override identity
+        character_contract = CharacterContract(characters=cb.characters)
+
+        # Build tone contract: project hard + chapter soft (pacing, emotional)
+        tone_contract = ToneContract(
+            dialogue_style=tb.dialogue_style,
+            dialogue_density=tb.dialogue_density,
+            narration_style=tb.narration_style,
+            forbidden_tone_drift=tb.forbidden_tone_drift,
+            # Chapter soft overrides
+            pacing_bias=chapter_profile.pacing_bias or tb.pacing_bias,
+            emotional_bias=chapter_profile.emotional_bias or tb.emotional_bias,
+            mood_target=chapter_profile.mood_target or tb.mood_target,
+        )
+
+        # Build continuity contract: project hard only
+        continuity_contract = ContinuityContract(
+            must_preserve_facts=ctb.must_preserve_facts,
+            relationship_state=ctb.relationship_baselines,
+            world_rules=ctb.world_rules,
+        )
+
+        return GenerationContract(
+            chapter_id=chapter.id,
+            visual_contract=visual_contract,
+            character_contract=character_contract,
+            tone_contract=tone_contract,
+            continuity_contract=continuity_contract,
+        )
+
+    # ------------------------------------------------------------------
+    # Multi-chapter scene generation
+    # ------------------------------------------------------------------
+
+    async def generate_all_chapter_scenes(
+        self, project_name: str, blueprint: ProjectBlueprint
+    ) -> dict[str, list[PrototypeScene]]:
+        """Generate structured scene packages for all chapters in the blueprint.
+
+        Each chapter gets its own generation contract so that project-level
+        style remains stable while chapter-level mood/lighting/pacing can vary.
+
+        The result is persisted to ``meta/scene_packages.json`` so that
+        multi-chapter data is available to API consumers.
+
+        Returns:
+            Mapping chapter_id -> list[PrototypeScene].
+        """
+        if self.provider is None:
+            raise RuntimeError("No LLM provider configured for prototype generation.")
+
+        packages: dict[str, list[PrototypeScene]] = {}
+        chapter_map: dict[str, ChapterSummary] = {}
+        for chapter in blueprint.chapters:
+            contract = self.build_generation_contract(project_name, blueprint, chapter)
+            scenes = await self.generate_scenes(chapter, blueprint, contract=contract)
+            packages[chapter.id] = scenes
+            chapter_map[chapter.id] = chapter
+
+        # Persist scene packages snapshot
+        if self.pm is not None:
+            snapshot = ScenePackagesSnapshot(
+                chapters=[
+                    ScenePackageChapter(
+                        chapter_id=ch_id,
+                        chapter_name=chapter_map[ch_id].name,
+                        chapter_order=chapter_map[ch_id].order,
+                        scenes=[
+                            ScenePackageScene(
+                                scene_id=s.scene_id,
+                                title=s.title,
+                                summary=s.summary,
+                                location=s.location,
+                                location_visual_brief=s.location_visual_brief,
+                                mood=s.mood,
+                                characters_present=s.characters_present,
+                                dialogue_beats=s.dialogue_beats,
+                                sprite_plan=[
+                                    ScenePackageSpritePlanItem(
+                                        character_name=sp.character_name,
+                                        character_id=sp.character_id,
+                                        sprite_path=sp.sprite_path,
+                                        sprite_placeholder=sp.sprite_placeholder,
+                                        sprite_renderable=sp.sprite_renderable,
+                                        sprite_quality_reason=sp.sprite_quality_reason,
+                                        position=sp.position,
+                                        expression=sp.expression,
+                                        layout_mode=sp.layout_mode,
+                                        transform_name=sp.transform_name,
+                                    )
+                                    for sp in s.sprite_plan
+                                ],
+                                entry_label=s.entry_label,
+                                next_scene_id=s.next_scene_id,
+                                scene_order=idx + 1,
+                            )
+                            for idx, s in enumerate(sc_list)
+                        ],
+                    )
+                    for ch_id, sc_list in packages.items()
+                ]
+            )
+            self.pm.write_scene_packages(project_name, snapshot)
+
+        return packages
+
+    # ------------------------------------------------------------------
+    # Multi-chapter script generation
+    # ------------------------------------------------------------------
+
+    def generate_multi_chapter_scripts(
+        self, project_name: str, blueprint: ProjectBlueprint
+    ) -> dict[str, Any]:
+        """Generate multi-chapter prototype scripts from scene_packages snapshot.
+
+        Reads the persisted ``meta/scene_packages.json``, writes one ``.rpy``
+        per chapter, chains chapters via ``jump`` labels, updates
+        ``meta/index.json`` with per-scene file/label mappings, and wires
+        ``game/script.rpy`` to the first chapter start.
+
+        This method is transactional: either all chapters are promoted and
+        wired successfully, or the project is rolled back to its previous
+        stable state.  After a successful commit, stale prototype index
+        entries and chapter files from previous generations are removed.
+
+        Args:
+            project_name: Target project name.
+            blueprint: The full project blueprint (used for character registry).
+
+        Returns:
+            ``{"chapters": [{"chapter_id": ..., "script_path": ..., "scene_count": ...}]}``
+
+        Raises:
+            RuntimeError: If ``scene_packages.json`` is missing or ProjectManager
+                is not available.
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for multi-chapter script generation")
+
+        snapshot = self.pm.read_scene_packages(project_name)
+        if snapshot is None:
+            raise RuntimeError(
+                f"Project {project_name!r} has no scene packages. "
+                "Run scene-packages/generate first."
+            )
+
+        project_dir = self.pm._project_dir(project_name)
+        game_dir = project_dir / "game"
+
+        # Sort chapters by order to ensure stable generation
+        sorted_chapters = sorted(snapshot.chapters, key=lambda ch: ch.chapter_order)
+
+        # ------------------------------------------------------------------
+        # Phase 1: Prepare — write all chapter scripts to staging (no promote)
+        # ------------------------------------------------------------------
+        chapter_infos: list[dict] = []
+
+        for i, ch in enumerate(sorted_chapters):
+            # Convert ScenePackageScene -> PrototypeScene
+            scenes: list[PrototypeScene] = []
+            scene_orders: dict[str, int] = {}
+            for s in ch.scenes:
+                entry_label = s.entry_label or (
+                    f"prototype_{ch.chapter_id}_start"
+                    if s.scene_order == 1
+                    else f"prototype_{ch.chapter_id}_scene_{s.scene_order}"
+                )
+                scene_orders[s.scene_id] = s.scene_order if s.scene_order else 1
+
+                sprite_plan = [
+                    SpritePlanItem(
+                        character_name=sp.character_name,
+                        character_id=sp.character_id,
+                        sprite_path=sp.sprite_path,
+                        sprite_placeholder=sp.sprite_placeholder,
+                        sprite_renderable=sp.sprite_renderable,
+                        sprite_quality_reason=sp.sprite_quality_reason,
+                        position=sp.position,
+                        expression=sp.expression,
+                        layout_mode=sp.layout_mode,
+                        transform_name=sp.transform_name,
+                    )
+                    for sp in s.sprite_plan
+                ]
+
+                scenes.append(
+                    PrototypeScene(
+                        scene_id=s.scene_id,
+                        title=s.title,
+                        summary=s.summary,
+                        location=s.location,
+                        location_visual_brief=s.location_visual_brief,
+                        mood=s.mood,
+                        characters_present=s.characters_present,
+                        dialogue_beats=s.dialogue_beats,
+                        sprite_plan=sprite_plan,
+                        entry_label=entry_label,
+                        next_scene_id=s.next_scene_id,
+                    )
+                )
+
+            next_chapter_start_label: str | None = None
+            if i + 1 < len(sorted_chapters):
+                next_ch = sorted_chapters[i + 1]
+                if next_ch.scenes:
+                    next_chapter_start_label = (
+                        next_ch.scenes[0].entry_label
+                        or f"prototype_{next_ch.chapter_id}_start"
+                    )
+
+            chapter_summary = ChapterSummary(
+                id=ch.chapter_id,
+                name=ch.chapter_name or ch.chapter_id,
+                order=ch.chapter_order,
+                scenes=[],
+            )
+
+            staging_path = self.write_script(
+                project_name,
+                chapter_summary,
+                scenes,
+                next_chapter_start_label=next_chapter_start_label,
+            )
+            final_path = Path(self._final_path_from_staging(staging_path)).as_posix()
+
+            chapter_infos.append({
+                "chapter_id": ch.chapter_id,
+                "staging_path": staging_path,
+                "final_path": final_path,
+                "scenes": scenes,
+                "scene_ids": [s.scene_id for s in scenes],
+                "scene_orders": scene_orders,
+            })
+
+        # ------------------------------------------------------------------
+        # Phase 2: Commit — atomic-ish promote + wire + index
+        # ------------------------------------------------------------------
+        new_scene_ids: set[str] = set()
+        new_final_paths: set[str] = set()
+        for info in chapter_infos:
+            new_scene_ids.update(info["scene_ids"])
+            new_final_paths.add(info["final_path"])
+
+        import copy
+        old_index = copy.deepcopy(self.pm.read_project_index(project_name) or {"scenes": {}})
+        old_manifest = self.pm.read_prototype_manifest(project_name)
+
+        promoted_paths: list[str] = []
+        old_final_contents: dict[str, str] = {}
+
+        # Determine first chapter entry label for manifest (before any mutation)
+        first_label: str | None = None
+        if sorted_chapters and sorted_chapters[0].scenes:
+            first_label = (
+                sorted_chapters[0].scenes[0].entry_label
+                or f"prototype_{sorted_chapters[0].chapter_id}_start"
+            )
+
+        chapter_results = [
+            {
+                "chapter_id": info["chapter_id"],
+                "script_path": info["final_path"],
+                "scene_count": len(info["scenes"]),
+            }
+            for info in chapter_infos
+        ]
+
+        manifest = PrototypeManifest(
+            mode=None,
+            entry_label=first_label,
+            entry_file=chapter_infos[0]["final_path"] if chapter_infos else None,
+            chapter_ids=[info["chapter_id"] for info in chapter_infos],
+            script_files=[info["final_path"] for info in chapter_infos],
+            source="prototype",
+            generated_from="scene_packages",
+            updated_at=datetime.utcnow().isoformat(),
+        )
+
+        try:
+            # 1. Promote all staging -> final
+            for info in chapter_infos:
+                staging_file = project_dir / info["staging_path"]
+                final_file = project_dir / info["final_path"]
+                if staging_file.exists():
+                    if final_file.exists():
+                        old_final_contents[info["final_path"]] = final_file.read_text(encoding="utf-8")
+                        final_file.unlink()
+                    staging_file.rename(final_file)
+                    promoted_paths.append(info["final_path"])
+
+            # 2. Update index.json with all new scene entries
+            index = self.pm.read_project_index(project_name) or {"scenes": {}}
+            if "scenes" not in index:
+                index["scenes"] = {}
+            for info in chapter_infos:
+                ch_id = info["chapter_id"]
+                final_path = info["final_path"]
+                scene_orders = info["scene_orders"]
+                for s in info["scenes"]:
+                    index["scenes"][s.scene_id] = {
+                        "chapter_id": ch_id,
+                        "scene_id": s.scene_id,
+                        "title": s.title,
+                        "summary": s.summary,
+                        "location": s.location,
+                        "location_visual_brief": s.location_visual_brief,
+                        "mood": s.mood,
+                        "characters_present": s.characters_present,
+                        "dialogue_beats": [
+                            b.model_dump(mode="json") for b in s.dialogue_beats
+                        ],
+                        "sprite_plan": [
+                            sp.model_dump(mode="json", exclude={"sprite_check_path"})
+                            for sp in s.sprite_plan
+                        ],
+                        "next_scene_id": s.next_scene_id,
+                        "label": s.entry_label,
+                        "file_path": final_path,
+                        "source": "prototype",
+                        "order": scene_orders.get(s.scene_id, 1),
+                    }
+            self.pm.write_project_index(project_name, index)
+
+            # 3. Write prototype_manifest.json (candidate, not yet active)
+            self.pm.write_prototype_manifest(project_name, manifest)
+
+        except Exception:
+            # Rollback: restore index (best-effort), restore manifest (best-effort),
+            # remove newly promoted files, then restore old final files
+            try:
+                self.pm.write_project_index(project_name, old_index)
+            except Exception:
+                logger.warning("Failed to restore index during rollback")
+            try:
+                if old_manifest is not None:
+                    self.pm.write_prototype_manifest(project_name, old_manifest)
+                else:
+                    # First-time generate failed: remove orphaned manifest
+                    manifest_path = (
+                        self.pm._project_dir(project_name) / "meta" / "prototype_manifest.json"
+                    )
+                    if manifest_path.exists():
+                        manifest_path.unlink()
+            except Exception:
+                logger.warning("Failed to restore manifest during rollback")
+            for fp in promoted_paths:
+                f = project_dir / fp
+                if f.exists():
+                    f.unlink()
+            # Restore old final files that were overwritten during promote
+            for fp, content in old_final_contents.items():
+                old_file = project_dir / fp
+                old_file.write_text(content, encoding="utf-8")
+            # Clean up any leftover staging files from this round
+            for info in chapter_infos:
+                staging_file = project_dir / info["staging_path"]
+                if staging_file.exists():
+                    staging_file.unlink()
+            raise
+
+        # ------------------------------------------------------------------
+        # Post-commit cleanup: remove stale prototype entries and files
+        # ------------------------------------------------------------------
+        # 4. Remove stale prototype index entries
+        index = self.pm.read_project_index(project_name) or {"scenes": {}}
+        if "scenes" in index:
+            stale_ids = [
+                sid for sid, entry in list(index["scenes"].items())
+                if isinstance(entry, dict)
+                and entry.get("source") == "prototype"
+                and sid not in new_scene_ids
+            ]
+            if stale_ids:
+                for sid in stale_ids:
+                    del index["scenes"][sid]
+                self.pm.write_project_index(project_name, index)
+
+        # 5. Remove stale prototype files
+        new_file_names = {Path(p).name for p in new_final_paths}
+        if game_dir.exists():
+            for proto_file in game_dir.glob("prototype_*.rpy"):
+                if proto_file.name not in new_file_names:
+                    try:
+                        proto_file.unlink()
+                    except OSError:
+                        logger.warning("Failed to remove stale prototype file: %s", proto_file)
+
+        return {"chapters": chapter_results}
+
+    # ------------------------------------------------------------------
+    # Prototype activation
+    # ------------------------------------------------------------------
+
+    def activate_multi_chapter_prototype(self, project_name: str) -> dict[str, Any]:
+        """Activate a previously generated multi-chapter prototype as the runtime entry.
+
+        Reads ``prototype_manifest.json``, validates script files exist, wires
+        ``game/script.rpy`` to the first chapter start, and updates the manifest
+        ``mode`` to ``"multi_chapter"``.  If anything fails, the previous stable
+        ``script.rpy`` and manifest are restored.
+
+        Returns:
+            ``{"success": True, "mode": "multi_chapter", ...}``
+
+        Raises:
+            RuntimeError: If the manifest is missing, scripts are missing, or
+                wiring fails and cannot be rolled back.
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for prototype activation")
+
+        manifest = self.pm.read_prototype_manifest(project_name)
+        if manifest is None:
+            raise RuntimeError(
+                f"Project {project_name!r} has no prototype_manifest.json. "
+                "Run multi-chapter generate first."
+            )
+
+        entry_label = manifest.entry_label
+        script_files = manifest.script_files
+        if not entry_label or not script_files:
+            raise RuntimeError("Manifest is incomplete: missing entry_label or script_files")
+
+        project_dir = self.pm._project_dir(project_name)
+        for sf in script_files:
+            if not (project_dir / sf).exists():
+                raise RuntimeError(f"Prototype script file missing: {sf}")
+
+        old_script_content = self.backup_main_script(project_name)
+        old_manifest = self.pm.read_prototype_manifest(project_name)
+
+        try:
+            self.wire_main_script_to_prototype(project_name, entry_label)
+            manifest.mode = "multi_chapter"
+            manifest.updated_at = datetime.utcnow().isoformat()
+            self.pm.write_prototype_manifest(project_name, manifest)
+        except Exception:
+            self.restore_main_script(project_name, old_script_content)
+            if old_manifest is not None:
+                self.pm.write_prototype_manifest(project_name, old_manifest)
+            raise
+
+        return {
+            "success": True,
+            "mode": "multi_chapter",
+            "entry_label": manifest.entry_label,
+            "entry_file": manifest.entry_file,
+            "script_files": manifest.script_files,
+            "chapter_ids": manifest.chapter_ids,
+        }
+
+    def activate_single_chapter_prototype(
+        self,
+        project_name: str,
+        entry_label: str,
+        entry_file: str,
+        chapter_ids: list[str],
+        script_files: list[str],
+    ) -> None:
+        """Write the prototype manifest for an active single-chapter prototype.
+
+        This is called by the single-chapter confirmation pipeline so that the
+        manifest always reflects the current active mode.
+        """
+        if self.pm is None:
+            return
+        manifest = PrototypeManifest(
+            mode="single_chapter",
+            entry_label=entry_label,
+            entry_file=entry_file,
+            chapter_ids=chapter_ids,
+            script_files=script_files,
+            source="prototype",
+            updated_at=datetime.utcnow().isoformat(),
+        )
+        self.pm.write_prototype_manifest(project_name, manifest)
+
+    # ------------------------------------------------------------------
+    # Prototype runtime readiness
+    # ------------------------------------------------------------------
+
+    def _read_managed_entry_label(self, project_name: str) -> str | None:
+        """Read the current wired entry label from game/script.rpy managed region.
+
+        Returns:
+            The label name after ``call`` inside the managed region, or ``None``
+            if the managed region does not exist or contains no valid ``call`` line.
+        """
+        if self.pm is None:
+            return None
+        project_dir = self.pm._project_dir(project_name)
+        main_script = project_dir / "game" / "script.rpy"
+        if not main_script.exists():
+            return None
+
+        text = main_script.read_text(encoding="utf-8")
+        managed_start = self._MANAGED_START
+        managed_end = self._MANAGED_END
+        if managed_start not in text or managed_end not in text:
+            return None
+
+        lines = text.splitlines()
+        in_region = False
+        for line in lines:
+            if line == managed_start:
+                in_region = True
+                continue
+            if line == managed_end:
+                in_region = False
+                continue
+            if in_region:
+                stripped = line.strip()
+                if stripped.startswith("call "):
+                    parts = stripped[5:].split()
+                    if parts:
+                        return parts[0]
+        return None
+
+    def get_prototype_runtime_status(self, project_name: str) -> dict:
+        """Return the full prototype readiness status based on manifest + filesystem + wiring.
+
+        Computes:
+        - ``has_prototype`` / ``scene_count`` / ``script_exists``: backward-compat
+          checks against ``index.json`` prototype entries.
+        - ``wired``: whether ``game/script.rpy`` contains a managed region with a
+          valid ``call <label>`` line.
+        - ``wired_entry_label``: the actual label currently wired in script.rpy.
+        - ``entry_label_matches``: whether the wired label equals manifest.entry_label.
+        - ``is_active``: manifest has a valid mode (single_chapter or multi_chapter)
+          AND wired label matches manifest.entry_label AND entry_file exists.
+        - ``manifest_consistent``: is_active conditions PLUS all script_files exist.
+        - ``is_buildable``: is_active AND manifest_consistent.
+        """
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for prototype runtime status")
+
+        project_dir = self.pm._project_dir(project_name)
+
+        # -- manifest ------------------------------------------------------------
+        manifest = self.pm.read_prototype_manifest(project_name)
+
+        # -- wiring check (label-aware) ------------------------------------------
+        wired_entry_label = self._read_managed_entry_label(project_name)
+        wired = wired_entry_label is not None
+
+        # -- file existence from manifest ----------------------------------------
+        entry_file_exists = False
+        all_script_files_exist = False
+        if manifest is not None:
+            if manifest.entry_file:
+                entry_file_exists = (project_dir / manifest.entry_file).exists()
+            script_files = manifest.script_files or []
+            all_script_files_exist = (
+                all((project_dir / sf).exists() for sf in script_files)
+                if script_files else False
+            )
+
+        # -- readiness booleans --------------------------------------------------
+        has_valid_mode = (
+            manifest is not None
+            and manifest.mode in ("single_chapter", "multi_chapter")
+        )
+
+        entry_label_matches = (
+            manifest is not None
+            and manifest.entry_label is not None
+            and wired_entry_label == manifest.entry_label
+        )
+
+        is_active = has_valid_mode and entry_label_matches and entry_file_exists
+
+        manifest_consistent = (
+            has_valid_mode and entry_label_matches and entry_file_exists and all_script_files_exist
+        )
+
+        is_buildable = is_active and manifest_consistent
+
+        # -- backward-compat: index-based prototype presence ---------------------
+        index = self.pm.read_project_index(project_name)
+        proto_scenes = []
+        if index and isinstance(index.get("scenes"), dict):
+            proto_scenes = [
+                s for s in index["scenes"].values()
+                if isinstance(s, dict) and s.get("source") == "prototype"
+            ]
+
+        script_paths = {s.get("file_path") for s in proto_scenes if s.get("file_path")}
+        script_exists = (
+            all((project_dir / p).exists() for p in script_paths)
+            if script_paths else False
+        )
+
+        manifest_dict = manifest.model_dump(mode="json") if manifest is not None else {}
+
+        return {
+            "has_prototype": len(proto_scenes) > 0,
+            "scene_count": len(proto_scenes),
+            "script_exists": script_exists,
+            "wired": wired,
+            "wired_entry_label": wired_entry_label,
+            "entry_label_matches": entry_label_matches,
+            "has_manifest": manifest is not None,
+            "mode": manifest_dict.get("mode"),
+            "entry_label": manifest_dict.get("entry_label"),
+            "entry_file": manifest_dict.get("entry_file"),
+            "script_files": manifest_dict.get("script_files", []),
+            "chapter_ids": manifest_dict.get("chapter_ids", []),
+            "is_active": is_active,
+            "is_buildable": is_buildable,
+            "manifest_consistent": manifest_consistent,
+        }
+
+    # ------------------------------------------------------------------
     # Scene generation (LLM)
     # ------------------------------------------------------------------
 
@@ -161,13 +893,17 @@ class PrototypeGenerationService:
                 scene.mood = "neutral"
 
     async def generate_scenes(
-        self, chapter: ChapterSummary, blueprint: ProjectBlueprint
+        self,
+        chapter: ChapterSummary,
+        blueprint: ProjectBlueprint,
+        contract: GenerationContract | None = None,
     ) -> list[PrototypeScene]:
         """Generate 2-4 structured scenes for the prototype chapter via LLM.
 
         Args:
             chapter: The prototype chapter selected from the blueprint.
             blueprint: The full confirmed blueprint.
+            contract: Optional generation contract with style constraints.
 
         Returns:
             List of structured PrototypeScene objects.
@@ -184,6 +920,41 @@ class PrototypeGenerationService:
             for c in blueprint.characters
         )
 
+        # Build style constraints block from contract when available
+        style_block = ""
+        if contract is not None:
+            vc = contract.visual_contract
+            tc = contract.tone_contract
+            cc = contract.continuity_contract
+            style_lines: list[str] = []
+            style_lines.append("Style Constraints (MUST be respected):")
+            if vc.art_direction:
+                style_lines.append(f'- Art direction: {vc.art_direction}')
+            if vc.palette_baseline:
+                style_lines.append(f'- Palette baseline: {vc.palette_baseline}')
+            if vc.camera_language:
+                style_lines.append(f'- Camera language: {vc.camera_language}')
+            if vc.mood_target:
+                style_lines.append(f'- Mood target: {vc.mood_target}')
+            if vc.lighting_bias:
+                style_lines.append(f'- Lighting bias: {vc.lighting_bias}')
+            if vc.temperature_bias:
+                style_lines.append(f'- Temperature bias: {vc.temperature_bias}')
+            if tc.dialogue_style:
+                style_lines.append(f'- Dialogue style: {tc.dialogue_style}')
+            if tc.pacing_bias:
+                style_lines.append(f'- Pacing bias: {tc.pacing_bias}')
+            if cc.must_preserve_facts:
+                for fact in cc.must_preserve_facts:
+                    style_lines.append(f'- Continuity fact: {fact}')
+            if vc.forbidden_visual_drift:
+                for forbidden in vc.forbidden_visual_drift:
+                    style_lines.append(f'- Forbidden visual drift: {forbidden}')
+            if tc.forbidden_tone_drift:
+                for forbidden in tc.forbidden_tone_drift:
+                    style_lines.append(f'- Forbidden tone drift: {forbidden}')
+            style_block = "\n".join(style_lines) + "\n\n"
+
         prompt = f"""Based on the following blueprint, generate 2-4 detailed scenes for the prototype chapter.
 
 Project: {blueprint.title}
@@ -196,7 +967,7 @@ Characters:
 
 Prototype Chapter: {chapter.name}
 
-Generate a JSON array of scenes. Each scene must have these fields:
+{style_block}Generate a JSON array of scenes. Each scene must have these fields:
 - scene_id: unique identifier string
 - title: scene title
 - summary: 1-2 sentence narration summary
@@ -412,11 +1183,20 @@ Requirements:
     # ------------------------------------------------------------------
 
     async def generate_background_assets(
-        self, project_name: str, scenes: list[PrototypeScene], round_id: str | None = None,
+        self,
+        project_name: str,
+        scenes: list[PrototypeScene],
+        round_id: str | None = None,
+        contract: GenerationContract | None = None,
     ) -> dict[str, dict]:
         """Generate background images for each scene.
 
         Tries ImageService first; falls back to PIL placeholder on failure.
+
+        Args:
+            contract: Optional generation contract. When provided, the prompt
+                incorporates project art_direction, palette_baseline, camera_language,
+                and chapter mood/lighting/temperature biases.
 
         Returns:
             Mapping scene_id -> {"path": Path | None, "placeholder": bool, "source": str}
@@ -460,14 +1240,32 @@ Requirements:
                 settings = get_settings()
                 image_service = ImageService(settings)
                 if image_service.is_available():
-                    bg_prompt = (
-                        f"Background: {scene.location}. "
-                        f"Visual: {scene.location_visual_brief}. "
-                        f"Mood: {scene.mood}. "
+                    # Build background prompt with contract when available
+                    prompt_parts: list[str] = []
+                    if contract is not None:
+                        vc = contract.visual_contract
+                        if vc.art_direction:
+                            prompt_parts.append(f'Art direction: {vc.art_direction}.')
+                        if vc.camera_language:
+                            prompt_parts.append(f'Camera language: {vc.camera_language}.')
+                        if vc.palette_baseline:
+                            prompt_parts.append(f'Palette baseline: {vc.palette_baseline}.')
+                        if vc.mood_target:
+                            prompt_parts.append(f'Mood: {vc.mood_target}.')
+                        if vc.lighting_bias:
+                            prompt_parts.append(f'Lighting: {vc.lighting_bias}.')
+                        if vc.temperature_bias:
+                            prompt_parts.append(f'Temperature: {vc.temperature_bias}.')
+                    prompt_parts.append(f"Background: {scene.location}.")
+                    prompt_parts.append(f"Visual: {scene.location_visual_brief}.")
+                    if not contract or not contract.visual_contract.mood_target:
+                        prompt_parts.append(f"Mood: {scene.mood}.")
+                    prompt_parts.append(
                         "Visual novel background plate, 16:9, no characters, no text, no giant statues, "
                         "no giant masks, no close foreground props, no dominant central subject, "
                         "keep the lower foreground visually open for foreground sprites."
                     )
+                    bg_prompt = " ".join(prompt_parts)
                     gen_result = await image_service.generate_image(
                         project_dir=project_dir,
                         prompt=bg_prompt,
@@ -577,8 +1375,12 @@ Requirements:
     # ------------------------------------------------------------------
 
     async def generate_character_assets(
-        self, project_name: str, blueprint: ProjectBlueprint, scenes: list[PrototypeScene],
+        self,
+        project_name: str,
+        blueprint: ProjectBlueprint,
+        scenes: list[PrototypeScene],
         round_id: str | None = None,
+        contract: GenerationContract | None = None,
     ) -> dict[str, dict]:
         """Generate character sprite images for all characters in prototype scenes.
 
@@ -588,6 +1390,11 @@ Requirements:
 
         When round_id is provided, all new files are written to a round-scoped
         staging directory and only promoted to final paths on commit.
+
+        Args:
+            contract: Optional generation contract. When provided, character
+                identity anchors from the contract are treated as hard constraints,
+                and chapter mood/lighting biases influence presentation.
 
         Returns:
             Mapping character_name -> {
@@ -661,14 +1468,55 @@ Requirements:
             framing = "medium shot" if layout_mode == "solo" else ("medium shot" if layout_mode == "duo" else "medium-long shot")
             subject_height_guidance = self._character_subject_height_guidance(layout_mode)
 
-            char_prompt = (
-                f"Portrait of {char_name}. "
-                f"Appearance: {appearance}. "
-                f"Personality: {personality}. "
-                f"Scene setting: {ctx.get('location', 'unknown')}. "
-                f"Visual direction: {ctx.get('location_visual_brief', '')}. "
-                f"Mood: {ctx.get('mood', 'neutral')}. "
-                f"Camera framing: {framing}, centered on character. "
+            # Build character prompt with contract when available
+            prompt_parts: list[str] = []
+            prompt_parts.append(f"Portrait of {char_name}.")
+
+            # If contract provides identity anchors for this character, use them as hard constraints
+            identity_anchors: list[str] = []
+            default_costume: str = ""
+            if contract is not None:
+                for char_entry in contract.character_contract.characters:
+                    if char_entry.name == char_name:
+                        identity_anchors = char_entry.identity_anchors
+                        default_costume = char_entry.default_costume
+                        break
+
+            if identity_anchors:
+                prompt_parts.append(f"Identity anchors: {', '.join(identity_anchors)}.")
+            if default_costume:
+                prompt_parts.append(f"Costume: {default_costume}.")
+            if not identity_anchors:
+                prompt_parts.append(f"Appearance: {appearance}.")
+            if personality:
+                prompt_parts.append(f"Personality: {personality}.")
+
+            prompt_parts.append(f"Scene setting: {ctx.get('location', 'unknown')}.")
+            prompt_parts.append(f"Visual direction: {ctx.get('location_visual_brief', '')}.")
+
+            # Mood / lighting: prefer contract chapter bias, fallback to scene mood
+            mood_text = ctx.get('mood', 'neutral')
+            lighting_text = ""
+            art_direction_text = ""
+            if contract is not None:
+                vc = contract.visual_contract
+                if vc.mood_target:
+                    mood_text = vc.mood_target
+                if vc.lighting_bias:
+                    lighting_text = vc.lighting_bias
+                if vc.temperature_bias:
+                    lighting_text = f"{lighting_text}, {vc.temperature_bias}" if lighting_text else vc.temperature_bias
+                if vc.art_direction:
+                    art_direction_text = vc.art_direction
+
+            prompt_parts.append(f"Mood: {mood_text}.")
+            if lighting_text:
+                prompt_parts.append(f"Lighting: {lighting_text}.")
+            if art_direction_text:
+                prompt_parts.append(f"Art direction: {art_direction_text}.")
+
+            prompt_parts.append(f"Camera framing: {framing}, centered on character.")
+            prompt_parts.append(
                 "Visual novel character sprite style, one person only, single character, "
                 "standing pose, facing viewer, centered composition, white/plain background, minimal background, "
                 f"full body visible, clean line art, anime style, {subject_height_guidance}, "
@@ -679,6 +1527,7 @@ Requirements:
                 "Same art direction, lighting, and color palette as the scene background. "
                 "Matching atmosphere for seamless visual novel composition."
             )
+            char_prompt = " ".join(prompt_parts)
 
             intermediate_paths: list[str] = []
             image_generated = False
@@ -1063,6 +1912,7 @@ Requirements:
         background_assets: dict[str, Any] | None = None,
         character_assets: dict[str, dict] | None = None,
         cjk_font_config: dict | None = None,
+        next_chapter_start_label: str | None = None,
     ) -> str:
         """Generate and write a minimal executable .rpy script skeleton to a staging file.
 
@@ -1075,6 +1925,9 @@ Requirements:
                 Supports both new dict format {"path": Path, "placeholder": bool}
                 and legacy Path format for backward compatibility.
             character_assets: Optional mapping of character_name -> {"path": Path, "placeholder": bool}.
+            next_chapter_start_label: When the last scene in this chapter has no
+                ``next_scene_id``, jump to this label instead of returning.  Used
+                by the multi-chapter script generator to chain chapters.
 
         Returns:
             The staging relative file path.
@@ -1248,12 +2101,17 @@ Requirements:
                 next_scene = next((s for s in scenes if s.scene_id == scene.next_scene_id), None)
                 if next_scene:
                     lines.append(f"    jump {next_scene.entry_label}")
+                elif next_chapter_start_label:
+                    lines.append(f"    jump {next_chapter_start_label}")
                 else:
                     lines.append('    "To be continued..."')
                     lines.append("    return")
             else:
-                lines.append('    "End of prototype."')
-                lines.append("    return")
+                if next_chapter_start_label:
+                    lines.append(f"    jump {next_chapter_start_label}")
+                else:
+                    lines.append('    "End of prototype."')
+                    lines.append("    return")
             lines.append("")
 
         staging_file.write_text("\n".join(lines), encoding="utf-8")

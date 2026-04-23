@@ -267,7 +267,7 @@ def test_confirmation_success_creates_prototype_artifacts(monkeypatch, client: T
         ),
     ]
 
-    async def _mock_generate_scenes(self, chapter, blueprint):
+    async def _mock_generate_scenes(self, chapter, blueprint, contract=None):
         return mock_scenes
 
     monkeypatch.setattr(

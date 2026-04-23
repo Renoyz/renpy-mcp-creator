@@ -26,6 +26,68 @@ export interface ProjectMeta {
   updated_at?: string;
 }
 
+export interface BriefCard {
+  content: string | Record<string, unknown>;
+  confirmed: boolean;
+}
+
+export interface CharacterIdentity {
+  character_id: string;
+  name: string;
+  story_role: string;
+  core_motivation: string;
+  personality_anchors: string[];
+  visual_identity_anchors: string[];
+  forbidden_drift: string[];
+}
+
+export interface RelationshipBaseline {
+  pair: string[];
+  baseline: string;
+  must_preserve: string[];
+}
+
+export interface CharacterIdentityContent {
+  characters: CharacterIdentity[];
+  [key: string]: unknown;
+}
+
+export interface ProjectBrief {
+  cards: Record<string, BriefCard>;
+  updated_at: string;
+}
+
+export interface ChapterOutlineEntry {
+  chapter_id: string;
+  order: number;
+  chapter_name: string;
+  chapter_goal: string;
+  key_conflict: string;
+  emotional_arc: string;
+  reveals: string;
+  end_state: string;
+  mood_or_pacing_bias: string;
+  character_focus: string[];
+  relationship_shift: string;
+  character_presentation_notes: string;
+  confirmed: boolean;
+}
+
+export interface ChapterOutline {
+  chapters: ChapterOutlineEntry[];
+  updated_at: string;
+}
+
+export interface RefinementStatus {
+  refinement_state: string | null;
+  brief_fully_confirmed: boolean;
+  outline_fully_confirmed: boolean;
+  blueprint_ready: boolean;
+  freeze_allowed: boolean;
+  blueprint_freeze_status: string | null;
+  generation_allowed: boolean;
+}
+
 export interface DialogueBeat {
   speaker: string;
   intent: string;
@@ -138,6 +200,12 @@ interface ProjectContextValue {
   } | null;
   interviewMessages: InterviewMessage[];
   generationProgress: GenerationProgress | null;
+  brief: ProjectBrief | null;
+  chapterOutline: ChapterOutline | null;
+  refinementStatus: RefinementStatus | null;
+  briefError: string | null;
+  chapterOutlineError: string | null;
+  refinementStatusError: string | null;
   refresh: () => Promise<void>;
   selectProject: (name: string) => Promise<CurrentProject | null>;
   loadProjectData: (name: string) => Promise<void>;
@@ -148,6 +216,14 @@ interface ProjectContextValue {
   registerBlueprintConfirmationSender: (sender: (approved: boolean) => boolean) => (() => void);
   registerBlueprintStartSender: (sender: () => void) => (() => void);
   handleBlueprintEvent: (event: any) => void;
+  loadBrief: (name: string) => Promise<void>;
+  saveBrief: (name: string, brief: ProjectBrief) => Promise<void>;
+  confirmCard: (name: string, cardKey: string) => Promise<void>;
+  loadChapterOutline: (name: string) => Promise<void>;
+  saveChapterOutline: (name: string, outline: ChapterOutline) => Promise<void>;
+  confirmChapter: (name: string, chapterId: string) => Promise<void>;
+  loadRefinementStatus: (name: string) => Promise<void>;
+  freezeBlueprint: (name: string) => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextValue | undefined>(undefined);
@@ -174,6 +250,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const [interviewMessages, setInterviewMessages] = useState<InterviewMessage[]>([]);
   const [generationProgress, setGenerationProgress] = useState<GenerationProgress | null>(null);
+  const [brief, setBrief] = useState<ProjectBrief | null>(null);
+  const [chapterOutline, setChapterOutline] = useState<ChapterOutline | null>(null);
+  const [refinementStatus, setRefinementStatus] = useState<RefinementStatus | null>(null);
+  const [briefError, setBriefError] = useState<string | null>(null);
+  const [chapterOutlineError, setChapterOutlineError] = useState<string | null>(null);
+  const [refinementStatusError, setRefinementStatusError] = useState<string | null>(null);
   const blueprintConfirmationSenderRef = useRef<((approved: boolean) => boolean) | null>(null);
   const blueprintStartSenderRef = useRef<(() => void) | null>(null);
   const pendingStartRef = useRef(false);
@@ -262,18 +344,27 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setWorkflowConfirmation(null);
     setInterviewMessages([]);
     setGenerationProgress(null);
+    setBrief(null);
+    setChapterOutline(null);
+    setRefinementStatus(null);
+    setBriefError(null);
+    setChapterOutlineError(null);
+    setRefinementStatusError(null);
     if (genTimerRef.current) {
       clearInterval(genTimerRef.current);
       genTimerRef.current = null;
     }
 
     try {
-      const [metaResp, bpResp, scenesResp, mapResp, sessionResp] = await Promise.all([
+      const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp] = await Promise.all([
         fetch(`/api/projects/${encodeURIComponent(name)}/meta`),
         fetch(`/api/projects/${encodeURIComponent(name)}/blueprint`),
         fetch(`/api/projects/${encodeURIComponent(name)}/scenes`),
         fetch(`/api/projects/${encodeURIComponent(name)}/storymap`),
         fetch(`/api/projects/${encodeURIComponent(name)}/blueprint-session`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/brief`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/refinement-status`),
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
@@ -316,6 +407,42 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setStorymap(mapJson);
       } else if (mapResp.status === 404) {
         setStorymap(null);
+      }
+
+      if (briefResp.ok) {
+        const briefJson = await briefResp.json();
+        setBrief(briefJson);
+        setBriefError(null);
+      } else if (briefResp.status === 404) {
+        setBrief(null);
+        setBriefError(null);
+      } else {
+        const err = await briefResp.json().catch(() => ({}));
+        setBriefError(err.detail || `Failed to load Project Brief: ${briefResp.status}`);
+      }
+
+      if (outlineResp.ok) {
+        const outlineJson = await outlineResp.json();
+        setChapterOutline(outlineJson);
+        setChapterOutlineError(null);
+      } else if (outlineResp.status === 404) {
+        setChapterOutline(null);
+        setChapterOutlineError(null);
+      } else {
+        const err = await outlineResp.json().catch(() => ({}));
+        setChapterOutlineError(err.detail || `Failed to load Chapter Outline: ${outlineResp.status}`);
+      }
+
+      if (refinementResp.ok) {
+        const refinementJson = await refinementResp.json();
+        setRefinementStatus(refinementJson);
+        setRefinementStatusError(null);
+      } else if (refinementResp.status === 404) {
+        setRefinementStatus(null);
+        setRefinementStatusError(null);
+      } else {
+        const err = await refinementResp.json().catch(() => ({}));
+        setRefinementStatusError(err.detail || `Failed to load refinement status: ${refinementResp.status}`);
       }
 
       let sessionData: any = null;
@@ -436,6 +563,131 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [currentProject]);
+
+  const loadBrief = useCallback(async (name: string) => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/brief`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setBrief(data);
+        setBriefError(null);
+      } else if (resp.status === 404) {
+        setBrief(null);
+        setBriefError(null);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setBriefError(err.detail || `Failed to load Project Brief: ${resp.status}`);
+      }
+    } catch (e) {
+      setBriefError(e instanceof Error ? e.message : "Network error");
+    }
+  }, []);
+
+  const saveBrief = useCallback(async (name: string, briefData: ProjectBrief) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/brief`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(briefData),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Save brief failed: ${resp.status}`);
+    }
+    await loadBrief(name);
+    await loadRefinementStatus(name);
+  }, [loadBrief]);
+
+  const confirmCard = useCallback(async (name: string, cardKey: string) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/brief/confirm-card`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ card_key: cardKey }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Confirm card failed: ${resp.status}`);
+    }
+    await loadBrief(name);
+    await loadRefinementStatus(name);
+  }, [loadBrief]);
+
+  const loadChapterOutline = useCallback(async (name: string) => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setChapterOutline(data);
+        setChapterOutlineError(null);
+      } else if (resp.status === 404) {
+        setChapterOutline(null);
+        setChapterOutlineError(null);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setChapterOutlineError(err.detail || `Failed to load Chapter Outline: ${resp.status}`);
+      }
+    } catch (e) {
+      setChapterOutlineError(e instanceof Error ? e.message : "Network error");
+    }
+  }, []);
+
+  const saveChapterOutline = useCallback(async (name: string, outline: ChapterOutline) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(outline),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Save outline failed: ${resp.status}`);
+    }
+    await loadChapterOutline(name);
+    await loadRefinementStatus(name);
+  }, [loadChapterOutline]);
+
+  const confirmChapter = useCallback(async (name: string, chapterId: string) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline/confirm-chapter`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Confirm chapter failed: ${resp.status}`);
+    }
+    await loadChapterOutline(name);
+    await loadRefinementStatus(name);
+  }, [loadChapterOutline]);
+
+  const loadRefinementStatus = useCallback(async (name: string) => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/refinement-status`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setRefinementStatus(data);
+        setRefinementStatusError(null);
+      } else if (resp.status === 404) {
+        setRefinementStatus(null);
+        setRefinementStatusError(null);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setRefinementStatusError(err.detail || `Failed to load refinement status: ${resp.status}`);
+      }
+    } catch (e) {
+      setRefinementStatusError(e instanceof Error ? e.message : "Network error");
+    }
+  }, []);
+
+  const freezeBlueprint = useCallback(async (name: string) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/blueprint/freeze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Freeze blueprint failed: ${resp.status}`);
+    }
+    await loadProjectData(name);
+  }, [loadProjectData]);
 
   const setBlueprintPhase = useCallback((phase: BlueprintPhase) => {
     setBlueprintPhaseState(phase);
@@ -580,6 +832,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         workflowConfirmation,
         interviewMessages,
         generationProgress,
+        brief,
+        chapterOutline,
+        refinementStatus,
+        briefError,
+        chapterOutlineError,
+        refinementStatusError,
         refresh,
         selectProject,
         loadProjectData,
@@ -590,6 +848,14 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         registerBlueprintConfirmationSender,
         registerBlueprintStartSender,
         handleBlueprintEvent,
+        loadBrief,
+        saveBrief,
+        confirmCard,
+        loadChapterOutline,
+        saveChapterOutline,
+        confirmChapter,
+        loadRefinementStatus,
+        freezeBlueprint,
       }}
     >
       {children}

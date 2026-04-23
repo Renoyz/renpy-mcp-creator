@@ -7,6 +7,9 @@ import { BlueprintWorkspaceView } from "../components/workspace/BlueprintWorkspa
 import { StoryMapWorkspaceView } from "../components/workspace/StoryMapWorkspaceView";
 import { SceneWorkspaceView } from "../components/workspace/SceneWorkspaceView";
 import { WorkspaceOnboardingView } from "../components/workspace/WorkspaceOnboardingView";
+import { BriefWorkspaceView } from "../components/workspace/BriefWorkspaceView";
+import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutlineWorkspaceView";
+import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
 import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
 
 type Status = "idle" | "running" | "success" | "failed";
@@ -26,16 +29,27 @@ export function ProjectWorkspacePage() {
     error,
     blueprintPhase,
     generationProgress,
+    brief,
+    chapterOutline,
+    refinementStatus,
+    briefError,
+    chapterOutlineError,
+    refinementStatusError,
     selectProject,
     loadProjectData,
     selectScene,
     startBlueprintCollection,
+    saveBrief,
+    confirmCard,
+    saveChapterOutline,
+    confirmChapter,
+    freezeBlueprint,
   } = useProject();
 
   const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   const snapshotLoadTokenRef = useRef(0);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("blueprint");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("brief");
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
@@ -93,8 +107,7 @@ export function ProjectWorkspacePage() {
     });
   }, [name, activeProjectName, loadProjectData]);
 
-  const hasEditingWorkspace = !!blueprint || blueprintPhase === "editing";
-  const isOnboarding = !hasEditingWorkspace;
+  const canRunBuildPreview = !!blueprint;
 
   // Reset build/preview local state and active tab when project changes
   useEffect(() => {
@@ -105,7 +118,7 @@ export function ProjectWorkspacePage() {
     setPreviewUrl(null);
     setPreviewAvailable(false);
     setPipelineStage("idle");
-    setActiveTab("blueprint");
+    setActiveTab("brief");
   }, [name]);
 
   // Load unified pipeline status on mount / project change
@@ -249,6 +262,11 @@ export function ProjectWorkspacePage() {
     setActiveTab("scene");
   };
 
+  const handleFreezeBlueprint = async () => {
+    if (!activeProjectName) return;
+    await freezeBlueprint(activeProjectName);
+  };
+
   if (!name) {
     return null;
   }
@@ -292,7 +310,7 @@ export function ProjectWorkspacePage() {
               </div>
             )}
           </div>
-          {!isOnboarding && (
+          {canRunBuildPreview && (
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={handleBuild}
@@ -334,7 +352,14 @@ export function ProjectWorkspacePage() {
           )}
         </div>
 
-        {!isOnboarding && buildMessage && (
+        <div className="mt-3">
+          <RefinementStatusPanel
+            status={refinementStatus}
+            error={refinementStatusError}
+            onFreeze={handleFreezeBlueprint}
+          />
+        </div>
+        {canRunBuildPreview && buildMessage && (
           <div
             data-testid="build-status"
             className={`mt-2 rounded-md p-2 text-xs ${
@@ -351,7 +376,7 @@ export function ProjectWorkspacePage() {
             )}
           </div>
         )}
-        {!isOnboarding && previewMessage && (
+        {canRunBuildPreview && previewMessage && (
           <div
             className={`mt-2 rounded-md p-2 text-xs ${
               previewStatus === "failed"
@@ -362,7 +387,7 @@ export function ProjectWorkspacePage() {
             {previewMessage}
           </div>
         )}
-        {!isOnboarding && previewUrl && (
+        {canRunBuildPreview && previewUrl && (
           <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-xs">
             <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-50 text-green-700 text-xs font-medium mr-2">
               Preview Running
@@ -389,52 +414,74 @@ export function ProjectWorkspacePage() {
 
       {/* Main workspace area */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left: Chapter/Scene navigation — only in editing */}
-        {!isOnboarding && (
-          <div data-testid="workspace-sidebar" className="w-60 flex-shrink-0 bg-gray-50/50 border-r border-gray-200">
-            <WorkspaceSidebar
-              chapters={chapters}
-              selectedSceneId={selectedSceneId}
-              onSelectScene={handleSelectScene}
-            />
-          </div>
-        )}
+        {/* Left: Chapter/Scene navigation */}
+        <div data-testid="workspace-sidebar" className="w-60 flex-shrink-0 bg-gray-50/50 border-r border-gray-200">
+          <WorkspaceSidebar
+            chapters={chapters}
+            selectedSceneId={selectedSceneId}
+            onSelectScene={handleSelectScene}
+          />
+        </div>
 
         {/* Main content */}
-        <div className={`flex-1 min-w-0 flex flex-col ${isOnboarding ? "bg-gray-50" : "bg-white"}`}>
-          {isOnboarding ? (
-            <div data-testid="workspace-onboarding-view" className="flex-1 overflow-hidden">
-              <WorkspaceOnboardingView
-                phase={blueprintPhase}
-                generationProgress={generationProgress}
-                onStartAI={() => {
-                  startBlueprintCollection();
-                  window.dispatchEvent(new CustomEvent("open-chat-drawer"));
-                }}
-
+        <div className="flex-1 min-w-0 flex flex-col bg-white">
+          <WorkspaceTabs
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            hasSceneSelected={!!selectedSceneId}
+            onBackToOverview={() => setActiveTab("blueprint")}
+          />
+          <div className="flex-1 overflow-hidden">
+            {activeTab === "brief" && (
+              <BriefWorkspaceView
+                brief={brief}
+                projectName={activeProjectName}
+                onSave={saveBrief}
+                onConfirmCard={confirmCard}
+                error={briefError}
               />
-            </div>
-          ) : (
-            <>
-              <WorkspaceTabs
-                activeTab={activeTab}
-                onChange={setActiveTab}
-                hasSceneSelected={!!selectedSceneId}
-                onBackToOverview={() => setActiveTab("blueprint")}
+            )}
+            {activeTab === "outline" && (
+              <ChapterOutlineWorkspaceView
+                outline={chapterOutline}
+                projectName={activeProjectName}
+                onSave={saveChapterOutline}
+                onConfirmChapter={confirmChapter}
+                error={chapterOutlineError}
               />
-              <div className="flex-1 overflow-hidden">
-                {activeTab === "blueprint" && <BlueprintWorkspaceView blueprint={blueprint} />}
-                {activeTab === "storymap" && <StoryMapWorkspaceView storymap={storymap} chapters={chapters} />}
-                {activeTab === "scene" && (
-                  <SceneWorkspaceView
-                    script={selectedSceneScript}
-                    scriptError={scriptError}
-                    chapters={chapters}
+            )}
+            {activeTab === "blueprint" && (
+              !blueprint &&
+              blueprintPhase !== "editing" &&
+              !refinementStatus?.freeze_allowed &&
+              refinementStatus?.blueprint_freeze_status !== "stale" ? (
+                <div data-testid="workspace-onboarding-view" className="h-full overflow-hidden">
+                  <WorkspaceOnboardingView
+                    phase={blueprintPhase}
+                    generationProgress={generationProgress}
+                    onStartAI={() => {
+                      startBlueprintCollection();
+                      window.dispatchEvent(new CustomEvent("open-chat-drawer"));
+                    }}
                   />
-                )}
-              </div>
-            </>
-          )}
+                </div>
+              ) : (
+                <BlueprintWorkspaceView
+                  blueprint={blueprint}
+                  refinementStatus={refinementStatus}
+                  onFreeze={handleFreezeBlueprint}
+                />
+              )
+            )}
+            {activeTab === "storymap" && <StoryMapWorkspaceView storymap={storymap} chapters={chapters} />}
+            {activeTab === "scene" && (
+              <SceneWorkspaceView
+                script={selectedSceneScript}
+                scriptError={scriptError}
+                chapters={chapters}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
