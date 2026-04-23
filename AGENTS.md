@@ -6,17 +6,25 @@ This file is for AI coding agents working in this repository.
 
 - This file applies to AI coding agents only.
 - Optimize for small, verifiable changes.
-- Do not expand work into Phase 6 unless the user explicitly asks for it.
+- Do not expand work into a later phase unless the user explicitly asks for it.
 
 ## Current Product State
 
-- This repository is currently in late **Phase 5** of the dashboard/backend refactor plan.
+- This repository is currently in early **Phase 6** of the dashboard/backend refactor plan.
 - The active product loop is:
   - confirmed blueprint
   - prototype scene generation
   - background / sprite / font asset generation
   - script writeback
   - build / preview
+- The current Phase 6 focus is:
+  - multi-chapter generation
+  - generation-before-audit consistency constraints
+- Phase 7 owns:
+  - audit
+  - preview evidence capture / inspector
+  - audit UI
+  - Creator / Auditor handoff points
 - The primary plan source is:
   - [`docs/plans/2026-04-17-dashboard-backend-refactor-plan.md`](docs/plans/2026-04-17-dashboard-backend-refactor-plan.md)
 
@@ -37,6 +45,8 @@ This file is for AI coding agents working in this repository.
 - Do not break rollback or staged-replacement guarantees for prototype generation.
 - Do not fix only the success path; failure and rollback behavior must be considered for any pipeline change.
 - Do not introduce mock or simulate-only frontend flows into production codepaths.
+- Do not pull audit work, preview evidence capture, or audit UI forward into Phase 6 unless explicitly requested.
+- Do not let automated tests call real LLM or image-generation services by default.
 
 ## Prototype Pipeline Guardrails
 
@@ -81,6 +91,12 @@ At minimum, run the affected tests after each change:
 - E2E when workflow, preview, or workspace behavior changes:
   - `uv run pytest tests/e2e/...`
 
+For any test that touches generation paths:
+
+- Stub `ImageService.generate_image(...)` when image output matters to the behavior under test.
+- Or force `ImageService.is_available()` to be `False` when the test should exercise fallback behavior.
+- Do not rely on local `.env` credentials or real external AI services during automated tests.
+
 Do not claim a fix is complete without naming the tests run and their results.
 
 ## Preferred Workflow
@@ -96,9 +112,12 @@ Do not claim a fix is complete without naming the tests run and their results.
 
 ## Known High-Risk Areas
 
+- multi-chapter generation without breaking the current single-chapter prototype path
+- generation-before-audit style consistency across chapters
 - confirmation-response latency and websocket progress streaming
 - prototype rollback transactional boundaries
 - same-path regeneration of background and sprite assets
 - sprite renderability and suppression rules
 - runtime CJK font correctness in web preview
 - path normalization between script, index, and API layers
+- accidental use of real external AI credentials during tests
