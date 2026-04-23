@@ -78,6 +78,21 @@ export interface ChapterOutline {
   updated_at: string;
 }
 
+export interface ChapterIntakeEntry {
+  chapter_id: string;
+  order: number;
+  chapter_name: string;
+  chapter_goal?: string;
+  key_conflict?: string;
+  emotional_arc?: string;
+  reveals?: string;
+  end_state?: string;
+  mood_or_pacing_bias?: string;
+  character_focus?: string[];
+  relationship_shift?: string;
+  character_presentation_notes?: string;
+}
+
 export interface RefinementStatus {
   refinement_state: string | null;
   brief_fully_confirmed: boolean;
@@ -88,7 +103,9 @@ export interface RefinementStatus {
   generation_allowed: boolean;
   intake_phase?: string | null;
   brief_draft_ready?: boolean;
+  outline_draft_ready?: boolean;
   intake_required?: boolean;
+  chapter_intake_required?: boolean;
 }
 
 export interface IntakeSlot {
@@ -102,6 +119,8 @@ export interface RefinementIntake {
   missing_slots: string[];
   slots: Record<string, IntakeSlot>;
   brief_draft_ready: boolean;
+  chapter_draft: ChapterIntakeEntry[];
+  outline_draft_ready: boolean;
   updated_at: string;
 }
 
@@ -245,6 +264,7 @@ interface ProjectContextValue {
   loadRefinementIntake: (name: string) => Promise<void>;
   freezeBlueprint: (name: string) => Promise<void>;
   promoteBriefDraft: (name: string) => Promise<void>;
+  promoteOutlineDraft: (name: string) => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextValue | undefined>(undefined);
@@ -758,6 +778,18 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     await loadProjectData(name);
   }, [loadProjectData]);
 
+  const promoteOutlineDraft = useCallback(async (name: string) => {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline/promote-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Promote outline draft failed: ${resp.status}`);
+    }
+    await loadProjectData(name);
+  }, [loadProjectData]);
+
   const setBlueprintPhase = useCallback((phase: BlueprintPhase) => {
     setBlueprintPhaseState(phase);
   }, []);
@@ -929,6 +961,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         loadRefinementIntake,
         freezeBlueprint,
         promoteBriefDraft,
+        promoteOutlineDraft,
       }}
     >
       {children}

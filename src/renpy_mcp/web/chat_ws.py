@@ -15,11 +15,13 @@ from pydantic import ValidationError
 
 from ..blueprint.models import (
     BlueprintCharacter,
+    ChapterIntakeEntry,
     ChapterSummary,
     IntakePhase,
     IntakeSlot,
     PipelineStage,
     ProjectBlueprint,
+    ProjectBrief,
     ProjectStatus,
     RefinementIntake,
     SceneSummary,
@@ -596,61 +598,168 @@ class BlueprintOrchestrator:
             "constraints",
         ]
 
+    def _build_chapter_intake_entry(self, chapter) -> ChapterIntakeEntry:
+        scene_names = [scene.name for scene in chapter.scenes if scene.name]
+        first_scene_name = scene_names[0] if scene_names else chapter.name
+        last_scene_name = scene_names[-1] if scene_names else chapter.name
+
+        character_focus: list[str] = []
+        for scene in chapter.scenes:
+            for character in scene.characters:
+                if character and character not in character_focus:
+                    character_focus.append(character)
+
+        chapter_goal = (
+            f"Advance {chapter.name} through {first_scene_name}"
+            if first_scene_name
+            else f"Advance {chapter.name}"
+        )
+        key_conflict = (
+            f"Pressure escalates around {last_scene_name}"
+            if last_scene_name
+            else f"Core conflict in {chapter.name}"
+        )
+        emotional_arc = "setup -> escalation" if len(scene_names) > 1 else "setup -> turn"
+        reveals = last_scene_name or chapter.name
+        end_state = last_scene_name or chapter.name
+        mood_or_pacing_bias = "measured" if len(scene_names) <= 2 else "escalating"
+        relationship_shift = ""
+        if len(character_focus) >= 2:
+            relationship_shift = f"{character_focus[0]} and {character_focus[1]} face new pressure together"
+        character_presentation_notes = (
+            f"Keep visual focus on {', '.join(character_focus)}"
+            if character_focus
+            else f"Carry forward the chapter identity of {chapter.name}"
+        )
+
+        return ChapterIntakeEntry(
+            chapter_id=chapter.id,
+            order=chapter.order,
+            chapter_name=chapter.name,
+            chapter_goal=chapter_goal,
+            key_conflict=key_conflict,
+            emotional_arc=emotional_arc,
+            reveals=reveals,
+            end_state=end_state,
+            mood_or_pacing_bias=mood_or_pacing_bias,
+            character_focus=character_focus,
+            relationship_shift=relationship_shift,
+            character_presentation_notes=character_presentation_notes,
+        )
+
+    def _is_brief_fully_confirmed(self) -> bool:
+        """Check whether the project's brief is fully confirmed on disk."""
+        try:
+            brief = self.pm.read_project_brief(self.project_name)
+        except Exception:
+            return False
+        if brief is None or not brief.cards:
+            return False
+        for card_key, card in brief.cards.items():
+            if not card.confirmed:
+                return False
+            if card_key == "character_identity":
+                if not isinstance(card.content, dict):
+                    return False
+                characters = card.content.get("characters", [])
+                if not characters:
+                    return False
+                for entry in characters:
+                    has_substance = bool(
+                        entry.get("story_role", "").strip()
+                        or entry.get("core_motivation", "").strip()
+                        or entry.get("personality_anchors", [])
+                        or entry.get("visual_identity_anchors", [])
+                        or entry.get("forbidden_drift", [])
+                    )
+                    if not has_substance:
+                        return False
+        return True
+
     def _write_refinement_intake(self, *, latest_user_content: str | None = None) -> None:
+        brief_confirmed = self._is_brief_fully_confirmed()
+
         if self.phase == PipelineStage.REVIEWING and self.draft is not None:
-            characters = [
-                {
-                    "character_id": re.sub(r"[^a-z0-9]+", "_", ch.name.lower()).strip("_") or f"char_{idx + 1}",
-                    "name": ch.name,
-                    "story_role": ch.role,
-                    "core_motivation": "",
-                    "personality_anchors": [ch.personality] if ch.personality else [],
-                    "visual_identity_anchors": [ch.appearance] if ch.appearance else [],
-                    "forbidden_drift": [],
+            if brief_confirmed:
+                # Chapter-level outline draft ready
+                chapter_draft = [self._build_chapter_intake_entry(ch) for ch in self.draft.chapters]
+                current_summary = f"Chapter outline draft ready with {len(chapter_draft)} chapters"
+                phase = IntakePhase.OUTLINE_READY
+                brief_draft_ready = True
+                outline_draft_ready = True
+            else:
+                # Project-level brief draft ready
+                characters = [
+                    {
+                        "character_id": re.sub(r"[^a-z0-9]+", "_", ch.name.lower()).strip("_") or f"char_{idx + 1}",
+                        "name": ch.name,
+                        "story_role": ch.role,
+                        "core_motivation": "",
+                        "personality_anchors": [ch.personality] if ch.personality else [],
+                        "visual_identity_anchors": [ch.appearance] if ch.appearance else [],
+                        "forbidden_drift": [],
+                    }
+                    for idx, ch in enumerate(self.draft.characters)
+                ]
+                slots = {
+                    "core_premise": IntakeSlot(
+                        value=f"{self.draft.genre} story in {self.draft.worldview}".strip(),
+                        complete=bool(self.draft.genre or self.draft.worldview),
+                    ),
+                    "audience_genre": IntakeSlot(value=self.draft.genre, complete=bool(self.draft.genre)),
+                    "tone_themes": IntakeSlot(value=", ".join(self.draft.themes), complete=bool(self.draft.themes)),
+                    "visual_style": IntakeSlot(value=self.draft.art_style, complete=bool(self.draft.art_style)),
+                    "world_rules": IntakeSlot(value=self.draft.worldview, complete=bool(self.draft.worldview)),
+                    "core_cast": IntakeSlot(
+                        value=", ".join(ch.name for ch in self.draft.characters),
+                        complete=bool(self.draft.characters),
+                    ),
+                    "character_identity": IntakeSlot(
+                        value={"characters": characters},
+                        complete=bool(characters),
+                    ),
+                    "relationship_baselines": IntakeSlot(value={"relationships": []}, complete=False),
+                    "constraints": IntakeSlot(value="", complete=False),
                 }
-                for idx, ch in enumerate(self.draft.characters)
-            ]
-            slots = {
-                "core_premise": IntakeSlot(
-                    value=f"{self.draft.genre} story in {self.draft.worldview}".strip(),
-                    complete=bool(self.draft.genre or self.draft.worldview),
-                ),
-                "audience_genre": IntakeSlot(value=self.draft.genre, complete=bool(self.draft.genre)),
-                "tone_themes": IntakeSlot(value=", ".join(self.draft.themes), complete=bool(self.draft.themes)),
-                "visual_style": IntakeSlot(value=self.draft.art_style, complete=bool(self.draft.art_style)),
-                "world_rules": IntakeSlot(value=self.draft.worldview, complete=bool(self.draft.worldview)),
-                "core_cast": IntakeSlot(
-                    value=", ".join(ch.name for ch in self.draft.characters),
-                    complete=bool(self.draft.characters),
-                ),
-                "character_identity": IntakeSlot(
-                    value={"characters": characters},
-                    complete=bool(characters),
-                ),
-                "relationship_baselines": IntakeSlot(value={"relationships": []}, complete=False),
-                "constraints": IntakeSlot(value="", complete=False),
-            }
-            current_summary = f"{self.draft.genre} in {self.draft.worldview}".strip()
-            phase = IntakePhase.BRIEF_READY
-            brief_draft_ready = True
+                current_summary = f"{self.draft.genre} in {self.draft.worldview}".strip()
+                phase = IntakePhase.BRIEF_READY
+                brief_draft_ready = True
+                outline_draft_ready = False
+                chapter_draft = []
         else:
             latest = (latest_user_content or "").strip()
-            slots = {key: IntakeSlot() for key in self._project_intake_slot_keys()}
-            if latest:
-                slots["core_premise"] = IntakeSlot(value=latest, complete=True)
-            current_summary = latest
-            phase = IntakePhase.PROJECT
-            brief_draft_ready = False
+            if brief_confirmed:
+                # Chapter-level collecting
+                slots = {}
+                current_summary = latest
+                phase = IntakePhase.CHAPTER
+                brief_draft_ready = True
+                outline_draft_ready = False
+                chapter_draft = []
+            else:
+                # Project-level collecting
+                slots = {key: IntakeSlot() for key in self._project_intake_slot_keys()}
+                if latest:
+                    slots["core_premise"] = IntakeSlot(value=latest, complete=True)
+                current_summary = latest
+                phase = IntakePhase.PROJECT
+                brief_draft_ready = False
+                outline_draft_ready = False
+                chapter_draft = []
 
-        missing_slots = [key for key, slot in slots.items() if not slot.complete]
-        intake = RefinementIntake(
-            phase=phase,
-            current_summary=current_summary,
-            missing_slots=missing_slots,
-            slots=slots,
-            brief_draft_ready=brief_draft_ready,
-            updated_at=datetime.utcnow().isoformat(),
-        )
+        missing_slots = [key for key, slot in slots.items() if not slot.complete] if "slots" in dir() else []
+        # Build intake with whatever state we determined
+        kwargs: dict[str, Any] = {
+            "phase": phase,
+            "current_summary": current_summary,
+            "missing_slots": missing_slots,
+            "slots": slots if "slots" in dir() else {},
+            "brief_draft_ready": brief_draft_ready,
+            "outline_draft_ready": outline_draft_ready,
+            "chapter_draft": chapter_draft,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        intake = RefinementIntake(**kwargs)
         self.pm.write_refinement_intake(self.project_name, intake)
 
     async def _generate_draft_via_llm(self) -> ProjectBlueprint:

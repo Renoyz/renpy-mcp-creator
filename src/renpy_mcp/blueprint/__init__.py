@@ -3,6 +3,7 @@
 from .models import (
     BlueprintCharacter,
     BriefCard,
+    ChapterIntakeEntry,
     ChapterOutline,
     ChapterOutlineEntry,
     ChapterStyleProfile,
@@ -43,6 +44,7 @@ from .models import (
 __all__ = [
     "BlueprintCharacter",
     "BriefCard",
+    "ChapterIntakeEntry",
     "ChapterOutline",
     "ChapterOutlineEntry",
     "ChapterStyleProfile",

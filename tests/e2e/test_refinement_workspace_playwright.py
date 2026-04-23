@@ -888,3 +888,184 @@ def test_workspace_generation_stays_blocked_until_freeze(
     assert data["blueprint_freeze_status"] == "not_frozen"
     assert data["generation_allowed"] is False
     expect(page.locator("text=Freeze the blueprint to unlock generation")).to_be_visible(timeout=10000)
+
+
+def _seed_project_brief_confirmed(workspace: Path, project_name: str) -> None:
+    """Seed a fully confirmed project brief."""
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    brief = {
+        "cards": {
+            "core_premise": {"content": "A story about discovery.", "confirmed": True},
+            "audience_genre": {"content": "Sci-fi, teens.", "confirmed": True},
+            "tone_themes": {"content": "Hopeful, exploration.", "confirmed": True},
+            "visual_style": {"content": "Cel-shaded, neon.", "confirmed": True},
+            "world_rules": {"content": "Faster-than-light travel exists.", "confirmed": True},
+            "core_cast": {"content": "Elena, Marcus, AI companion.", "confirmed": True},
+            "character_identity": {
+                "content": {
+                    "characters": [
+                        {
+                            "character_id": "elena",
+                            "name": "Elena",
+                            "story_role": "Protagonist",
+                            "core_motivation": "Find her lost brother",
+                            "personality_anchors": ["curious", "stubborn"],
+                            "visual_identity_anchors": ["blue hair", "lab coat"],
+                            "forbidden_drift": ["do not make her cruel"],
+                        }
+                    ]
+                },
+                "confirmed": True,
+            },
+            "relationship_baselines": {
+                "content": {"relationships": [{"pair": ["elena", "marcus"], "baseline": "Friends", "must_preserve": []}]},
+                "confirmed": True,
+            },
+            "constraints": {"content": "No time travel.", "confirmed": True},
+        },
+        "updated_at": "2026-04-22T00:00:00Z",
+    }
+    (meta_dir / "project_brief.json").write_text(json.dumps(brief), encoding="utf-8")
+
+
+def _seed_project_chapter_intake(workspace: Path, project_name: str, outline_ready: bool = True) -> None:
+    """Seed a chapter-level refinement intake."""
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    intake = {
+        "phase": "outline_ready" if outline_ready else "chapter",
+        "current_summary": "Brief confirmed. Collecting chapter details.",
+        "missing_slots": [],
+        "slots": {},
+        "brief_draft_ready": True,
+        "chapter_draft": [
+            {
+                "chapter_id": "ch1",
+                "order": 1,
+                "chapter_name": "Departure",
+                "chapter_goal": "Establish motivation",
+                "key_conflict": "Elena vs authority",
+                "emotional_arc": "hope -> tension",
+                "reveals": "Brother is missing",
+                "end_state": "Elena leaves home",
+                "mood_or_pacing_bias": "slow",
+                "character_focus": ["elena"],
+                "relationship_shift": "Elena distances from parents",
+                "character_presentation_notes": "Civilian clothes",
+            },
+            {
+                "chapter_id": "ch2",
+                "order": 2,
+                "chapter_name": "The Jump",
+                "chapter_goal": "First FTL journey",
+                "key_conflict": "Engine malfunction",
+                "emotional_arc": "fear -> exhilaration",
+                "reveals": "Marcus may still be alive",
+                "end_state": "Arrival at Outpost 7",
+                "mood_or_pacing_bias": "fast",
+                "character_focus": ["elena", "marcus"],
+                "relationship_shift": "Marcus reappears as ally",
+                "character_presentation_notes": "Flight suit",
+            },
+        ],
+        "outline_draft_ready": outline_ready,
+        "updated_at": "2026-04-23T00:00:00Z",
+    }
+    (meta_dir / "refinement_intake.json").write_text(json.dumps(intake), encoding="utf-8")
+
+
+def test_workspace_brief_confirmed_without_outline_defaults_to_intake_tab(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Brief fully confirmed but no outline yet -> default tab should be Intake."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_ch_intake_default_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=False)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Intake tab should be active
+    intake_tab = page.locator("button", has_text="Intake").first
+    expect(intake_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
+
+
+def test_workspace_brief_confirmed_without_intake_still_defaults_to_intake_tab(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Missing intake file must not drop a brief-confirmed project back to Brief as the primary path."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_ch_missing_intake_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    intake_tab = page.locator("button", has_text="Intake").first
+    expect(intake_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
+    expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
+
+
+def test_workspace_intake_view_shows_chapter_draft_summary(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Chapter intake should render chapter draft cards."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_ch_draft_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=True)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    expect(page.locator("text=Chapter Draft")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Departure")).to_be_visible(timeout=10000)
+    expect(page.locator("text=The Jump")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Establish motivation")).to_be_visible(timeout=10000)
+
+
+def test_workspace_outline_review_is_not_primary_before_outline_draft_ready(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Outline tab should show intake prompt when chapter intake is required."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_ch_outline_gate_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=False)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    # Switch to Outline tab
+    outline_tab = page.locator("button", has_text="Outline").first
+    outline_tab.click()
+
+    expect(page.locator("text=Chapter Intake First")).to_be_visible(timeout=10000)
+    expect(page.locator("button", has_text="Go to Intake")).to_be_visible(timeout=10000)
+
+
+def test_workspace_promote_outline_draft_enters_outline_review(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Clicking Enter Outline Review should materialize chapter outline and show review UI."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_ch_promote_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=True)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    expect(page.locator("text=Chapter Draft")).to_be_visible(timeout=10000)
+    promote_btn = page.locator("[data-testid='promote-outline-draft']")
+    expect(promote_btn).to_be_visible(timeout=10000)
+    promote_btn.click()
+
+    # Should switch to Outline tab with chapters visible
+    expect(page.locator("text=Departure")).to_be_visible(timeout=10000)
+    expect(page.locator("text=The Jump")).to_be_visible(timeout=10000)
+
+    # Verify outline was persisted
+    outline = httpx.get(f"{server_url}/api/projects/{project_name}/chapter-outline", timeout=5.0)
+    assert outline.status_code == 200, outline.text
+    data = outline.json()
+    assert len(data["chapters"]) == 2
+    assert data["chapters"][0]["chapter_id"] == "ch1"
+    assert data["chapters"][0]["confirmed"] is False

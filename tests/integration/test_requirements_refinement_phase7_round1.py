@@ -316,6 +316,49 @@ class TestRefinementIntakePersistence:
 # ---------------------------------------------------------------------------
 
 
+def _make_chapter_intake(project_name: str = "test") -> dict:
+    """Return a chapter-level refinement intake snapshot."""
+    return {
+        "phase": "chapter",
+        "current_summary": "Brief confirmed. Collecting chapter details.",
+        "missing_slots": [],
+        "slots": {},
+        "brief_draft_ready": True,
+        "chapter_draft": [
+            {
+                "chapter_id": "ch1",
+                "order": 1,
+                "chapter_name": "Departure",
+                "chapter_goal": "Establish Elena's motivation",
+                "key_conflict": "Elena vs authority",
+                "emotional_arc": "hope -> tension",
+                "reveals": "Brother is missing",
+                "end_state": "Elena leaves home",
+                "mood_or_pacing_bias": "slow, contemplative",
+                "character_focus": ["elena"],
+                "relationship_shift": "Elena distances from parents",
+                "character_presentation_notes": "Elena in civilian clothes",
+            },
+            {
+                "chapter_id": "ch2",
+                "order": 2,
+                "chapter_name": "The Jump",
+                "chapter_goal": "First FTL journey",
+                "key_conflict": "Engine malfunction",
+                "emotional_arc": "fear -> exhilaration",
+                "reveals": "Marcus may still be alive",
+                "end_state": "Arrival at Outpost 7",
+                "mood_or_pacing_bias": "fast, tense",
+                "character_focus": ["elena", "marcus"],
+                "relationship_shift": "Marcus reappears as ally",
+                "character_presentation_notes": "Elena in flight suit",
+            },
+        ],
+        "outline_draft_ready": True,
+        "updated_at": "2026-04-23T00:00:00Z",
+    }
+
+
 class TestRefinementIntakeApi:
     def test_refinement_intake_status_returns_structured_project_intake(
         self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -399,6 +442,139 @@ class TestRefinementIntakeApi:
         assert data["brief_draft_ready"] is False
         assert data["intake_required"] is True
         assert data["generation_allowed"] is False
+
+    # --- Chapter outline promote-draft ---
+
+    def test_promote_outline_draft_materializes_chapter_outline(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.blueprint.models import RefinementIntake
+
+        _create_project(client, tmp_path, "ch_promote_ok")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        # Seed a fully confirmed brief
+        brief = _make_valid_brief()
+        client.put("/api/projects/ch_promote_ok/brief", json=brief)
+        _confirm_all_brief_cards(client, "ch_promote_ok", brief)
+
+        # Seed chapter intake with outline_draft_ready
+        payload = _make_chapter_intake()
+        pm.write_refinement_intake("ch_promote_ok", RefinementIntake.model_validate(payload))
+
+        r = client.post("/api/projects/ch_promote_ok/chapter-outline/promote-draft")
+        assert r.status_code == 200, r.text
+
+        r = client.get("/api/projects/ch_promote_ok/chapter-outline")
+        assert r.status_code == 200, r.text
+        outline = r.json()
+        assert len(outline["chapters"]) == 2
+        assert outline["chapters"][0]["chapter_id"] == "ch1"
+        assert outline["chapters"][0]["chapter_name"] == "Departure"
+        assert outline["chapters"][0]["confirmed"] is False
+        assert outline["chapters"][1]["character_focus"] == ["elena", "marcus"]
+
+        r = client.get("/api/projects/ch_promote_ok/refinement-status")
+        data = r.json()
+        assert data["refinement_state"] == "chapter_outline_reviewing"
+        assert data["intake_phase"] == "chapter"
+        assert data["outline_draft_ready"] is True
+
+    def test_promote_outline_draft_requires_outline_draft_ready(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.blueprint.models import RefinementIntake
+
+        _create_project(client, tmp_path, "ch_promote_blocked")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        brief = _make_valid_brief()
+        client.put("/api/projects/ch_promote_blocked/brief", json=brief)
+        _confirm_all_brief_cards(client, "ch_promote_blocked", brief)
+
+        payload = _make_chapter_intake()
+        payload["outline_draft_ready"] = False
+        pm.write_refinement_intake("ch_promote_blocked", RefinementIntake.model_validate(payload))
+
+        r = client.post("/api/projects/ch_promote_blocked/chapter-outline/promote-draft")
+        assert r.status_code == 409, r.text
+        assert "draft" in r.json()["detail"].lower()
+
+    def test_promote_outline_draft_requires_brief_fully_confirmed(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.blueprint.models import RefinementIntake
+
+        _create_project(client, tmp_path, "ch_promote_no_brief")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        # Do NOT confirm brief
+        brief = _make_valid_brief()
+        client.put("/api/projects/ch_promote_no_brief/brief", json=brief)
+
+        payload = _make_chapter_intake()
+        pm.write_refinement_intake("ch_promote_no_brief", RefinementIntake.model_validate(payload))
+
+        r = client.post("/api/projects/ch_promote_no_brief/chapter-outline/promote-draft")
+        assert r.status_code == 409, r.text
+        assert "brief" in r.json()["detail"].lower()
+
+    def test_refinement_status_exposes_chapter_intake_entry_state(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.blueprint.models import RefinementIntake
+
+        _create_project(client, tmp_path, "ch_intake_status")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        brief = _make_valid_brief()
+        client.put("/api/projects/ch_intake_status/brief", json=brief)
+        _confirm_all_brief_cards(client, "ch_intake_status", brief)
+
+        payload = _make_chapter_intake()
+        payload["outline_draft_ready"] = False
+        pm.write_refinement_intake("ch_intake_status", RefinementIntake.model_validate(payload))
+
+        r = client.get("/api/projects/ch_intake_status/refinement-status")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["refinement_state"] == "brief_confirmed"
+        assert data["intake_phase"] == "chapter"
+        assert data["outline_draft_ready"] is False
+        assert data["chapter_intake_required"] is True
+        assert data["brief_fully_confirmed"] is True
+
+    def test_refinement_status_requires_chapter_intake_without_existing_intake_file(
+        self, client: TestClient, tmp_path: Path
+    ):
+        _create_project(client, tmp_path, "ch_missing_intake")
+
+        brief = _make_valid_brief()
+        client.put("/api/projects/ch_missing_intake/brief", json=brief)
+        _confirm_all_brief_cards(client, "ch_missing_intake", brief)
+
+        r = client.get("/api/projects/ch_missing_intake/refinement-status")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["brief_fully_confirmed"] is True
+        assert data["outline_draft_ready"] is False
+        assert data["chapter_intake_required"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1455,6 +1631,92 @@ class TestBulkPutNormalization:
         data = r.json()
         assert data["blueprint_ready"] is False
         assert data["generation_allowed"] is False
+
+
+# ---------------------------------------------------------------------------
+# R4B. Chapter intake model extension
+# ---------------------------------------------------------------------------
+
+
+class TestChapterIntakeModel:
+    def test_refinement_intake_roundtrip_supports_chapter_draft(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.blueprint.models import RefinementIntake, ChapterIntakeEntry
+
+        _create_project(client, tmp_path, "ch_intake_rt")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        payload = _make_valid_intake()
+        payload["phase"] = "chapter"
+        payload["outline_draft_ready"] = True
+        payload["chapter_draft"] = [
+            {
+                "chapter_id": "ch1",
+                "order": 1,
+                "chapter_name": "Departure",
+                "chapter_goal": "Establish motivation",
+                "key_conflict": "Elena vs authority",
+                "emotional_arc": "hope -> tension",
+                "reveals": "Brother is missing",
+                "end_state": "Elena leaves home",
+                "mood_or_pacing_bias": "slow",
+                "character_focus": ["elena"],
+                "relationship_shift": "Elena distances from parents",
+                "character_presentation_notes": "Civilian clothes",
+            },
+            {
+                "chapter_id": "ch2",
+                "order": 2,
+                "chapter_name": "The Jump",
+                "chapter_goal": "First FTL journey",
+                "key_conflict": "Engine malfunction",
+                "emotional_arc": "fear -> exhilaration",
+                "reveals": "Marcus may still be alive",
+                "end_state": "Arrival at Outpost 7",
+                "mood_or_pacing_bias": "fast",
+                "character_focus": ["elena", "marcus"],
+                "relationship_shift": "Marcus reappears as ally",
+                "character_presentation_notes": "Flight suit",
+            },
+        ]
+        pm.write_refinement_intake("ch_intake_rt", RefinementIntake.model_validate(payload))
+
+        intake = pm.read_refinement_intake("ch_intake_rt")
+        assert intake is not None
+        assert intake.phase == "chapter"
+        assert intake.outline_draft_ready is True
+        assert len(intake.chapter_draft) == 2
+        assert intake.chapter_draft[0].chapter_id == "ch1"
+        assert intake.chapter_draft[0].chapter_name == "Departure"
+        assert intake.chapter_draft[1].character_focus == ["elena", "marcus"]
+
+    def test_existing_project_intake_file_without_chapter_fields_remains_readable(
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from renpy_mcp.config import get_settings
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        _create_project(client, tmp_path, "ch_intake_legacy")
+        settings = get_settings()
+        monkeypatch.setattr(settings, "workspace", tmp_path)
+        pm = ProjectManager(settings)
+
+        # Write an old-style intake file (no chapter_draft, no outline_draft_ready)
+        legacy = _make_valid_intake()
+        intake_path = tmp_path / "ch_intake_legacy" / "meta" / "refinement_intake.json"
+        intake_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        intake = pm.read_refinement_intake("ch_intake_legacy")
+        assert intake is not None
+        assert intake.phase == "project"
+        assert intake.brief_draft_ready is False
+        assert intake.chapter_draft == []
+        assert intake.outline_draft_ready is False
 
 
 # ---------------------------------------------------------------------------

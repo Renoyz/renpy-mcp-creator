@@ -6,6 +6,7 @@ interface Props {
   error?: string | null;
   projectName: string;
   onPromoteBriefDraft: (projectName: string) => Promise<void>;
+  onPromoteOutlineDraft: (projectName: string) => Promise<void>;
   onStartAI?: () => void;
 }
 
@@ -21,6 +22,7 @@ export function IntakeWorkspaceView({
   error,
   projectName,
   onPromoteBriefDraft,
+  onPromoteOutlineDraft,
   onStartAI,
 }: Props) {
   if (error) {
@@ -66,6 +68,8 @@ export function IntakeWorkspaceView({
     );
   }
 
+  const isChapterPhase = intake.phase === "chapter" || intake.phase === "outline_ready";
+
   return (
     <div className="h-full overflow-auto p-6">
       <div className="max-w-4xl space-y-6">
@@ -77,7 +81,7 @@ export function IntakeWorkspaceView({
                 Phase: <span className="font-medium text-gray-700">{intake.phase}</span>
               </p>
             </div>
-            {intake.brief_draft_ready && (
+            {!isChapterPhase && intake.brief_draft_ready && (
               <button
                 type="button"
                 onClick={() => void onPromoteBriefDraft(projectName)}
@@ -86,6 +90,17 @@ export function IntakeWorkspaceView({
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Enter Brief Review
+              </button>
+            )}
+            {isChapterPhase && intake.outline_draft_ready && (
+              <button
+                type="button"
+                onClick={() => void onPromoteOutlineDraft(projectName)}
+                data-testid="promote-outline-draft"
+                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Enter Outline Review
               </button>
             )}
           </div>
@@ -97,50 +112,81 @@ export function IntakeWorkspaceView({
           </div>
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h3 className="text-sm font-semibold text-gray-900">Missing slots</h3>
-          {intake.missing_slots.length === 0 ? (
-            <p className="mt-2 text-sm text-green-700">No required slots are currently missing.</p>
-          ) : (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {intake.missing_slots.map((slot) => (
-                <span
-                  key={slot}
-                  className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
-                >
-                  {formatSlotLabel(slot)}
-                </span>
+        {isChapterPhase && intake.chapter_draft.length > 0 && (
+          <div className="rounded-lg border border-gray-200 bg-white p-5">
+            <h3 className="text-sm font-semibold text-gray-900">Chapter Draft</h3>
+            <div className="mt-4 space-y-3">
+              {intake.chapter_draft.map((ch) => (
+                <div key={ch.chapter_id} className="rounded-md border border-gray-200 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-gray-900">
+                      {ch.chapter_name || ch.chapter_id}
+                    </div>
+                    <span className="text-xs text-gray-500">Order {ch.order}</span>
+                  </div>
+                  {ch.chapter_goal && (
+                    <p className="mt-1 text-xs text-gray-600"><span className="font-medium">Goal:</span> {ch.chapter_goal}</p>
+                  )}
+                  {ch.key_conflict && (
+                    <p className="mt-1 text-xs text-gray-600"><span className="font-medium">Conflict:</span> {ch.key_conflict}</p>
+                  )}
+                  {ch.emotional_arc && (
+                    <p className="mt-1 text-xs text-gray-600"><span className="font-medium">Arc:</span> {ch.emotional_arc}</p>
+                  )}
+                </div>
               ))}
             </div>
-          )}
-        </div>
-
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <h3 className="text-sm font-semibold text-gray-900">Draft slots</h3>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {Object.entries(intake.slots).map(([key, slot]) => (
-              <div key={key} className="rounded-md border border-gray-200 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-gray-900">{formatSlotLabel(key)}</div>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                      slot.complete ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
-                    }`}
-                  >
-                    {slot.complete ? "Complete" : "Missing"}
-                  </span>
-                </div>
-                <div className="mt-2 text-sm text-gray-600 break-words">
-                  {slot.value == null || slot.value === ""
-                    ? "No value collected yet."
-                    : typeof slot.value === "string"
-                    ? slot.value
-                    : JSON.stringify(slot.value)}
-                </div>
-              </div>
-            ))}
           </div>
-        </div>
+        )}
+
+        {!isChapterPhase && (
+          <>
+            <div className="rounded-lg border border-gray-200 bg-white p-5">
+              <h3 className="text-sm font-semibold text-gray-900">Missing slots</h3>
+              {intake.missing_slots.length === 0 ? (
+                <p className="mt-2 text-sm text-green-700">No required slots are currently missing.</p>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {intake.missing_slots.map((slot) => (
+                    <span
+                      key={slot}
+                      className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+                    >
+                      {formatSlotLabel(slot)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-white p-5">
+              <h3 className="text-sm font-semibold text-gray-900">Draft slots</h3>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {Object.entries(intake.slots).map(([key, slot]) => (
+                  <div key={key} className="rounded-md border border-gray-200 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-gray-900">{formatSlotLabel(key)}</div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          slot.complete ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {slot.complete ? "Complete" : "Missing"}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-sm text-gray-600 break-words">
+                      {slot.value == null || slot.value === ""
+                        ? "No value collected yet."
+                        : typeof slot.value === "string"
+                        ? slot.value
+                        : JSON.stringify(slot.value)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -48,12 +48,14 @@ export function ProjectWorkspacePage() {
     confirmChapter,
     freezeBlueprint,
     promoteBriefDraft,
+    promoteOutlineDraft,
   } = useProject();
 
   const [resolvedProject, setResolvedProject] = useState<CurrentProject | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   const snapshotLoadTokenRef = useRef(0);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("intake");
+  const hasAutoSetTabRef = useRef(false);
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
@@ -123,16 +125,25 @@ export function ProjectWorkspacePage() {
     setPreviewAvailable(false);
     setPipelineStage("idle");
     setActiveTab("intake");
+    hasAutoSetTabRef.current = false;
   }, [name]);
 
   useEffect(() => {
     if (snapshotLoading || !activeProjectName) return;
+    if (hasAutoSetTabRef.current) return;
     if (!brief) {
       setActiveTab("intake");
+      hasAutoSetTabRef.current = true;
+      return;
+    }
+    if (refinementStatus?.chapter_intake_required) {
+      setActiveTab("intake");
+      hasAutoSetTabRef.current = true;
       return;
     }
     setActiveTab("brief");
-  }, [snapshotLoading, activeProjectName, brief]);
+    hasAutoSetTabRef.current = true;
+  }, [snapshotLoading, activeProjectName, brief, refinementStatus]);
 
   // Load unified pipeline status on mount / project change
   useEffect(() => {
@@ -284,6 +295,12 @@ export function ProjectWorkspacePage() {
     if (!activeProjectName) return;
     await promoteBriefDraft(activeProjectName);
     setActiveTab("brief");
+  };
+
+  const handlePromoteOutlineDraft = async () => {
+    if (!activeProjectName) return;
+    await promoteOutlineDraft(activeProjectName);
+    setActiveTab("outline");
   };
 
   if (!name) {
@@ -457,6 +474,7 @@ export function ProjectWorkspacePage() {
                 error={refinementIntakeError}
                 projectName={activeProjectName}
                 onPromoteBriefDraft={handlePromoteBriefDraft}
+                onPromoteOutlineDraft={handlePromoteOutlineDraft}
                 onStartAI={() => {
                   startBlueprintCollection();
                   window.dispatchEvent(new CustomEvent("open-chat-drawer"));
@@ -492,13 +510,32 @@ export function ProjectWorkspacePage() {
               )
             )}
             {activeTab === "outline" && (
-              <ChapterOutlineWorkspaceView
-                outline={chapterOutline}
-                projectName={activeProjectName}
-                onSave={saveChapterOutline}
-                onConfirmChapter={confirmChapter}
-                error={chapterOutlineError}
-              />
+              !chapterOutline && refinementStatus?.chapter_intake_required ? (
+                <div className="h-full overflow-auto p-6">
+                  <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50 p-6">
+                    <h2 className="text-base font-semibold text-blue-900">Chapter Intake First</h2>
+                    <p className="mt-2 text-sm text-blue-800">
+                      The agent needs to collect chapter-level inputs and prepare a Chapter Outline draft before full
+                      Outline review starts.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("intake")}
+                      className="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Go to Intake
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <ChapterOutlineWorkspaceView
+                  outline={chapterOutline}
+                  projectName={activeProjectName}
+                  onSave={saveChapterOutline}
+                  onConfirmChapter={confirmChapter}
+                  error={chapterOutlineError}
+                />
+              )
             )}
             {activeTab === "blueprint" && (
               !blueprint &&

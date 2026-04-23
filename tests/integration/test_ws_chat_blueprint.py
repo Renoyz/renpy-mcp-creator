@@ -142,6 +142,50 @@ def _make_mock_smart_provider(title: str = "DEFAULT", **overrides) -> object:
     return MockSmartProvider()
 
 
+def _make_valid_brief() -> dict:
+    """Return a fully-populated project brief dict for chat tests."""
+    return {
+        "cards": {
+            "core_premise": {"content": "A story about discovery.", "confirmed": False},
+            "audience_genre": {"content": "Sci-fi, teens.", "confirmed": False},
+            "tone_themes": {"content": "Hopeful, exploration.", "confirmed": False},
+            "visual_style": {"content": "Cel-shaded, neon.", "confirmed": False},
+            "world_rules": {"content": "Faster-than-light travel exists.", "confirmed": False},
+            "core_cast": {"content": "Elena, Marcus, AI companion.", "confirmed": False},
+            "character_identity": {
+                "content": {
+                    "characters": [
+                        {
+                            "character_id": "elena",
+                            "name": "Elena",
+                            "story_role": "Protagonist",
+                            "core_motivation": "Find her lost brother",
+                            "personality_anchors": ["curious", "stubborn"],
+                            "visual_identity_anchors": ["blue hair", "lab coat"],
+                            "forbidden_drift": ["do not make her cruel"],
+                        }
+                    ]
+                },
+                "confirmed": False,
+            },
+            "relationship_baselines": {
+                "content": {
+                    "relationships": [
+                        {
+                            "pair": ["elena", "marcus"],
+                            "baseline": "Sibling rivalry with deep care",
+                            "must_preserve": ["mutual respect"],
+                        }
+                    ]
+                },
+                "confirmed": False,
+            },
+            "constraints": {"content": "No time travel.", "confirmed": False},
+        },
+        "updated_at": "2026-04-22T00:00:00Z",
+    }
+
+
 def test_blueprint_start_trigger_returns_first_collecting_message(monkeypatch, client: TestClient, tmp_path: Path) -> None:
     """Sending start_blueprint_collection should return the first collecting assistant message from backend."""
     project_name = "bp_start"
@@ -1527,3 +1571,153 @@ def test_build_failure_distinguishes_from_prototype_failure(
     assert status_path.exists(), "Build status should be persisted after build failure"
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status.get("status") == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Round 4B: Chapter intake chat write-through
+# ---------------------------------------------------------------------------
+
+
+def test_brief_confirmed_chat_flow_initializes_chapter_intake_state(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """After brief is fully confirmed, starting chat should enter chapter intake phase."""
+    project_name = "bp_ch_init"
+    _create_project(client, tmp_path, project_name)
+
+    brief = _make_valid_brief()
+    client.put(f"/api/projects/{project_name}/brief", json=brief)
+    for key in brief["cards"]:
+        client.post(f"/api/projects/{project_name}/brief/confirm-card", json={"card_key": key})
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == "chapter"
+    assert intake["outline_draft_ready"] is False
+    assert intake["chapter_draft"] == []
+
+
+def test_chapter_collecting_turn_updates_chapter_intake_draft(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """During chapter collecting, user turn should update intake state."""
+    project_name = "bp_ch_collect"
+    _create_project(client, tmp_path, project_name)
+
+    brief = _make_valid_brief()
+    client.put(f"/api/projects/{project_name}/brief", json=brief)
+    for key in brief["cards"]:
+        client.post(f"/api/projects/{project_name}/brief/confirm-card", json={"card_key": key})
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+        websocket.send_json(
+            {
+                "type": "user_message",
+                "content": "I want three chapters: Departure, Journey, and Return.",
+                "project_name": project_name,
+            }
+        )
+        _drain_events(websocket, 1)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == "chapter"
+    assert intake["outline_draft_ready"] is False
+    assert "chapter" in intake["current_summary"].lower() or "Departure" in intake["current_summary"]
+
+
+def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """When draft is generated after brief confirmed, intake should mark outline_draft_ready."""
+    project_name = "bp_ch_ready"
+    _create_project(client, tmp_path, project_name)
+
+    brief = _make_valid_brief()
+    client.put(f"/api/projects/{project_name}/brief", json=brief)
+    for key in brief["cards"]:
+        client.post(f"/api/projects/{project_name}/brief/confirm-card", json={"card_key": key})
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                _drain_events(websocket, 3)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == "outline_ready"
+    assert intake["outline_draft_ready"] is True
+    assert len(intake["chapter_draft"]) > 0
+    assert intake["chapter_draft"][0]["chapter_id"] == "ch1"
+
+
+def test_outline_ready_transition_populates_structured_chapter_draft_fields(
+    monkeypatch, client: TestClient, tmp_path: Path
+) -> None:
+    """Chat-produced chapter intake should carry usable outline fields, not just chapter names."""
+    project_name = "bp_ch_structured"
+    _create_project(client, tmp_path, project_name)
+
+    brief = _make_valid_brief()
+    client.put(f"/api/projects/{project_name}/brief", json=brief)
+    for key in brief["cards"]:
+        client.post(f"/api/projects/{project_name}/brief/confirm-card", json={"card_key": key})
+
+    provider = _make_mock_blueprint_provider(
+        title=project_name,
+        chapters=[
+            {
+                "id": "ch1",
+                "name": "Departure",
+                "order": 1,
+                "scenes": [
+                    {"id": "s1", "name": "Elena leaves home", "order": 1, "characters": ["Elena"]},
+                    {"id": "s2", "name": "Station goodbye", "order": 2, "characters": ["Elena", "Marcus"]},
+                ],
+            },
+            {
+                "id": "ch2",
+                "name": "The Jump",
+                "order": 2,
+                "scenes": [
+                    {"id": "s3", "name": "Engine failure", "order": 1, "characters": ["Elena"]},
+                ],
+            },
+        ],
+    )
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: provider)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+        for turn in range(2):
+            websocket.send_json({"type": "user_message", "content": f"turn {turn}", "project_name": project_name})
+            if turn < 1:
+                _drain_events(websocket, 1)
+            else:
+                _drain_events(websocket, 3)
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == "outline_ready"
+    chapter = intake["chapter_draft"][0]
+    assert chapter["chapter_goal"] != ""
+    assert chapter["key_conflict"] != ""
+    assert chapter["end_state"] != ""
+    assert chapter["character_focus"] == ["Elena", "Marcus"]

@@ -25,6 +25,7 @@ from ..blueprint.models import (
     BlueprintFreezeStatus,
     BriefCard,
     ChapterOutline,
+    ChapterOutlineEntry,
     ChapterSummary,
     FlowEdge,
     FlowNode,
@@ -784,6 +785,94 @@ def create_app() -> FastAPI:
 
         return {"success": True}
 
+    def _materialize_outline_from_intake(intake: RefinementIntake) -> ChapterOutline:
+        chapters = [
+            ChapterOutlineEntry(
+                chapter_id=entry.chapter_id,
+                order=entry.order,
+                chapter_name=entry.chapter_name,
+                chapter_goal=entry.chapter_goal,
+                key_conflict=entry.key_conflict,
+                emotional_arc=entry.emotional_arc,
+                reveals=entry.reveals,
+                end_state=entry.end_state,
+                mood_or_pacing_bias=entry.mood_or_pacing_bias,
+                character_focus=entry.character_focus,
+                relationship_shift=entry.relationship_shift,
+                character_presentation_notes=entry.character_presentation_notes,
+                confirmed=False,
+            )
+            for entry in intake.chapter_draft
+        ]
+        return ChapterOutline(chapters=chapters, updated_at=datetime.utcnow().isoformat())
+
+    @app.post("/api/projects/{project_name}/chapter-outline/promote-draft")
+    async def api_project_chapter_outline_promote_draft(project_name: str):
+        project_dir = resolve_project_dir(project_name)
+        if not project_dir:
+            raise HTTPException(status_code=404, detail="Project not found")
+        settings = get_settings()
+        pm = ProjectManager(settings)
+        try:
+            intake = pm.read_refinement_intake(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if intake is None:
+            raise HTTPException(status_code=404, detail="Refinement intake not found")
+        if not intake.outline_draft_ready:
+            raise HTTPException(status_code=409, detail="Chapter Outline draft is not ready yet")
+        if intake.phase not in (IntakePhase.CHAPTER, IntakePhase.OUTLINE_READY):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Chapter Outline promotion requires intake phase 'chapter' or 'outline_ready', got '{intake.phase.value}'",
+            )
+
+        try:
+            brief = pm.read_project_brief(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        if brief is None or not _is_brief_fully_confirmed(brief):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot promote Chapter Outline draft before Project Brief is fully confirmed",
+            )
+
+        try:
+            existing_outline = pm.read_chapter_outline(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            meta = pm.read_project_meta(project_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        outline = _materialize_outline_from_intake(intake)
+        target_state = _compute_refinement_state(brief, outline)
+        target_freeze_status = _freeze_status_after_upstream_change(
+            meta.blueprint_freeze_status if meta else None
+        )
+
+        outline_path = project_dir / "meta" / "chapter_outline.json"
+        meta_path = project_dir / "meta" / "project.json"
+        old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
+        old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
+
+        try:
+            pm.write_chapter_outline(project_name, outline)
+            _persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        except Exception as exc:
+            if old_outline_text is not None:
+                outline_path.write_text(old_outline_text, encoding="utf-8")
+            else:
+                outline_path.unlink(missing_ok=True)
+            if old_meta_text is not None:
+                meta_path.write_text(old_meta_text, encoding="utf-8")
+            else:
+                meta_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        return {"success": True}
+
     @app.get("/api/projects/{project_name}/brief")
     async def api_project_brief_get(project_name: str):
         project_dir = resolve_project_dir(project_name)
@@ -1172,6 +1261,10 @@ def create_app() -> FastAPI:
             )
 
         intake_required = brief is None and not has_blueprint
+        chapter_intake_required = (
+            brief_fully_confirmed
+            and (outline is None or not outline.chapters)
+        )
 
         return {
             "refinement_state": target_state.value if target_state else None,
@@ -1183,7 +1276,9 @@ def create_app() -> FastAPI:
             "generation_allowed": generation_allowed,
             "intake_phase": intake.phase.value if intake else None,
             "brief_draft_ready": intake.brief_draft_ready if intake else False,
+            "outline_draft_ready": intake.outline_draft_ready if intake else False,
             "intake_required": intake_required,
+            "chapter_intake_required": chapter_intake_required,
         }
 
     @app.post("/api/projects/{project_name}/scene-packages/generate")

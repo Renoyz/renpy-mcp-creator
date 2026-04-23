@@ -479,6 +479,8 @@ class IntakePhase(StrEnum):
 
     PROJECT = "project"
     BRIEF_READY = "brief_ready"
+    CHAPTER = "chapter"
+    OUTLINE_READY = "outline_ready"
 
 
 class IntakeSlot(BaseModel):
@@ -486,6 +488,23 @@ class IntakeSlot(BaseModel):
 
     value: str | dict | None = None
     complete: bool = False
+
+
+class ChapterIntakeEntry(BaseModel):
+    """A single chapter-level intake draft entry."""
+
+    chapter_id: str
+    order: int
+    chapter_name: str = ""
+    chapter_goal: str = ""
+    key_conflict: str = ""
+    emotional_arc: str = ""
+    reveals: str = ""
+    end_state: str = ""
+    mood_or_pacing_bias: str = ""
+    character_focus: list[str] = Field(default_factory=list)
+    relationship_shift: str = ""
+    character_presentation_notes: str = ""
 
 
 class RefinementIntake(BaseModel):
@@ -496,4 +515,6 @@ class RefinementIntake(BaseModel):
     missing_slots: list[str] = Field(default_factory=list)
     slots: dict[str, IntakeSlot] = Field(default_factory=dict)
     brief_draft_ready: bool = False
+    chapter_draft: list[ChapterIntakeEntry] = Field(default_factory=list)
+    outline_draft_ready: bool = False
     updated_at: str = ""
