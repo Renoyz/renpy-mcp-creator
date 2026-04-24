@@ -391,20 +391,24 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     return registerBlueprintConfirmationSender(sender);
   }, [registerBlueprintConfirmationSender, currentProject?.name]);
 
-  const pendingWsStartRef = useRef(false);
+  type BlueprintStartRequest = {
+    trigger: "start_blueprint_collection" | "start_refinement_intake";
+    projectName: string | null;
+  };
+  const pendingWsStartRef = useRef<BlueprintStartRequest | null>(null);
 
   useEffect(() => {
-    const sender = () => {
+    const sender = (request: BlueprintStartRequest) => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
             type: "user_message",
-            content: "start_blueprint_collection",
-            project_name: currentProject?.name ?? null,
+            content: request.trigger,
+            project_name: request.projectName,
           })
         );
       } else {
-        pendingWsStartRef.current = true;
+        pendingWsStartRef.current = request;
       }
     };
     return registerBlueprintStartSender(sender);
@@ -432,12 +436,13 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
       setConnected(true);
       setConnecting(false);
       if (pendingWsStartRef.current) {
-        pendingWsStartRef.current = false;
+        const pendingRequest = pendingWsStartRef.current;
+        pendingWsStartRef.current = null;
         ws.send(
           JSON.stringify({
             type: "user_message",
-            content: "start_blueprint_collection",
-            project_name: currentProject?.name ?? null,
+            content: pendingRequest.trigger,
+            project_name: pendingRequest.projectName,
           })
         );
       }

@@ -222,8 +222,8 @@ def test_start_blueprint_collection_initializes_project_intake_state(
     assert intake["slots"]["core_premise"]["complete"] is False
 
 
-def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: TestClient, tmp_path: Path) -> None:
-    """Sending user_message to a project without blueprint should enter collecting and eventually reviewing."""
+def test_refinement_intake_collecting_to_brief_draft_ready(monkeypatch, client: TestClient, tmp_path: Path) -> None:
+    """Starting Phase 7 intake should produce a brief draft without chat confirmation."""
     project_name = "bp_collect"
     _create_project(client, tmp_path, project_name)
 
@@ -231,12 +231,12 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
 
     with client.websocket_connect("/ws/chat") as websocket:
         # Start trigger -> first collecting message (does not consume a turn)
-        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        websocket.send_json({"type": "user_message", "content": "start_refinement_intake", "project_name": project_name})
         events = _drain_events(websocket, 1)
         assert events[0]["type"] == "message"
         assert events[0]["role"] == "assistant"
-        assert events[0].get("message_kind") == "text"
-        assert "让我来帮你把这个想法变成完整的蓝图" in events[0]["content"]
+        assert events[0].get("message_kind") == "intake_text"
+        assert "Project Brief" in events[0]["content"] or "项目简报" in events[0]["content"]
         assert events[0]["pipeline_stage"] == "collecting"
 
         # Turn 1 -> collecting
@@ -247,21 +247,82 @@ def test_blueprint_user_message_collecting_to_reviewing(monkeypatch, client: Tes
         assert events[0]["role"] == "assistant"
         assert events[0]["pipeline_stage"] == "collecting"
 
-        # Turn 2 -> reviewing (text message + blueprint_draft message + confirmation_request)
+        # Turn 2 -> brief draft ready. Phase 7 intake must not create a chat confirmation.
         websocket.send_json({"type": "user_message", "content": "final info", "project_name": project_name})
-        events = _drain_events(websocket, 3)
+        events = _drain_events(websocket, 2)
 
         types = [e["type"] for e in events]
         assert types.count("message") == 2
-        assert "confirmation_request" in types
+        assert "confirmation_request" not in types
 
-        draft_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "blueprint_draft")
-        assert draft_event["draft"]["title"] == project_name
-        assert draft_event["pipeline_stage"] == "reviewing"
+        ready_event = next(e for e in events if e["type"] == "message" and e.get("message_kind") == "brief_draft_ready")
+        assert "Brief Review" in ready_event["content"]
+        assert ready_event["pipeline_stage"] == "idle"
 
-        req_event = next(e for e in events if e["type"] == "confirmation_request")
-        assert req_event["confirmation_id"]
-        assert req_event["pipeline_stage"] == "reviewing"
+        session_path = tmp_path / project_name / "meta" / "blueprint_session.json"
+        session = json.loads(session_path.read_text(encoding="utf-8"))
+        assert session["awaiting_confirmation"] is False
+        assert session["confirmation_id"] is None
+
+        intake = _read_refinement_intake(tmp_path, project_name)
+        assert intake["phase"] == IntakePhase.BRIEF_READY.value
+        assert intake["brief_draft_ready"] is True
+        assert intake["outline_draft_ready"] is False
+
+
+def test_refinement_intake_start_uses_brief_language_not_blueprint_language(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Phase 7 intake should ask for Project Brief inputs, not use legacy blueprint wording."""
+    project_name = "brief_language"
+    _create_project(client, tmp_path, project_name)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_refinement_intake", "project_name": project_name})
+        events = _drain_events(websocket, 1)
+
+    event = events[0]
+    assert event["type"] == "message"
+    assert event.get("message_kind") == "intake_text"
+    assert "Project Brief" in event["content"] or "项目简报" in event["content"]
+    assert "蓝图" not in event["content"]
+    assert "blueprint" not in event["content"].lower()
+    assert event["intake"]["phase"] == IntakePhase.PROJECT.value
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == IntakePhase.PROJECT.value
+
+    session_path = tmp_path / project_name / "meta" / "blueprint_session.json"
+    session = json.loads(session_path.read_text(encoding="utf-8"))
+    assert session["intake_mode"] is True
+
+
+def test_refinement_intake_followup_uses_brief_language_and_updates_intake(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Follow-up intake questions should keep Project Brief semantics and refreshable event kind."""
+    project_name = "brief_followup"
+    _create_project(client, tmp_path, project_name)
+
+    with client.websocket_connect("/ws/chat") as websocket:
+        websocket.send_json({"type": "user_message", "content": "start_refinement_intake", "project_name": project_name})
+        _drain_events(websocket, 1)
+
+        websocket.send_json({"type": "user_message", "content": "3章，武侠故事", "project_name": project_name})
+        events = _drain_events(websocket, 1)
+
+    event = events[0]
+    assert event["type"] == "message"
+    assert event.get("message_kind") == "intake_text"
+    assert "Project Brief" in event["content"] or "项目简报" in event["content"]
+    assert "蓝图" not in event["content"]
+    assert "blueprint" not in event["content"].lower()
+    assert event["intake"]["current_summary"] == "3章，武侠故事"
+
+    intake = _read_refinement_intake(tmp_path, project_name)
+    assert intake["phase"] == IntakePhase.PROJECT.value
+    assert intake["current_summary"] == "3章，武侠故事"
+    assert intake["slots"]["core_premise"]["complete"] is True
 
 
 def test_collecting_turn_updates_refinement_intake_summary_and_slots(
@@ -302,12 +363,17 @@ def test_reviewing_transition_marks_brief_draft_ready_in_intake(
     monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
 
     with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
+        websocket.send_json({"type": "user_message", "content": "start_refinement_intake", "project_name": project_name})
         _drain_events(websocket, 1)
         websocket.send_json({"type": "user_message", "content": "hello", "project_name": project_name})
         _drain_events(websocket, 1)
         websocket.send_json({"type": "user_message", "content": "final info", "project_name": project_name})
-        _drain_events(websocket, 3)
+        events = _drain_events(websocket, 2)
+
+    assert any(
+        e["type"] == "message" and e.get("message_kind") == "brief_draft_ready"
+        for e in events
+    )
 
     intake = _read_refinement_intake(tmp_path, project_name)
     assert intake["phase"] == IntakePhase.BRIEF_READY.value

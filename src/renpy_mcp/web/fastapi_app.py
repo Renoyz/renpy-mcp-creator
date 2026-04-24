@@ -24,6 +24,7 @@ from ..blueprint.models import (
     BlueprintCharacter,
     BlueprintFreezeStatus,
     BriefCard,
+    ChapterIntakeEntry,
     ChapterOutline,
     ChapterOutlineEntry,
     ChapterSummary,
@@ -535,16 +536,17 @@ def create_app() -> FastAPI:
         return True
 
     def _is_character_identity_card_valid(card: BriefCard) -> bool:
-        """Reject name-only character identity cards."""
+        """Reject empty character identity cards."""
         if not isinstance(card.content, dict):
             return False
         characters = card.content.get("characters", [])
         if not characters:
             return False
         for entry in characters:
-            # Must have at least one substantive anchor beyond name/character_id
+            # Must have at least a name or one substantive anchor
             has_substance = bool(
-                entry.get("story_role", "").strip()
+                entry.get("name", "").strip()
+                or entry.get("story_role", "").strip()
                 or entry.get("core_motivation", "").strip()
                 or entry.get("personality_anchors", [])
                 or entry.get("visual_identity_anchors", [])
@@ -648,6 +650,61 @@ def create_app() -> FastAPI:
         if slot is None or slot.value is None:
             return default
         return slot.value
+
+    def _build_chapter_intake_entries_from_blueprint(blueprint: ProjectBlueprint) -> list[ChapterIntakeEntry]:
+        """Derive chapter intake entries from a blueprint draft."""
+        entries: list[ChapterIntakeEntry] = []
+        for chapter in blueprint.chapters:
+            scene_names = [scene.name for scene in chapter.scenes if scene.name]
+            first_scene_name = scene_names[0] if scene_names else chapter.name
+            last_scene_name = scene_names[-1] if scene_names else chapter.name
+
+            character_focus: list[str] = []
+            for scene in chapter.scenes:
+                for character in scene.characters:
+                    if character and character not in character_focus:
+                        character_focus.append(character)
+
+            chapter_goal = (
+                f"Advance {chapter.name} through {first_scene_name}"
+                if first_scene_name
+                else f"Advance {chapter.name}"
+            )
+            key_conflict = (
+                f"Pressure escalates around {last_scene_name}"
+                if last_scene_name
+                else f"Core conflict in {chapter.name}"
+            )
+            emotional_arc = "setup -> escalation" if len(scene_names) > 1 else "setup -> turn"
+            reveals = last_scene_name or chapter.name
+            end_state = last_scene_name or chapter.name
+            mood_or_pacing_bias = "measured" if len(scene_names) <= 2 else "escalating"
+            relationship_shift = ""
+            if len(character_focus) >= 2:
+                relationship_shift = f"{character_focus[0]} and {character_focus[1]} face new pressure together"
+            character_presentation_notes = (
+                f"Keep visual focus on {', '.join(character_focus)}"
+                if character_focus
+                else f"Carry forward the chapter identity of {chapter.name}"
+            )
+
+            entries.append(
+                ChapterIntakeEntry(
+                    chapter_id=chapter.id,
+                    order=chapter.order,
+                    chapter_name=chapter.name,
+                    chapter_goal=chapter_goal,
+                    key_conflict=key_conflict,
+                    emotional_arc=emotional_arc,
+                    reveals=reveals,
+                    end_state=end_state,
+                    mood_or_pacing_bias=mood_or_pacing_bias,
+                    character_focus=character_focus,
+                    relationship_shift=relationship_shift,
+                    character_presentation_notes=character_presentation_notes,
+                )
+            )
+        return entries
 
     def _materialize_brief_from_intake(intake: RefinementIntake) -> ProjectBrief:
         cards = {
@@ -1010,6 +1067,34 @@ def create_app() -> FastAPI:
             else:
                 meta_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
+
+        # Auto-promote chapter outline draft from blueprint session when brief is fully confirmed
+        if _is_brief_fully_confirmed(brief):
+            try:
+                intake = pm.read_refinement_intake(project_name)
+            except ValueError:
+                intake = None
+
+            if intake is not None and not intake.outline_draft_ready:
+                from .chat_ws import _load_runtime_session
+
+                session = _load_runtime_session(project_name)
+                if session and session.get("draft"):
+                    try:
+                        blueprint = ProjectBlueprint.model_validate(session["draft"])
+                        chapter_draft = _build_chapter_intake_entries_from_blueprint(blueprint)
+                        updated_intake = intake.model_copy(
+                            update={
+                                "phase": IntakePhase.OUTLINE_READY,
+                                "outline_draft_ready": True,
+                                "brief_draft_ready": True,
+                                "chapter_draft": chapter_draft,
+                            }
+                        )
+                        pm.write_refinement_intake(project_name, updated_intake)
+                    except Exception:
+                        # Best-effort: don't fail confirm-card if auto-promotion fails
+                        pass
 
         return {"success": True, "card_key": card_key, "confirmed": True}
 

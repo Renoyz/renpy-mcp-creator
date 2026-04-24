@@ -304,6 +304,128 @@ def _localized_confirmation_message(tool_name: str | None, lang: str, fallback: 
     return f"Run {tool_name or 'this action'}?"
 
 
+def _extract_json_block(text: str) -> str | None:
+    """Extract the outermost JSON object or array from mixed text."""
+    text = text.strip()
+    start = -1
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            start = i
+            break
+    if start == -1:
+        return None
+    stack = []
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+            else:
+                return None  # mismatched
+            if not stack:
+                return text[start : i + 1]
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+            else:
+                return None
+            if not stack:
+                return text[start : i + 1]
+    return None
+
+
+def _repair_json_text(text: str) -> str:
+    """Attempt to repair common LLM JSON output errors.
+
+    Fixes:
+    - Extracts JSON from surrounding text
+    - Removes trailing commas before ] and }
+    - Strips C++-style comments
+    - Normalizes stray whitespace around structural commas
+    """
+    block = _extract_json_block(text)
+    if block is None:
+        return text
+
+    # Remove single-line comments (// ...)
+    lines = []
+    for line in block.splitlines():
+        # Be careful not to strip // inside strings
+        cleaned = []
+        in_str = False
+        esc = False
+        for i, ch in enumerate(line):
+            if esc:
+                esc = False
+                cleaned.append(ch)
+                continue
+            if ch == "\\":
+                esc = True
+                cleaned.append(ch)
+                continue
+            if ch == '"':
+                in_str = not in_str
+                cleaned.append(ch)
+                continue
+            if not in_str and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+                break
+            cleaned.append(ch)
+        lines.append("".join(cleaned))
+    block = "\n".join(lines)
+
+    # Remove trailing commas before } or ]
+    # Use a stateful pass so we don't affect commas inside strings
+    result_chars: list[str] = []
+    i = 0
+    while i < len(block):
+        ch = block[i]
+        if ch == '"':
+            # Copy whole string literal
+            result_chars.append(ch)
+            i += 1
+            esc = False
+            while i < len(block):
+                c2 = block[i]
+                result_chars.append(c2)
+                if esc:
+                    esc = False
+                elif c2 == "\\":
+                    esc = True
+                elif c2 == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == ",":
+            # Peek ahead for whitespace then } or ]
+            j = i + 1
+            while j < len(block) and block[j] in " \t\n\r":
+                j += 1
+            if j < len(block) and block[j] in "}]":
+                # Skip the comma (and whitespace) — just advance i to j
+                i = j
+                continue
+        result_chars.append(ch)
+        i += 1
+
+    return "".join(result_chars)
+
+
 def _get_provider():
     """Resolve LLM provider from settings/environment."""
     if os.environ.get("RENPY_MCP_MOCK_LLM"):
@@ -401,8 +523,22 @@ def _get_provider():
                                 ]},
                             ],
                         }
+                    text = json.dumps(blueprint, ensure_ascii=False)
+                    if os.environ.get("RENPY_MCP_MOCK_LLM_MALFORMED_JSON"):
+                        # Inject trailing commas to simulate common LLM output bug.
+                        # Add a comma to the end of any line that precedes a lone ] or }.
+                        lines = text.split("\n")
+                        new_lines: list[str] = []
+                        for line in lines:
+                            stripped = line.strip()
+                            if stripped in ("]", "}") and new_lines:
+                                prev = new_lines[-1].rstrip()
+                                if not prev.endswith(","):
+                                    new_lines[-1] = prev + ","
+                            new_lines.append(line)
+                        text = "\n".join(new_lines)
                     return LLMResponse(
-                        content_blocks=[{"type": "text", "text": json.dumps(blueprint, ensure_ascii=False)}],
+                        content_blocks=[{"type": "text", "text": text}],
                         stop_reason="end_turn",
                     )
 
@@ -457,11 +593,19 @@ def _get_provider():
 
     settings = get_settings()
 
+    # Helper: detect OpenAI-compatible endpoint by URL pattern
+    def _is_openai_compatible_url(url: str | None) -> bool:
+        if not url:
+            return False
+        url_lower = url.lower()
+        openai_markers = ("moonshot", "deepseek", "dashscope", "openai", "siliconflow", "groq")
+        return any(m in url_lower for m in openai_markers)
+
     # Primary: Anthropic-compatible (Kimi Code)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
     anthropic_base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
     anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet")
-    if anthropic_key:
+    if anthropic_key and not _is_openai_compatible_url(anthropic_base):
         primary = AnthropicProvider(
             api_key=anthropic_key,
             base_url=anthropic_base,
@@ -475,6 +619,17 @@ def _get_provider():
             )
             return _Kimi429FallbackProvider(primary=primary, fallback=fallback)
         return primary
+
+    # OpenAI-compatible primary (Moonshot, DeepSeek, custom OpenAI proxy, etc.)
+    openai_key = os.environ.get("OPENAI_API_KEY") or settings.anthropic_api_key
+    openai_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+    openai_model = os.environ.get("OPENAI_MODEL", "moonshot-v1-8k")
+    if openai_key and openai_base and _is_openai_compatible_url(openai_base):
+        return OpenAICompatibleProvider(
+            api_key=openai_key,
+            base_url=openai_base,
+            default_model=openai_model,
+        )
 
     # Fallback 1: DeepSeek (OpenAI-compatible)
     if settings.deepseek_api_key:
@@ -520,6 +675,10 @@ _START_TRIGGERS = frozenset([
     "让 AI 生成蓝图",
 ])
 
+_INTAKE_START_TRIGGERS = frozenset([
+    "start_refinement_intake",
+])
+
 
 class BlueprintOrchestrator:
     """Minimal backend-driven orchestrator for the blueprint interview flow.
@@ -535,6 +694,7 @@ class BlueprintOrchestrator:
         self.turn_count = 0
         self.draft: ProjectBlueprint | None = None
         self.confirmation_id: str | None = None
+        self.intake_mode = False
         self.messages: list[dict[str, Any]] = []
         self._try_restore_session()
 
@@ -548,6 +708,7 @@ class BlueprintOrchestrator:
             self.phase = PipelineStage(stage)
         self.turn_count = session.get("turn_count", 0)
         self.confirmation_id = session.get("confirmation_id")
+        self.intake_mode = bool(session.get("intake_mode", False))
         if session.get("draft"):
             try:
                 self.draft = ProjectBlueprint(**session["draft"])
@@ -561,6 +722,7 @@ class BlueprintOrchestrator:
             "turn_count": self.turn_count,
             "awaiting_confirmation": self.phase == PipelineStage.REVIEWING and self.confirmation_id is not None,
             "confirmation_id": self.confirmation_id,
+            "intake_mode": self.intake_mode,
         }
         if self.draft:
             state["draft"] = self.draft.model_dump(mode="json")
@@ -676,7 +838,7 @@ class BlueprintOrchestrator:
                         return False
         return True
 
-    def _write_refinement_intake(self, *, latest_user_content: str | None = None) -> None:
+    def _write_refinement_intake(self, *, latest_user_content: str | None = None) -> RefinementIntake:
         brief_confirmed = self._is_brief_fully_confirmed()
 
         if self.phase == PipelineStage.REVIEWING and self.draft is not None:
@@ -761,6 +923,7 @@ class BlueprintOrchestrator:
         }
         intake = RefinementIntake(**kwargs)
         self.pm.write_refinement_intake(self.project_name, intake)
+        return intake
 
     async def _generate_draft_via_llm(self) -> ProjectBlueprint:
         """Generate a blueprint draft by calling the LLM provider.
@@ -868,9 +1031,14 @@ Requirements:
 
                 data = json.loads(text)
             except json.JSONDecodeError as e:
-                last_error = f"JSON parse error: {e}"
-                prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
-                continue
+                # Attempt repair for common LLM JSON issues (trailing commas, comments, etc.)
+                repaired = _repair_json_text(text)
+                try:
+                    data = json.loads(repaired)
+                except json.JSONDecodeError:
+                    last_error = f"JSON parse error: {e}"
+                    prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
+                    continue
 
             try:
                 blueprint = ProjectBlueprint(**data)
@@ -889,24 +1057,35 @@ Requirements:
         lang = _preferred_output_language_from_messages(self.messages)
 
         # Handle explicit start trigger without consuming a turn
-        if content in _START_TRIGGERS and self.turn_count == 0:
+        if (content in _START_TRIGGERS or content in _INTAKE_START_TRIGGERS) and self.turn_count == 0:
+            self.intake_mode = content in _INTAKE_START_TRIGGERS
             self.phase = PipelineStage.COLLECTING
-            assistant_content = _localized_text(
-                lang,
-                "太好了！让我来帮你把这个想法变成完整的蓝图。首先，你希望这个故事大概有几章？有没有特别想设定的主角人设或故事基调？",
-                "Great. I'll help turn this idea into a complete blueprint. To start, roughly how many chapters do you want, and are there any specific protagonist traits or story tone you want to establish?",
-            )
-            self.messages.append({"role": "assistant", "content": assistant_content})
+            if self.intake_mode:
+                assistant_content = _localized_text(
+                    lang,
+                    "太好了！我会先帮你整理 Project Brief 草稿。首先，请告诉我：故事大概有几章？题材、时代或世界观是什么？主要角色和整体基调是什么？",
+                    "Great. I'll first help you prepare a Project Brief draft. To start, roughly how many chapters do you want, what genre/setting/world rules should it use, and who are the main characters and tone?",
+                )
+                message_kind = "intake_text"
+            else:
+                assistant_content = _localized_text(
+                    lang,
+                    "太好了！让我来帮你把这个想法变成完整的蓝图。首先，你希望这个故事大概有几章？有没有特别想设定的主角人设或故事基调？",
+                    "Great. I'll help turn this idea into a complete blueprint. To start, roughly how many chapters do you want, and are there any specific protagonist traits or story tone you want to establish?",
+                )
+                message_kind = "text"
+            self.messages.append({"role": "assistant", "message_kind": message_kind, "content": assistant_content})
             self._save_history()
-            self._write_refinement_intake()
+            intake = self._write_refinement_intake()
             self._save_session()
             return [
                 {
                     "type": "message",
                     "role": "assistant",
-                    "message_kind": "text",
+                    "message_kind": message_kind,
                     "content": assistant_content,
                     "pipeline_stage": self.phase.value,
+                    "intake": intake.model_dump(mode="json") if self.intake_mode else None,
                 }
             ]
 
@@ -918,30 +1097,40 @@ Requirements:
             self.phase = PipelineStage.COLLECTING
 
             if self.turn_count < 2:
-                if self.turn_count == 1:
+                if self.intake_mode:
+                    assistant_content = _localized_text(
+                        lang,
+                        "收到。为了让 Project Brief 更完整，请再补充：\n1. 主角的核心动机\n2. 主要人物的视觉特征\n3. 角色之间的关系基线\n4. 不希望角色发生哪些形象偏移",
+                        "Got it. To make the Project Brief more complete, please add:\n1. The protagonist's core motivation\n2. Key visual traits for the main characters\n3. Relationship baselines between characters\n4. Any character drift you want to forbid",
+                    )
+                    message_kind = "intake_text"
+                elif self.turn_count == 1:
                     assistant_content = _localized_text(
                         lang,
                         "收到。为了生成更准确的蓝图，请补充一下：\n1. 世界观或时代背景\n2. 核心角色（1-3位）\n3. 你希望的游戏时长",
                         "Got it. To generate a more accurate blueprint, please add:\n1. The setting or historical era\n2. The core cast (1-3 characters)\n3. The playtime you want for the game",
                     )
+                    message_kind = "text"
                 else:
                     assistant_content = _localized_text(
                         lang,
                         "很好。接下来我会用这些信息为你生成一份结构化的项目蓝图。确认后，我们会进入分章生成。\n\n请再简单描述一下游戏的整体氛围（例如：轻松、悬疑、治愈）。",
                         "Good. Next I will use this information to generate a structured project blueprint. After you confirm it, we'll move on to chapter generation.\n\nPlease briefly describe the overall mood of the game as well, for example: lighthearted, suspenseful, or healing.",
                     )
+                    message_kind = "text"
 
-                self.messages.append({"role": "assistant", "content": assistant_content})
+                self.messages.append({"role": "assistant", "message_kind": message_kind, "content": assistant_content})
                 self._save_history()
-                self._write_refinement_intake(latest_user_content=content)
+                intake = self._write_refinement_intake(latest_user_content=content)
                 self._save_session()
                 return [
                     {
                         "type": "message",
                         "role": "assistant",
-                        "message_kind": "text",
+                        "message_kind": message_kind,
                         "content": assistant_content,
                         "pipeline_stage": self.phase.value,
+                        "intake": intake.model_dump(mode="json") if self.intake_mode else None,
                     }
                 ]
 
@@ -967,6 +1156,56 @@ Requirements:
                 ]
 
             self.phase = PipelineStage.REVIEWING
+
+            if self.intake_mode:
+                brief_confirmed = self._is_brief_fully_confirmed()
+                intake = self._write_refinement_intake()
+                self.phase = PipelineStage.IDLE
+                self.confirmation_id = None
+
+                if brief_confirmed:
+                    assistant_content = _localized_text(
+                        lang,
+                        "章节大纲草稿已经整理好。请在 Intake 面板点击 Enter Outline Review，进入章节大纲确认。",
+                        "Chapter outline draft is ready. Open the Intake panel and click Enter Outline Review.",
+                    )
+                    ready_kind = "outline_draft_ready"
+                else:
+                    assistant_content = _localized_text(
+                        lang,
+                        "项目简报草稿已经整理好。请在 Intake 面板点击 Enter Brief Review，进入结构化确认。",
+                        "Project Brief draft is ready. Open the Intake panel and click Enter Brief Review.",
+                    )
+                    ready_kind = "brief_draft_ready"
+
+                self.messages.append({"role": "assistant", "content": assistant_content})
+                self.messages.append({
+                    "role": "assistant",
+                    "message_kind": ready_kind,
+                    "content": assistant_content,
+                })
+                self._save_history()
+                self._save_session()
+
+                return [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "message_kind": "text",
+                        "content": assistant_content,
+                        "pipeline_stage": self.phase.value,
+                        "intake": intake.model_dump(mode="json"),
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "message_kind": ready_kind,
+                        "content": assistant_content,
+                        "pipeline_stage": self.phase.value,
+                        "intake": intake.model_dump(mode="json"),
+                    },
+                ]
+
             self.confirmation_id = f"conf_{uuid.uuid4().hex[:8]}"
 
             assistant_content = _localized_text(
@@ -1677,6 +1916,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     orchestrator = _get_orchestrator(active_project)
                     events = await orchestrator.handle_user_message(content)
                     for event in events:
+                        event.setdefault("project_name", active_project)
                         await websocket.send_json(event)
                     _write_chat_history(active_project, orchestrator.messages)
                     continue

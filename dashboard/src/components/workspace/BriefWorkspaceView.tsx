@@ -5,7 +5,7 @@ import type {
   CharacterIdentityContent,
   RelationshipBaseline,
 } from "@/context/ProjectContext";
-import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -13,6 +13,7 @@ interface Props {
   projectName: string;
   onSave: (name: string, brief: ProjectBrief) => Promise<void>;
   onConfirmCard: (name: string, cardKey: string) => Promise<void>;
+  onProceedToOutline?: () => void;
   error?: string | null;
 }
 
@@ -55,7 +56,17 @@ function isRelationshipBaselineContent(
   return typeof content === "object" && content !== null && "relationships" in content;
 }
 
-export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, error }: Props) {
+function isAllCardsConfirmed(brief: ProjectBrief | null): boolean {
+  if (!brief || !brief.cards) return false;
+  const allKeys = [
+    ...TEXT_CARD_KEYS,
+    "character_identity",
+    "relationship_baselines",
+  ];
+  return allKeys.every((key) => brief.cards[key]?.confirmed);
+}
+
+export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, onProceedToOutline, error }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ProjectBrief | null>(null);
   const [saving, setSaving] = useState(false);
@@ -284,6 +295,28 @@ export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, 
           confirming={confirming === "relationship_baselines"}
           onUpdate={updateRelationshipBaselines}
         />
+
+        {/* Next-step CTA when all cards are confirmed */}
+        {isAllCardsConfirmed(working) && onProceedToOutline && !editing && (
+          <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              <h3 className="text-sm font-semibold text-green-800">
+                Project Brief 已全部确认
+              </h3>
+            </div>
+            <p className="text-xs text-green-700 mb-3">
+              接下来请进入 Chapter Outline Review 确认章节大纲
+            </p>
+            <button
+              onClick={onProceedToOutline}
+              className="inline-flex items-center gap-1.5 rounded-md bg-green-700 px-4 py-2 text-xs font-medium text-white hover:bg-green-800"
+            >
+              <ArrowRight className="w-3.5 h-3.5" />
+              Enter Chapter Outline Review
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

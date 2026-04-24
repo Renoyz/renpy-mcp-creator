@@ -55,7 +55,7 @@ export function ProjectWorkspacePage() {
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   const snapshotLoadTokenRef = useRef(0);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("intake");
-  const hasAutoSetTabRef = useRef(false);
+  const autoRouteTokenRef = useRef(0);
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
@@ -115,7 +115,10 @@ export function ProjectWorkspacePage() {
 
   const canRunBuildPreview = !!blueprint;
 
-  // Reset build/preview local state and active tab when project changes
+  // Reset build/preview local state when project changes.
+  // We do NOT force activeTab back to "intake" here because that
+  // can race with promoteBriefDraft/promoteOutlineDraft and snap
+  // the user away from the tab they just entered.
   useEffect(() => {
     setBuildStatus("idle");
     setBuildMessage("");
@@ -124,26 +127,27 @@ export function ProjectWorkspacePage() {
     setPreviewUrl(null);
     setPreviewAvailable(false);
     setPipelineStage("idle");
-    setActiveTab("intake");
-    hasAutoSetTabRef.current = false;
+    autoRouteTokenRef.current = 0;
   }, [name]);
 
+  // Auto-route to the correct tab ONLY on the very first snapshot load after
+  // a project change. We use a token ref so that mid-interaction refreshes
+  // (e.g. loadBrief after confirm-card) never re-trigger routing.
   useEffect(() => {
     if (snapshotLoading || !activeProjectName) return;
-    if (hasAutoSetTabRef.current) return;
+    const token = ++autoRouteTokenRef.current;
+    if (token !== 1) return; // only auto-route on first load for this project
     if (!brief) {
       setActiveTab("intake");
-      hasAutoSetTabRef.current = true;
       return;
     }
     if (refinementStatus?.chapter_intake_required) {
       setActiveTab("intake");
-      hasAutoSetTabRef.current = true;
       return;
     }
     setActiveTab("brief");
-    hasAutoSetTabRef.current = true;
-  }, [snapshotLoading, activeProjectName, brief, refinementStatus]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshotLoading]);
 
   // Load unified pipeline status on mount / project change
   useEffect(() => {
@@ -293,14 +297,14 @@ export function ProjectWorkspacePage() {
 
   const handlePromoteBriefDraft = async () => {
     if (!activeProjectName) return;
-    await promoteBriefDraft(activeProjectName);
     setActiveTab("brief");
+    await promoteBriefDraft(activeProjectName);
   };
 
   const handlePromoteOutlineDraft = async () => {
     if (!activeProjectName) return;
-    await promoteOutlineDraft(activeProjectName);
     setActiveTab("outline");
+    await promoteOutlineDraft(activeProjectName);
   };
 
   if (!name) {
@@ -476,7 +480,7 @@ export function ProjectWorkspacePage() {
                 onPromoteBriefDraft={handlePromoteBriefDraft}
                 onPromoteOutlineDraft={handlePromoteOutlineDraft}
                 onStartAI={() => {
-                  startBlueprintCollection();
+                  startBlueprintCollection("start_refinement_intake", activeProjectName);
                   window.dispatchEvent(new CustomEvent("open-chat-drawer"));
                 }}
               />
@@ -505,6 +509,12 @@ export function ProjectWorkspacePage() {
                   projectName={activeProjectName}
                   onSave={saveBrief}
                   onConfirmCard={confirmCard}
+                  onProceedToOutline={async () => {
+                    if (activeProjectName && refinementIntake?.outline_draft_ready) {
+                      await promoteOutlineDraft(activeProjectName);
+                    }
+                    setActiveTab("outline");
+                  }}
                   error={briefError}
                 />
               )
@@ -533,6 +543,7 @@ export function ProjectWorkspacePage() {
                   projectName={activeProjectName}
                   onSave={saveChapterOutline}
                   onConfirmChapter={confirmChapter}
+                  onFreezeBlueprint={handleFreezeBlueprint}
                   error={chapterOutlineError}
                 />
               )
@@ -547,7 +558,7 @@ export function ProjectWorkspacePage() {
                     phase={blueprintPhase}
                     generationProgress={generationProgress}
                     onStartAI={() => {
-                      startBlueprintCollection();
+                      startBlueprintCollection("start_blueprint_collection", activeProjectName);
                       window.dispatchEvent(new CustomEvent("open-chat-drawer"));
                     }}
                   />

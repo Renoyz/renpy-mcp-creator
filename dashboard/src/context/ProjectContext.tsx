@@ -124,6 +124,9 @@ export interface RefinementIntake {
   updated_at: string;
 }
 
+type BlueprintStartTrigger = "start_blueprint_collection" | "start_refinement_intake";
+type BlueprintStartRequest = { trigger: BlueprintStartTrigger; projectName: string | null };
+
 export interface DialogueBeat {
   speaker: string;
   intent: string;
@@ -249,10 +252,10 @@ interface ProjectContextValue {
   loadProjectData: (name: string) => Promise<void>;
   selectScene: (sceneId: string, projectName?: string) => Promise<void>;
   setBlueprintPhase: (phase: BlueprintPhase) => void;
-  startBlueprintCollection: () => void;
+  startBlueprintCollection: (trigger?: BlueprintStartTrigger, projectName?: string | null) => void;
   sendBlueprintConfirmation: (approved: boolean) => void;
   registerBlueprintConfirmationSender: (sender: (approved: boolean) => boolean) => (() => void);
-  registerBlueprintStartSender: (sender: () => void) => (() => void);
+  registerBlueprintStartSender: (sender: (request: BlueprintStartRequest) => void) => (() => void);
   handleBlueprintEvent: (event: any) => void;
   loadBrief: (name: string) => Promise<void>;
   saveBrief: (name: string, brief: ProjectBrief) => Promise<void>;
@@ -300,8 +303,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [refinementStatusError, setRefinementStatusError] = useState<string | null>(null);
   const [refinementIntakeError, setRefinementIntakeError] = useState<string | null>(null);
   const blueprintConfirmationSenderRef = useRef<((approved: boolean) => boolean) | null>(null);
-  const blueprintStartSenderRef = useRef<(() => void) | null>(null);
-  const pendingStartRef = useRef(false);
+  const blueprintStartSenderRef = useRef<((request: BlueprintStartRequest) => void) | null>(null);
+  const pendingStartRef = useRef<BlueprintStartRequest | null>(null);
 
   const requestVersionRef = useRef(0);
   const selectProjectVersionRef = useRef(0);
@@ -375,26 +378,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     const loadingToken = ++loadingTokenRef.current;
     setLoading(true);
     setError(null);
-    setMeta(null);
-    setBlueprint(null);
-    setChapters([]);
-    setStorymap(null);
-    setSelectedSceneId(null);
-    setSelectedSceneScript(null);
-    setScriptError(null);
-    setBlueprintDraft(null);
-    setBlueprintConfirmationId(null);
-    setWorkflowConfirmation(null);
-    setInterviewMessages([]);
-    setGenerationProgress(null);
-    setBrief(null);
-    setChapterOutline(null);
-    setRefinementStatus(null);
-    setRefinementIntake(null);
-    setBriefError(null);
-    setChapterOutlineError(null);
-    setRefinementStatusError(null);
-    setRefinementIntakeError(null);
     if (genTimerRef.current) {
       clearInterval(genTimerRef.current);
       genTimerRef.current = null;
@@ -414,6 +397,28 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
+
+      // Only clear old data after we know this request is still the latest.
+      setMeta(null);
+      setBlueprint(null);
+      setChapters([]);
+      setStorymap(null);
+      setSelectedSceneId(null);
+      setSelectedSceneScript(null);
+      setScriptError(null);
+      setBlueprintDraft(null);
+      setBlueprintConfirmationId(null);
+      setWorkflowConfirmation(null);
+      setInterviewMessages([]);
+      setGenerationProgress(null);
+      setBrief(null);
+      setChapterOutline(null);
+      setRefinementStatus(null);
+      setRefinementIntake(null);
+      setBriefError(null);
+      setChapterOutlineError(null);
+      setRefinementStatusError(null);
+      setRefinementIntakeError(null);
 
       if (metaResp.status === 404 && sessionResp.status === 404) {
         throw new Error("Project not found");
@@ -794,33 +799,34 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setBlueprintPhaseState(phase);
   }, []);
 
-  const requestBlueprintCollectionStart = useCallback(() => {
+  const requestBlueprintCollectionStart = useCallback((request: BlueprintStartRequest) => {
     if (blueprintStartSenderRef.current) {
-      blueprintStartSenderRef.current();
+      blueprintStartSenderRef.current(request);
     } else {
-      pendingStartRef.current = true;
+      pendingStartRef.current = request;
     }
   }, []);
 
-  const registerBlueprintStartSender = useCallback((sender: () => void) => {
+  const registerBlueprintStartSender = useCallback((sender: (request: BlueprintStartRequest) => void) => {
     blueprintStartSenderRef.current = sender;
     // Flush any start request that arrived before the sender was registered.
     if (pendingStartRef.current) {
-      pendingStartRef.current = false;
-      sender();
+      const pendingRequest = pendingStartRef.current;
+      pendingStartRef.current = null;
+      sender(pendingRequest);
     }
     return () => {
       blueprintStartSenderRef.current = null;
     };
   }, []);
 
-  const startBlueprintCollection = useCallback(() => {
+  const startBlueprintCollection = useCallback((trigger: BlueprintStartTrigger = "start_blueprint_collection", projectName?: string | null) => {
     setBlueprintPhaseState("collecting");
     setInterviewMessages([]);
     setBlueprintDraft(null);
     setBlueprintConfirmationId(null);
     setGenerationProgress(null);
-    requestBlueprintCollectionStart();
+    requestBlueprintCollectionStart({ trigger, projectName: projectName ?? currentProject?.name ?? null });
   }, [currentProject, requestBlueprintCollectionStart]);
 
   const handleBlueprintEvent = useCallback((event: any) => {
@@ -835,7 +841,27 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     };
 
     if (event.type === "message") {
-      if (event.message_kind === "blueprint_draft") {
+      if (
+        event.message_kind === "intake_text" ||
+        event.message_kind === "brief_draft_ready" ||
+        event.message_kind === "outline_draft_ready"
+      ) {
+        setBlueprintDraft(null);
+        setBlueprintConfirmationId(null);
+        if (event.intake && typeof event.intake === "object") {
+          // The initial project snapshot may still be in flight with a stale
+          // 404 for refinement-intake. Invalidate it before applying the
+          // WebSocket write-through state.
+          requestVersionRef.current += 1;
+          setRefinementIntake(event.intake as RefinementIntake);
+          setRefinementIntakeError(null);
+        }
+        updatePhase(event.pipeline_stage ?? "idle");
+        const projectName = typeof event.project_name === "string" ? event.project_name : currentProject?.name;
+        if (projectName && event.message_kind !== "intake_text") {
+          loadProjectData(projectName);
+        }
+      } else if (event.message_kind === "blueprint_draft") {
         if (event.draft) {
           setBlueprintDraft(event.draft as Blueprint);
         }

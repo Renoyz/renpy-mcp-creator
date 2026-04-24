@@ -1148,6 +1148,115 @@ class TestRefinementStatePersistence:
         assert meta.get("refinement_state") == "blueprint_ready"
 
 
+class TestBriefConfirmAutoPromotesOutline:
+    def test_confirming_last_brief_card_auto_promotes_outline_draft_from_session(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """When the last brief card is confirmed and a blueprint session draft exists,
+        the refinement intake should be auto-promoted to outline_ready."""
+        _create_project(client, tmp_path, "auto_outline")
+        brief = _make_valid_brief()
+        client.put("/api/projects/auto_outline/brief", json=brief)
+
+        # Seed an initial refinement intake in brief_ready state
+        from renpy_mcp.blueprint.models import RefinementIntake, IntakePhase
+        from renpy_mcp.services.project_manager import ProjectManager
+        from renpy_mcp.config import get_settings
+        pm = ProjectManager(get_settings())
+        pm.write_refinement_intake(
+            "auto_outline",
+            RefinementIntake(phase=IntakePhase.BRIEF_READY, brief_draft_ready=True),
+        )
+
+        # Seed a blueprint session draft with chapters
+        from renpy_mcp.web.chat_ws import _save_runtime_session
+        blueprint_draft = {
+            "title": "Auto Outline Test",
+            "genre": "Sci-fi",
+            "worldview": "Space",
+            "themes": ["discovery"],
+            "target_audience": "Teens",
+            "estimated_play_time": "1 hour",
+            "art_style": "",
+            "audio_style": "",
+            "characters": [],
+            "chapters": [
+                {
+                    "id": "ch1",
+                    "name": "Chapter 1",
+                    "order": 1,
+                    "scenes": [
+                        {
+                            "id": "s1",
+                            "name": "Opening",
+                            "order": 1,
+                            "characters": ["Elena"],
+                            "setting": "Ship",
+                            "status": "pending",
+                            "type": "normal",
+                        }
+                    ],
+                },
+                {
+                    "id": "ch2",
+                    "name": "Chapter 2",
+                    "order": 2,
+                    "scenes": [
+                        {
+                            "id": "s2",
+                            "name": "Conflict",
+                            "order": 1,
+                            "characters": ["Elena", "Marcus"],
+                            "setting": "Station",
+                            "status": "pending",
+                            "type": "normal",
+                        }
+                    ],
+                },
+            ],
+        }
+        _save_runtime_session("auto_outline", {
+            "pipeline_stage": "idle",
+            "turn_count": 2,
+            "draft": blueprint_draft,
+            "intake_mode": True,
+            "awaiting_confirmation": False,
+            "confirmation_id": None,
+        })
+
+        # Confirm all brief cards
+        for key in brief["cards"]:
+            r = client.post("/api/projects/auto_outline/brief/confirm-card", json={"card_key": key})
+            assert r.status_code == 200, r.text
+
+        # Verify refinement intake was auto-promoted to outline_ready
+        r = client.get("/api/projects/auto_outline/refinement-intake")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["outline_draft_ready"] is True
+        assert data["phase"] == "outline_ready"
+        assert len(data["chapter_draft"]) == 2
+        assert data["chapter_draft"][0]["chapter_id"] == "ch1"
+        assert data["chapter_draft"][1]["chapter_id"] == "ch2"
+
+    def test_confirming_brief_card_does_not_auto_promote_without_session_draft(
+        self, client: TestClient, tmp_path: Path
+    ):
+        """If no blueprint session draft exists, confirm-card should not change intake phase."""
+        _create_project(client, tmp_path, "no_session")
+        brief = _make_valid_brief()
+        client.put("/api/projects/no_session/brief", json=brief)
+
+        # Confirm all brief cards (no blueprint session seeded)
+        for key in brief["cards"]:
+            r = client.post("/api/projects/no_session/brief/confirm-card", json={"card_key": key})
+            assert r.status_code == 200, r.text
+
+        # Refinement intake should not exist (never created)
+        r = client.get("/api/projects/no_session/refinement-intake")
+        assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # O. confirm-chapter transaction rollback
 # ---------------------------------------------------------------------------

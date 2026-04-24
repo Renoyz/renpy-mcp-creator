@@ -730,6 +730,27 @@ def test_workspace_new_project_shows_brief_tab_and_create_entry(
     expect(start_btn).to_be_visible(timeout=10000)
 
 
+def test_workspace_start_intake_uses_brief_language_and_refreshes_intake_panel(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Starting Intake from the workspace must drive the Phase 7 Project Brief intake path."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_intake_start_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    page.get_by_role("button", name="Start Intake with AI", exact=True).click()
+
+    chat_panel = page.get_by_test_id("chat-panel-docked")
+    expect(chat_panel).to_contain_text("Project Brief", timeout=10000)
+    expect(chat_panel).not_to_contain_text("完整的蓝图")
+    expect(chat_panel).not_to_contain_text("更准确的蓝图")
+    expect(chat_panel).not_to_contain_text("blueprint", ignore_case=True)
+
+    expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Start Project Intake")).not_to_be_visible(timeout=10000)
+
+
 def test_workspace_new_project_defaults_to_brief_tab(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:

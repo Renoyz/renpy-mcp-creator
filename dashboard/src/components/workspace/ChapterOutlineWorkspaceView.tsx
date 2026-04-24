@@ -8,6 +8,7 @@ interface Props {
   projectName: string;
   onSave: (name: string, outline: ChapterOutline) => Promise<void>;
   onConfirmChapter: (name: string, chapterId: string) => Promise<void>;
+  onFreezeBlueprint?: () => void;
   error?: string | null;
 }
 
@@ -27,7 +28,7 @@ const EMPTY_CHAPTER = (): ChapterOutlineEntry => ({
   confirmed: false,
 });
 
-export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onConfirmChapter, error }: Props) {
+export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onConfirmChapter, onFreezeBlueprint, error }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ChapterOutline | null>(null);
   const [saving, setSaving] = useState(false);
@@ -230,6 +231,20 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
             <Plus className="h-3.5 w-3.5" />
             Add Chapter
           </button>
+        )}
+        {!editing && onFreezeBlueprint && working.chapters.length > 0 && working.chapters.every((ch) => ch.confirmed) && (
+          <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center">
+            <p className="text-sm font-medium text-green-800 mb-3">
+              All chapters confirmed. Ready to freeze blueprint and start generation.
+            </p>
+            <button
+              onClick={onFreezeBlueprint}
+              className="inline-flex items-center gap-1.5 rounded-md bg-green-700 px-4 py-2 text-xs font-medium text-white hover:bg-green-800"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Freeze Blueprint
+            </button>
+          </div>
         )}
       </div>
     </div>
