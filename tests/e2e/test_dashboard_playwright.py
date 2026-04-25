@@ -810,13 +810,13 @@ def _seed_project_prototype(workspace: Path, project_name: str) -> None:
         '# Prototype chapter: 第一章\n\n'
         'label prototype_ch1_start:\n'
         '    scene black\n'
-        '    "【地点：library】"\n'
-        '    "【登场角色：主角、配角】"\n'
+        '    # 地点：library\n'
+        '    # 登场角色：主角、配角\n'
         '    "主角在图书馆遇到配角。"\n'
         '    jump prototype_ch1_scene2\n\n'
         'label prototype_ch1_scene2:\n'
         '    scene black\n'
-        '    "【地点：cafe】"\n'
+        '    # 地点：cafe\n'
         '    "End of prototype."\n'
         '    return\n'
     )
@@ -1674,6 +1674,28 @@ def test_story_map_shows_branch_for_middle_scene(
     # Branch labels should be visible near the middle scene (not just the last scene)
     expect(board.locator("text=去图书馆")).to_be_visible(timeout=10000)
     expect(board.locator("text=去社团")).to_be_visible(timeout=10000)
+
+
+def test_story_map_scene_node_opens_scene_view(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Clicking a Story Map scene node should switch into the Scene view for that scene."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_story_click_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_blueprint(e2e_workspace, project_name)
+
+    page.goto(f"{server_url}/dashboard/projects/{project_name}")
+    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+
+    page.locator("button", has_text="Story Map").click()
+    board = page.locator("[data-testid='story-map-board']")
+    expect(board).to_be_visible(timeout=10000)
+
+    board.locator("[data-testid='story-map-scene-node']").first.click()
+
+    expect(page.locator("text=Hello scene 1")).to_be_visible(timeout=10000)
 
 
 def test_sidebar_expansion_resets_on_project_switch(

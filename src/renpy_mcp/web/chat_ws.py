@@ -26,6 +26,7 @@ from ..blueprint.models import (
     RefinementIntake,
     SceneSummary,
 )
+from ..blueprint.outline_derivation import derive_chapter_outline_fields
 from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvider
 from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
@@ -154,6 +155,20 @@ def _write_build_status_for_project(
         "updated_at": datetime.utcnow().isoformat(),
     }
     status_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _append_refinement_flow_log(project_name: str, level: str, message: str, *args: Any) -> None:
+    """Append a diagnostic refinement-flow line to logs/refinement-flow.log."""
+    settings = get_settings()
+    log_file = settings.workspace / project_name / "logs" / "refinement-flow.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    rendered = message % args if args else message
+    line = f"{datetime.utcnow().isoformat()} [{level}] {rendered}\n"
+    try:
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        logger.warning("Failed to append refinement flow log for project %s", project_name)
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +684,7 @@ def _bind_project_context(websocket: WebSocket, token_holder: list, project_name
 # ---------------------------------------------------------------------------
 
 _orchestrators: dict[str, "BlueprintOrchestrator"] = {}
+_orchestrators_lock = asyncio.Lock()
 
 _START_TRIGGERS = frozenset([
     "start_blueprint_collection",
@@ -713,6 +729,11 @@ class BlueprintOrchestrator:
             try:
                 self.draft = ProjectBlueprint(**session["draft"])
             except Exception:
+                logger.warning(
+                    "Failed to restore draft from session for project %s",
+                    self.project_name,
+                    exc_info=True,
+                )
                 self.draft = None
 
     def _save_session(self) -> None:
@@ -761,52 +782,13 @@ class BlueprintOrchestrator:
         ]
 
     def _build_chapter_intake_entry(self, chapter) -> ChapterIntakeEntry:
-        scene_names = [scene.name for scene in chapter.scenes if scene.name]
-        first_scene_name = scene_names[0] if scene_names else chapter.name
-        last_scene_name = scene_names[-1] if scene_names else chapter.name
-
-        character_focus: list[str] = []
-        for scene in chapter.scenes:
-            for character in scene.characters:
-                if character and character not in character_focus:
-                    character_focus.append(character)
-
-        chapter_goal = (
-            f"Advance {chapter.name} through {first_scene_name}"
-            if first_scene_name
-            else f"Advance {chapter.name}"
-        )
-        key_conflict = (
-            f"Pressure escalates around {last_scene_name}"
-            if last_scene_name
-            else f"Core conflict in {chapter.name}"
-        )
-        emotional_arc = "setup -> escalation" if len(scene_names) > 1 else "setup -> turn"
-        reveals = last_scene_name or chapter.name
-        end_state = last_scene_name or chapter.name
-        mood_or_pacing_bias = "measured" if len(scene_names) <= 2 else "escalating"
-        relationship_shift = ""
-        if len(character_focus) >= 2:
-            relationship_shift = f"{character_focus[0]} and {character_focus[1]} face new pressure together"
-        character_presentation_notes = (
-            f"Keep visual focus on {', '.join(character_focus)}"
-            if character_focus
-            else f"Carry forward the chapter identity of {chapter.name}"
-        )
-
+        total_chapters = len(self.draft.chapters) if self.draft else 1
+        fields = derive_chapter_outline_fields(chapter, total_chapters=total_chapters)
         return ChapterIntakeEntry(
             chapter_id=chapter.id,
             order=chapter.order,
             chapter_name=chapter.name,
-            chapter_goal=chapter_goal,
-            key_conflict=key_conflict,
-            emotional_arc=emotional_arc,
-            reveals=reveals,
-            end_state=end_state,
-            mood_or_pacing_bias=mood_or_pacing_bias,
-            character_focus=character_focus,
-            relationship_shift=relationship_shift,
-            character_presentation_notes=character_presentation_notes,
+            **fields,
         )
 
     def _is_brief_fully_confirmed(self) -> bool:
@@ -814,6 +796,11 @@ class BlueprintOrchestrator:
         try:
             brief = self.pm.read_project_brief(self.project_name)
         except Exception:
+            logger.warning(
+                "Failed to read project brief for %s",
+                self.project_name,
+                exc_info=True,
+            )
             return False
         if brief is None or not brief.cards:
             return False
@@ -923,6 +910,40 @@ class BlueprintOrchestrator:
         }
         intake = RefinementIntake(**kwargs)
         self.pm.write_refinement_intake(self.project_name, intake)
+        if intake.phase == IntakePhase.OUTLINE_READY:
+            logger.info(
+                "Refinement intake advanced to outline_ready for project %s with %d chapter draft entries",
+                self.project_name,
+                len(intake.chapter_draft),
+            )
+            _append_refinement_flow_log(
+                self.project_name,
+                "INFO",
+                "Refinement intake advanced to outline_ready for project %s with %d chapter draft entries",
+                self.project_name,
+                len(intake.chapter_draft),
+            )
+        elif intake.phase == IntakePhase.BRIEF_READY:
+            logger.info("Refinement intake advanced to brief_ready for project %s", self.project_name)
+            _append_refinement_flow_log(
+                self.project_name,
+                "INFO",
+                "Refinement intake advanced to brief_ready for project %s",
+                self.project_name,
+            )
+        elif intake.phase == IntakePhase.CHAPTER:
+            logger.info(
+                "Refinement intake remains in chapter collecting for project %s (latest_summary=%r)",
+                self.project_name,
+                intake.current_summary,
+            )
+            _append_refinement_flow_log(
+                self.project_name,
+                "INFO",
+                "Refinement intake remains in chapter collecting for project %s (latest_summary=%r)",
+                self.project_name,
+                intake.current_summary,
+            )
         return intake
 
     async def _generate_draft_via_llm(self) -> ProjectBlueprint:
@@ -935,6 +956,20 @@ class BlueprintOrchestrator:
         provider = _get_provider()
         if provider is None:
             raise RuntimeError("No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key.")
+        logger.info(
+            "Starting draft generation via LLM for project %s (intake_mode=%s, turn_count=%d)",
+            self.project_name,
+            self.intake_mode,
+            self.turn_count,
+        )
+        _append_refinement_flow_log(
+            self.project_name,
+            "INFO",
+            "Starting draft generation via LLM for project %s (intake_mode=%s, turn_count=%d)",
+            self.project_name,
+            self.intake_mode,
+            self.turn_count,
+        )
 
         # Build transcript from string-content messages only
         transcript_lines: list[str] = []
@@ -1007,6 +1042,20 @@ Requirements:
         last_error: str | None = None
 
         for attempt in range(max_retries + 1):
+            logger.info(
+                "Draft generation attempt %d/%d for project %s",
+                attempt + 1,
+                max_retries + 1,
+                self.project_name,
+            )
+            _append_refinement_flow_log(
+                self.project_name,
+                "INFO",
+                "Draft generation attempt %d/%d for project %s",
+                attempt + 1,
+                max_retries + 1,
+                self.project_name,
+            )
             try:
                 response = await asyncio.to_thread(
                     provider.chat,
@@ -1015,6 +1064,7 @@ Requirements:
                     max_tokens=4096,
                 )
             except Exception as e:
+                logger.exception("Draft generation provider error for project %s", self.project_name)
                 raise RuntimeError(f"Blueprint generation provider error: {e}") from e
 
             try:
@@ -1037,17 +1087,77 @@ Requirements:
                     data = json.loads(repaired)
                 except json.JSONDecodeError:
                     last_error = f"JSON parse error: {e}"
+                    logger.warning(
+                        "Draft generation JSON parse failed for project %s on attempt %d/%d: %s",
+                        self.project_name,
+                        attempt + 1,
+                        max_retries + 1,
+                        e,
+                    )
+                    _append_refinement_flow_log(
+                        self.project_name,
+                        "WARNING",
+                        "Draft generation JSON parse failed for project %s on attempt %d/%d: %s",
+                        self.project_name,
+                        attempt + 1,
+                        max_retries + 1,
+                        e,
+                    )
                     prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
                     continue
 
             try:
                 blueprint = ProjectBlueprint(**data)
+                logger.info(
+                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
+                    self.project_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    len(blueprint.chapters),
+                )
+                _append_refinement_flow_log(
+                    self.project_name,
+                    "INFO",
+                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
+                    self.project_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    len(blueprint.chapters),
+                )
                 return blueprint
             except ValidationError as e:
                 last_error = f"Schema validation error: {e}"
+                logger.warning(
+                    "Draft generation schema validation failed for project %s on attempt %d/%d: %s",
+                    self.project_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                )
+                _append_refinement_flow_log(
+                    self.project_name,
+                    "WARNING",
+                    "Draft generation schema validation failed for project %s on attempt %d/%d: %s",
+                    self.project_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    e,
+                )
                 prompt += f"\n\nERROR: Your previous response did not match the required schema ({e}). Fix and return valid JSON."
                 continue
 
+        logger.error(
+            "Draft generation exhausted retries for project %s: %s",
+            self.project_name,
+            last_error,
+        )
+        _append_refinement_flow_log(
+            self.project_name,
+            "ERROR",
+            "Draft generation exhausted retries for project %s: %s",
+            self.project_name,
+            last_error,
+        )
         raise RuntimeError(
             f"Blueprint generation failed after {max_retries + 1} attempts. {last_error}"
         )
@@ -1060,6 +1170,20 @@ Requirements:
         if (content in _START_TRIGGERS or content in _INTAKE_START_TRIGGERS) and self.turn_count == 0:
             self.intake_mode = content in _INTAKE_START_TRIGGERS
             self.phase = PipelineStage.COLLECTING
+            logger.info(
+                "Starting blueprint chat workflow for project %s with trigger %s (intake_mode=%s)",
+                self.project_name,
+                content,
+                self.intake_mode,
+            )
+            _append_refinement_flow_log(
+                self.project_name,
+                "INFO",
+                "Starting blueprint chat workflow for project %s with trigger %s (intake_mode=%s)",
+                self.project_name,
+                content,
+                self.intake_mode,
+            )
             if self.intake_mode:
                 assistant_content = _localized_text(
                     lang,
@@ -1136,9 +1260,24 @@ Requirements:
 
             # Second turn -> generate draft via LLM and transition to reviewing
             try:
+                logger.info(
+                    "Triggering draft generation for project %s after turn_count=%d (intake_mode=%s)",
+                    self.project_name,
+                    self.turn_count,
+                    self.intake_mode,
+                )
+                _append_refinement_flow_log(
+                    self.project_name,
+                    "INFO",
+                    "Triggering draft generation for project %s after turn_count=%d (intake_mode=%s)",
+                    self.project_name,
+                    self.turn_count,
+                    self.intake_mode,
+                )
                 self.draft = await self._generate_draft_via_llm()
             except Exception as exc:
                 self.phase = PipelineStage.COLLECTING
+                logger.exception("Draft generation failed for project %s", self.project_name)
                 error_msg = _localized_text(
                     lang,
                     f"蓝图生成失败：{exc}",
@@ -1647,10 +1786,12 @@ Requirements:
         }
 
 
-def _get_orchestrator(project_name: str) -> BlueprintOrchestrator:
+async def _get_orchestrator(project_name: str) -> BlueprintOrchestrator:
     if project_name not in _orchestrators:
-        pm = ProjectManager(get_settings())
-        _orchestrators[project_name] = BlueprintOrchestrator(project_name, pm)
+        async with _orchestrators_lock:
+            if project_name not in _orchestrators:
+                pm = ProjectManager(get_settings())
+                _orchestrators[project_name] = BlueprintOrchestrator(project_name, pm)
     return _orchestrators[project_name]
 
 
@@ -1913,7 +2054,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
                 # --- Blueprint orchestrator path --------------------------------
                 if active_project and _should_use_orchestrator(active_project, content):
-                    orchestrator = _get_orchestrator(active_project)
+                    orchestrator = await _get_orchestrator(active_project)
                     events = await orchestrator.handle_user_message(content)
                     for event in events:
                         event.setdefault("project_name", active_project)
@@ -1967,7 +2108,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
                 # --- Blueprint orchestrator confirmation path -------------------
                 if active_project and _orchestrator_has_confirmation(active_project, confirmation_id):
-                    orchestrator = _get_orchestrator(active_project)
+                    orchestrator = await _get_orchestrator(active_project)
                     async for event in orchestrator.handle_confirmation_response(approved):
                         await websocket.send_json(event)
                     continue
@@ -2092,7 +2233,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             )
             await websocket.close()
         except Exception:
-            pass
+            logger.debug("WebSocket close after error response failed", exc_info=True)
     finally:
         if token_holder[0] is not None:
             _current_project_path.reset(token_holder[0])

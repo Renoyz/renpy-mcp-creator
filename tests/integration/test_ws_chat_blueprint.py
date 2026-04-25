@@ -1,6 +1,8 @@
 """Integration tests for blueprint interview orchestration over /ws/chat."""
 
+import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -1702,7 +1704,7 @@ def test_chapter_collecting_turn_updates_chapter_intake_draft(
 
 
 def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
-    monkeypatch, client: TestClient, tmp_path: Path
+    monkeypatch, client: TestClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """When draft is generated after brief confirmed, intake should mark outline_draft_ready."""
     project_name = "bp_ch_ready"
@@ -1714,6 +1716,7 @@ def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
         client.post(f"/api/projects/{project_name}/brief/confirm-card", json={"card_key": key})
 
     monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
+    caplog.set_level(logging.INFO, logger="renpy_mcp.web.chat_ws")
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})
@@ -1731,6 +1734,15 @@ def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
     assert intake["outline_draft_ready"] is True
     assert len(intake["chapter_draft"]) > 0
     assert intake["chapter_draft"][0]["chapter_id"] == "ch1"
+    assert f"Triggering draft generation for project {project_name}" in caplog.text
+    assert f"Starting draft generation via LLM for project {project_name}" in caplog.text
+    assert f"Draft generation succeeded for project {project_name}" in caplog.text
+    assert f"Refinement intake advanced to outline_ready for project {project_name}" in caplog.text
+    flow_log = tmp_path / project_name / "logs" / "refinement-flow.log"
+    assert flow_log.exists()
+    flow_text = flow_log.read_text(encoding="utf-8")
+    assert f"Triggering draft generation for project {project_name}" in flow_text
+    assert f"Draft generation succeeded for project {project_name}" in flow_text
 
 
 def test_outline_ready_transition_populates_structured_chapter_draft_fields(
@@ -1787,3 +1799,39 @@ def test_outline_ready_transition_populates_structured_chapter_draft_fields(
     assert chapter["key_conflict"] != ""
     assert chapter["end_state"] != ""
     assert chapter["character_focus"] == ["Elena", "Marcus"]
+
+
+@pytest.mark.asyncio
+async def test_get_orchestrator_returns_same_instance_under_concurrent_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent calls for the SAME project must return the same orchestrator instance."""
+    from renpy_mcp.config import RenPyConfig, get_settings
+    from renpy_mcp.web.fastapi_app import set_config
+    from renpy_mcp.web import chat_ws as chat_ws_module
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "workspace", tmp_path)
+    set_config(RenPyConfig(sdk_path=Path(".")))
+    app = create_app()  # noqa: F841 - forces init
+
+    project_name = "test_concurrent_orch"
+    chat_ws_module._orchestrators.pop(project_name, None)
+
+    # Run 5 concurrent calls via asyncio.gather — every call must yield the
+    # exact same orchestrator object (not different instances created by a
+    # check-then-act race).
+    async def fetch():
+        return await chat_ws_module._get_orchestrator(project_name)
+
+    results = await asyncio.gather(fetch(), fetch(), fetch(), fetch(), fetch())
+
+    first = results[0]
+    for i, result in enumerate(results[1:], start=2):
+        assert result is first, (
+            f"Call {i} returned a different orchestrator instance. "
+            "Missing synchronisation: _get_orchestrator must use a lock."
+        )
+
+    # Cleanup so other tests get a fresh dict
+    chat_ws_module._orchestrators.pop(project_name, None)

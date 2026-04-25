@@ -186,6 +186,19 @@ class LocalRenpyToolchain:
         error_message = f"Ren'Py exited with status {returncode}"
         if log_file.exists():
             error_message += f". See log at {log_file}"
+        # Surface Ren'Py compiler errors (e.g. duplicate labels) so they
+        # aren't buried behind a misleading "Invalid window" symptom.
+        errors_txt = project_dir / "errors.txt"
+        if errors_txt.exists():
+            try:
+                error_lines = errors_txt.read_text(encoding="utf-8").strip().splitlines()
+                # Include the first 20 lines — enough to show the root cause
+                preview = "\n".join(error_lines[:20])
+                if len(error_lines) > 20:
+                    preview += f"\n... ({len(error_lines) - 20} more lines)"
+                error_message += f"\nRen'Py errors.txt:\n{preview}"
+            except Exception:
+                pass
         return BuildResult(
             project_name=request.project_name,
             target=request.target,
@@ -218,11 +231,17 @@ class LocalRenpyToolchain:
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
-        env.setdefault("SDL_VIDEODRIVER", "dummy")
-        env.setdefault("SDL_AUDIODRIVER", "dummy")
-        env.setdefault("RENPY_FORCE_SOFTWARE", "1")
-        env.setdefault("RENPY_DISABLE_UPDATE", "1")
-        env.setdefault("RENPY_DISABLE_JOYSTICK", "1")
+        # Use direct assignment to override any parent-process values.
+        # setdefault would silently keep an inherited value that breaks headless build.
+        env["SDL_VIDEODRIVER"] = "dummy"
+        env["SDL_AUDIODRIVER"] = "dummy"
+        env["RENPY_FORCE_SOFTWARE"] = "1"
+        env["RENPY_DISABLE_UPDATE"] = "1"
+        env["RENPY_DISABLE_JOYSTICK"] = "1"
+        # Prevent Ren'Py from attempting to open a window even on compile errors.
+        # Without this, a duplicate-label or other parse error can trigger
+        # pygame.display.set_mode() which fails headless on Windows pythonw.exe.
+        env["RENPY_NO_DISPLAY"] = "1"
         return env
 
     def _create_web_player(self, web_dir: Path, project_name: str) -> bool:

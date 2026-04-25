@@ -14,6 +14,8 @@ interface Props {
   onSave: (name: string, brief: ProjectBrief) => Promise<void>;
   onConfirmCard: (name: string, cardKey: string) => Promise<void>;
   onProceedToOutline?: () => void;
+  outlineDraftReady?: boolean;
+  onContinueChapterIntake?: () => void;
   error?: string | null;
 }
 
@@ -66,7 +68,16 @@ function isAllCardsConfirmed(brief: ProjectBrief | null): boolean {
   return allKeys.every((key) => brief.cards[key]?.confirmed);
 }
 
-export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, onProceedToOutline, error }: Props) {
+export function BriefWorkspaceView({
+  brief,
+  projectName,
+  onSave,
+  onConfirmCard,
+  onProceedToOutline,
+  outlineDraftReady = false,
+  onContinueChapterIntake,
+  error,
+}: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ProjectBrief | null>(null);
   const [saving, setSaving] = useState(false);
@@ -298,6 +309,7 @@ export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, 
 
         {/* Next-step CTA when all cards are confirmed */}
         {isAllCardsConfirmed(working) && onProceedToOutline && !editing && (
+          outlineDraftReady ? (
           <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center">
             <div className="flex items-center justify-center gap-2 mb-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" />
@@ -316,6 +328,32 @@ export function BriefWorkspaceView({ brief, projectName, onSave, onConfirmCard, 
               Enter Chapter Outline Review
             </button>
           </div>
+          ) : (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-5 text-center">
+              <div className="flex items-center justify-center gap-2 mb-2">
+                <CheckCircle2 className="h-5 w-5 text-blue-600" />
+                <h3 className="text-sm font-semibold text-blue-800">Chapter Intake in progress</h3>
+              </div>
+              <p className="text-xs text-blue-700 mb-3">
+                The Chapter Outline draft is not ready yet. Continue chapter intake until review can begin.
+              </p>
+              <div
+                data-testid="outline-draft-progress"
+                className="mx-auto mb-3 h-2 w-full max-w-xs overflow-hidden rounded-full bg-blue-100"
+              >
+                <div className="h-full w-1/2 animate-pulse rounded-full bg-blue-600" />
+              </div>
+              {onContinueChapterIntake && (
+                <button
+                  onClick={onContinueChapterIntake}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-700 px-4 py-2 text-xs font-medium text-white hover:bg-blue-800"
+                >
+                  <ArrowRight className="w-3.5 h-3.5" />
+                  Continue Chapter Intake
+                </button>
+              )}
+            </div>
+          )
         )}
       </div>
     </div>

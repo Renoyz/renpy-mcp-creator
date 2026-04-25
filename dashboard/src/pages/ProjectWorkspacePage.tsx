@@ -11,9 +11,17 @@ import { BriefWorkspaceView } from "../components/workspace/BriefWorkspaceView";
 import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutlineWorkspaceView";
 import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
 import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
+import { runFreezeAutoGenerationChain } from "../lib/refinementAutomation";
 import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
 
 type Status = "idle" | "running" | "success" | "failed";
+type UiFlowState = "idle" | "running" | "success" | "failed";
+
+type FlowBanner = {
+  status: UiFlowState;
+  message: string;
+  step?: string | null;
+};
 
 export function ProjectWorkspacePage() {
   const { name } = useParams<{ name: string }>();
@@ -64,6 +72,8 @@ export function ProjectWorkspacePage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewAvailable, setPreviewAvailable] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<string>("idle");
+  const [outlineReviewFlow, setOutlineReviewFlow] = useState<FlowBanner>({ status: "idle", message: "", step: null });
+  const [postFreezeFlow, setPostFreezeFlow] = useState<FlowBanner>({ status: "idle", message: "", step: null });
 
   // Derive the active project name as a stable primitive.
   // This prevents object-reference changes from re-triggering the load effect.
@@ -127,6 +137,8 @@ export function ProjectWorkspacePage() {
     setPreviewUrl(null);
     setPreviewAvailable(false);
     setPipelineStage("idle");
+    setOutlineReviewFlow({ status: "idle", message: "", step: null });
+    setPostFreezeFlow({ status: "idle", message: "", step: null });
     autoRouteTokenRef.current = 0;
   }, [name]);
 
@@ -220,9 +232,13 @@ export function ProjectWorkspacePage() {
         `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/status`
       );
       const protoStatus = await statusResp.json();
-      const hasPrototype = protoStatus.has_prototype === true;
+      const hasActivePrototype =
+        protoStatus.is_active === true ||
+        protoStatus.is_buildable === true ||
+        protoStatus.mode === "single_chapter" ||
+        protoStatus.mode === "multi_chapter";
 
-      const buildUrl = hasPrototype
+      const buildUrl = hasActivePrototype
         ? `/api/projects/${encodeURIComponent(activeProjectName)}/prototype/build`
         : `/api/projects/${encodeURIComponent(activeProjectName)}/build`;
 
@@ -232,18 +248,18 @@ export function ProjectWorkspacePage() {
         body: JSON.stringify({ target: "web" }),
       });
       const data = await resp.json();
-      if (resp.ok && data.success) {
+        if (resp.ok && data.success) {
         setBuildStatus("success");
         setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
         setPreviewAvailable(true);
-        if (hasPrototype) {
+        if (hasActivePrototype) {
           setPipelineStage("prototype_preview_ready");
         }
       } else {
         setBuildStatus("failed");
         setBuildMessage(data.error || "Build failed");
         setPreviewAvailable(false);
-        if (hasPrototype) {
+        if (hasActivePrototype) {
           setPipelineStage("prototype_build_failed");
         }
       }
@@ -292,7 +308,33 @@ export function ProjectWorkspacePage() {
 
   const handleFreezeBlueprint = async () => {
     if (!activeProjectName) return;
-    await freezeBlueprint(activeProjectName);
+    setActiveTab("blueprint");
+    setPostFreezeFlow({ status: "running", step: "freezing", message: "Freezing blueprint..." });
+    try {
+      await runFreezeAutoGenerationChain({
+        projectName: activeProjectName,
+        freezeBlueprint,
+        refreshProjectData: loadProjectData,
+        request: (url, init) => fetch(url, init),
+        onProgress: (event) => {
+          setPostFreezeFlow({
+            status: event.status,
+            step: event.step,
+            message: event.message,
+          });
+        },
+      });
+      setBuildMessage("Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.");
+      setBuildStatus("idle");
+      setPreviewAvailable(false);
+      setPreviewMessage("");
+    } catch (e) {
+      setPostFreezeFlow({
+        status: "failed",
+        step: "failed",
+        message: e instanceof Error ? e.message : "Automatic generation failed after freeze.",
+      });
+    }
   };
 
   const handlePromoteBriefDraft = async () => {
@@ -303,8 +345,22 @@ export function ProjectWorkspacePage() {
 
   const handlePromoteOutlineDraft = async () => {
     if (!activeProjectName) return;
+    setOutlineReviewFlow({
+      status: "running",
+      step: "outline_promote",
+      message: "Generating Chapter Outline review...",
+    });
     setActiveTab("outline");
-    await promoteOutlineDraft(activeProjectName);
+    try {
+      await promoteOutlineDraft(activeProjectName);
+      setOutlineReviewFlow({ status: "success", step: "outline_ready", message: "Chapter Outline review is ready." });
+    } catch (e) {
+      setOutlineReviewFlow({
+        status: "failed",
+        step: "outline_failed",
+        message: e instanceof Error ? e.message : "Failed to enter Chapter Outline review.",
+      });
+    }
   };
 
   if (!name) {
@@ -354,7 +410,7 @@ export function ProjectWorkspacePage() {
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={handleBuild}
-                disabled={buildStatus === "running"}
+                disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
                 className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed ${
                   buildStatus === "failed"
                     ? "bg-red-600 text-white"
@@ -363,12 +419,14 @@ export function ProjectWorkspacePage() {
                     : "bg-gray-900 text-white"
                 }`}
               >
-                {buildStatus === "running" ? (
+                {buildStatus === "running" || postFreezeFlow.status === "running" ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Hammer className="h-3.5 w-3.5" />
                 )}
-                {buildStatus === "running"
+                {postFreezeFlow.status === "running"
+                  ? "Preparing..."
+                  : buildStatus === "running"
                   ? "Building..."
                   : buildStatus === "success"
                   ? "Build OK"
@@ -378,15 +436,15 @@ export function ProjectWorkspacePage() {
               </button>
               <button
                 onClick={handlePreview}
-                disabled={previewLoading}
-                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed"
+                disabled={previewLoading || postFreezeFlow.status === "running" || (!previewAvailable && !previewUrl)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {previewLoading ? (
+                {previewLoading || postFreezeFlow.status === "running" ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Play className="h-3.5 w-3.5" />
                 )}
-                {previewLoading ? "Starting..." : "Preview"}
+                {postFreezeFlow.status === "running" ? "Preparing..." : previewLoading ? "Starting..." : "Preview"}
               </button>
             </div>
           )}
@@ -399,6 +457,20 @@ export function ProjectWorkspacePage() {
             onFreeze={handleFreezeBlueprint}
           />
         </div>
+        {postFreezeFlow.status !== "idle" && (
+          <div
+            data-testid="post-freeze-status"
+            className={`mt-2 rounded-md p-2 text-xs ${
+              postFreezeFlow.status === "failed"
+                ? "bg-red-50 text-red-700"
+                : postFreezeFlow.status === "success"
+                ? "bg-green-50 text-green-700"
+                : "bg-blue-50 text-blue-700"
+            }`}
+          >
+            {postFreezeFlow.message}
+          </div>
+        )}
         {canRunBuildPreview && buildMessage && (
           <div
             data-testid="build-status"
@@ -509,18 +581,44 @@ export function ProjectWorkspacePage() {
                   projectName={activeProjectName}
                   onSave={saveBrief}
                   onConfirmCard={confirmCard}
-                  onProceedToOutline={async () => {
-                    if (activeProjectName && refinementIntake?.outline_draft_ready) {
-                      await promoteOutlineDraft(activeProjectName);
-                    }
-                    setActiveTab("outline");
+                  outlineDraftReady={!!refinementIntake?.outline_draft_ready}
+                  onContinueChapterIntake={() => setActiveTab("intake")}
+                  onProceedToOutline={() => {
+                    void handlePromoteOutlineDraft();
                   }}
                   error={briefError}
                 />
               )
             )}
             {activeTab === "outline" && (
-              !chapterOutline && refinementStatus?.chapter_intake_required ? (
+              outlineReviewFlow.status === "running" && !chapterOutline ? (
+                <div className="h-full overflow-auto p-6">
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-6">
+                    <h2 className="text-base font-semibold text-blue-900">Preparing Outline Review</h2>
+                    <p className="mt-2 text-sm text-blue-800">{outlineReviewFlow.message}</p>
+                    <div
+                      data-testid="outline-review-progress"
+                      className="mt-4 h-2 w-full overflow-hidden rounded-full bg-blue-100"
+                    >
+                      <div className="h-full w-1/2 animate-pulse rounded-full bg-blue-600" />
+                    </div>
+                  </div>
+                </div>
+              ) : outlineReviewFlow.status === "failed" && !chapterOutline ? (
+                <div className="h-full overflow-auto p-6">
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-6">
+                    <h2 className="text-base font-semibold text-red-900">Failed to enter Outline Review</h2>
+                    <p className="mt-2 text-sm text-red-800">{outlineReviewFlow.message}</p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("intake")}
+                      className="mt-4 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                      Go to Intake
+                    </button>
+                  </div>
+                </div>
+              ) : !chapterOutline && refinementStatus?.chapter_intake_required ? (
                 <div className="h-full overflow-auto p-6">
                   <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50 p-6">
                     <h2 className="text-base font-semibold text-blue-900">Chapter Intake First</h2>
@@ -566,12 +664,21 @@ export function ProjectWorkspacePage() {
               ) : (
                 <BlueprintWorkspaceView
                   blueprint={blueprint}
+                  chapters={chapters}
                   refinementStatus={refinementStatus}
                   onFreeze={handleFreezeBlueprint}
                 />
               )
             )}
-            {activeTab === "storymap" && <StoryMapWorkspaceView storymap={storymap} chapters={chapters} />}
+            {activeTab === "storymap" && (
+              <StoryMapWorkspaceView
+                storymap={storymap}
+                chapters={chapters}
+                onSelectScene={(sceneId) => {
+                  void handleSelectScene(sceneId);
+                }}
+              />
+            )}
             {activeTab === "scene" && (
               <SceneWorkspaceView
                 script={selectedSceneScript}

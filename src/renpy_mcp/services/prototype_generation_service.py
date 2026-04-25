@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -89,8 +90,57 @@ from renpy_mcp.services.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
 
-_CJK_FONT_SOURCE = Path(r"C:\Windows\Fonts\simhei.ttf")
 _CJK_FONT_DEST_NAME = "simhei.ttf"
+
+_WINDOWS_CJK_FALLBACKS = [
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\msyh.ttf"),
+    Path(r"C:\Windows\Fonts\msgothic.ttf"),
+]
+
+_LINUX_CJK_FALLBACKS = [
+    Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+    Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
+    Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
+]
+
+_DARWIN_CJK_FALLBACKS = [
+    Path("/System/Library/Fonts/PingFang.ttc"),
+    Path("/System/Library/Fonts/STHeiti Light.ttc"),
+    Path("/Library/Fonts/Arial Unicode.ttf"),
+]
+
+
+def resolve_cjk_font_path(config_path: Path | None = None) -> Path | None:
+    """Resolve the best available CJK font path for the current platform.
+
+    Precedence:
+    1. *config_path* if it exists on disk
+    2. Platform-specific fallback list (first one that exists)
+    3. ``None`` if no font is available (CI / Docker)
+
+    Callers should gracefully degrade when ``None`` is returned.
+    """
+    if config_path is not None and config_path.exists():
+        return config_path
+
+    fallbacks: list[Path]
+    if os.name == "nt":
+        fallbacks = _WINDOWS_CJK_FALLBACKS
+    elif os.uname().sysname == "Darwin":
+        fallbacks = _DARWIN_CJK_FALLBACKS
+    else:
+        fallbacks = _LINUX_CJK_FALLBACKS
+
+    for p in fallbacks:
+        if p.exists():
+            return p
+    return None
 
 
 class PrototypeScene(BaseModel):
@@ -361,15 +411,16 @@ class PrototypeGenerationService:
     # Multi-chapter script generation
     # ------------------------------------------------------------------
 
-    def generate_multi_chapter_scripts(
+    async def generate_multi_chapter_scripts(
         self, project_name: str, blueprint: ProjectBlueprint
     ) -> dict[str, Any]:
         """Generate multi-chapter prototype scripts from scene_packages snapshot.
 
-        Reads the persisted ``meta/scene_packages.json``, writes one ``.rpy``
-        per chapter, chains chapters via ``jump`` labels, updates
-        ``meta/index.json`` with per-scene file/label mappings, and wires
-        ``game/script.rpy`` to the first chapter start.
+        Reads the persisted ``meta/scene_packages.json``, generates background
+        and character assets for all scenes, builds sprite plans, configures
+        CJK-safe fonts, writes one ``.rpy`` per chapter, chains chapters via
+        ``jump`` labels, updates ``meta/index.json`` with per-scene file/label
+        mappings, and wires ``game/script.rpy`` to the first chapter start.
 
         This method is transactional: either all chapters are promoted and
         wired successfully, or the project is rolled back to its previous
@@ -404,16 +455,16 @@ class PrototypeGenerationService:
         sorted_chapters = sorted(snapshot.chapters, key=lambda ch: ch.chapter_order)
 
         # ------------------------------------------------------------------
-        # Phase 1: Prepare — write all chapter scripts to staging (no promote)
+        # Phase 0: Build all PrototypeScene objects (no I/O)
         # ------------------------------------------------------------------
-        chapter_infos: list[dict] = []
+        chapter_data: list[dict] = []
+        all_scenes: list[PrototypeScene] = []
 
         for i, ch in enumerate(sorted_chapters):
-            # Convert ScenePackageScene -> PrototypeScene
             scenes: list[PrototypeScene] = []
             scene_orders: dict[str, int] = {}
             for s in ch.scenes:
-                entry_label = s.entry_label or (
+                entry_label = (
                     f"prototype_{ch.chapter_id}_start"
                     if s.scene_order == 1
                     else f"prototype_{ch.chapter_id}_scene_{s.scene_order}"
@@ -436,30 +487,27 @@ class PrototypeGenerationService:
                     for sp in s.sprite_plan
                 ]
 
-                scenes.append(
-                    PrototypeScene(
-                        scene_id=s.scene_id,
-                        title=s.title,
-                        summary=s.summary,
-                        location=s.location,
-                        location_visual_brief=s.location_visual_brief,
-                        mood=s.mood,
-                        characters_present=s.characters_present,
-                        dialogue_beats=s.dialogue_beats,
-                        sprite_plan=sprite_plan,
-                        entry_label=entry_label,
-                        next_scene_id=s.next_scene_id,
-                    )
+                scene = PrototypeScene(
+                    scene_id=s.scene_id,
+                    title=s.title,
+                    summary=s.summary,
+                    location=s.location,
+                    location_visual_brief=s.location_visual_brief,
+                    mood=s.mood,
+                    characters_present=s.characters_present,
+                    dialogue_beats=s.dialogue_beats,
+                    sprite_plan=sprite_plan,
+                    entry_label=entry_label,
+                    next_scene_id=s.next_scene_id,
                 )
+                scenes.append(scene)
+                all_scenes.append(scene)
 
             next_chapter_start_label: str | None = None
             if i + 1 < len(sorted_chapters):
                 next_ch = sorted_chapters[i + 1]
                 if next_ch.scenes:
-                    next_chapter_start_label = (
-                        next_ch.scenes[0].entry_label
-                        or f"prototype_{next_ch.chapter_id}_start"
-                    )
+                    next_chapter_start_label = f"prototype_{next_ch.chapter_id}_start"
 
             chapter_summary = ChapterSummary(
                 id=ch.chapter_id,
@@ -468,21 +516,46 @@ class PrototypeGenerationService:
                 scenes=[],
             )
 
+            chapter_data.append({
+                "scenes": scenes,
+                "scene_orders": scene_orders,
+                "next_chapter_start_label": next_chapter_start_label,
+                "chapter_summary": chapter_summary,
+                "ch": ch,
+            })
+
+        # ------------------------------------------------------------------
+        # Phase 0.5: Generate assets and CJK font for all scenes
+        # ------------------------------------------------------------------
+        bg_assets = await self.generate_background_assets(project_name, all_scenes)
+        char_assets = await self.generate_character_assets(project_name, blueprint, all_scenes)
+        self.build_sprite_plan(all_scenes, char_assets, project_name=project_name)
+        cjk_font_config = self.ensure_cjk_font_config(project_name)
+
+        # ------------------------------------------------------------------
+        # Phase 1: Write all chapter scripts to staging (no promote)
+        # ------------------------------------------------------------------
+        chapter_infos: list[dict] = []
+
+        for data in chapter_data:
             staging_path = self.write_script(
                 project_name,
-                chapter_summary,
-                scenes,
-                next_chapter_start_label=next_chapter_start_label,
+                data["chapter_summary"],
+                data["scenes"],
+                background_assets=bg_assets,
+                character_assets=char_assets,
+                cjk_font_config=cjk_font_config,
+                next_chapter_start_label=data["next_chapter_start_label"],
             )
             final_path = Path(self._final_path_from_staging(staging_path)).as_posix()
 
             chapter_infos.append({
-                "chapter_id": ch.chapter_id,
+                "chapter_id": data["ch"].chapter_id,
                 "staging_path": staging_path,
                 "final_path": final_path,
-                "scenes": scenes,
-                "scene_ids": [s.scene_id for s in scenes],
-                "scene_orders": scene_orders,
+                "scenes": data["scenes"],
+                "scene_ids": [s.scene_id for s in data["scenes"]],
+                "scene_orders": data["scene_orders"],
             })
 
         # ------------------------------------------------------------------
@@ -504,10 +577,7 @@ class PrototypeGenerationService:
         # Determine first chapter entry label for manifest (before any mutation)
         first_label: str | None = None
         if sorted_chapters and sorted_chapters[0].scenes:
-            first_label = (
-                sorted_chapters[0].scenes[0].entry_label
-                or f"prototype_{sorted_chapters[0].chapter_id}_start"
-            )
+            first_label = f"prototype_{sorted_chapters[0].chapter_id}_start"
 
         chapter_results = [
             {
@@ -537,8 +607,7 @@ class PrototypeGenerationService:
                 if staging_file.exists():
                     if final_file.exists():
                         old_final_contents[info["final_path"]] = final_file.read_text(encoding="utf-8")
-                        final_file.unlink()
-                    staging_file.rename(final_file)
+                    staging_file.replace(final_file)
                     promoted_paths.append(info["final_path"])
 
             # 2. Update index.json with all new scene entries
@@ -571,6 +640,7 @@ class PrototypeGenerationService:
                         "file_path": final_path,
                         "source": "prototype",
                         "order": scene_orders.get(s.scene_id, 1),
+                        "status": "generated",
                     }
             self.pm.write_project_index(project_name, index)
 
@@ -583,7 +653,9 @@ class PrototypeGenerationService:
             try:
                 self.pm.write_project_index(project_name, old_index)
             except Exception:
-                logger.warning("Failed to restore index during rollback")
+                logger.warning(
+                    "Failed to restore index during rollback", exc_info=True
+                )
             try:
                 if old_manifest is not None:
                     self.pm.write_prototype_manifest(project_name, old_manifest)
@@ -595,7 +667,9 @@ class PrototypeGenerationService:
                     if manifest_path.exists():
                         manifest_path.unlink()
             except Exception:
-                logger.warning("Failed to restore manifest during rollback")
+                logger.warning(
+                    "Failed to restore manifest during rollback", exc_info=True
+                )
             for fp in promoted_paths:
                 f = project_dir / fp
                 if f.exists():
@@ -965,10 +1039,10 @@ Themes: {', '.join(blueprint.themes)}
 Characters:
 {characters_desc}
 
-Prototype Chapter: {chapter.name}
+Prototype Chapter: {chapter.name} (chapter_id: "{chapter.id}")
 
 {style_block}Generate a JSON array of scenes. Each scene must have these fields:
-- scene_id: unique identifier string
+- scene_id: unique identifier string (prefixed with the chapter_id, e.g., "{chapter.id}-s1")
 - title: scene title
 - summary: 1-2 sentence narration summary
 - location: setting name (e.g., "library", "cafe")
@@ -980,7 +1054,7 @@ Prototype Chapter: {chapter.name}
   - intent: what the character is trying to do or feel
   - content_brief: brief description of what they say
   - spoken_line: the final in-character spoken dialogue line for the game UI
-- entry_label: Ren'Py label name for this scene (e.g., "prototype_ch1_start")
+- entry_label: Ren'Py label name for this scene. MUST use the chapter_id "{chapter.id}". Use "prototype_{chapter.id}_start" for the first scene, "prototype_{chapter.id}_scene_2" for the second, etc. Never use a different chapter_id (like "ch1") for this chapter.
 - next_scene_id: scene_id of the next scene, or null for the last scene
 
 Consistency rules:
@@ -990,6 +1064,7 @@ Consistency rules:
 - spoken_line must be direct spoken dialogue, not narration or a third-person summary.
 - Do NOT write spoken_line like "询问对方...", "低声自语...", "展开双臂说...".
 - spoken_line should read like natural VN dialogue the character can say aloud in Chinese, 1-2 sentences max.
+- All entry_label values must use chapter_id "{chapter.id}" — never copy labels from other chapters.
 
 Requirements:
 - 2 to 4 scenes total
@@ -1028,6 +1103,14 @@ Requirements:
 
                 scenes = [PrototypeScene(**item) for item in data]
                 self._validate_scene_consistency(scenes)
+                # Override entry_labels with chapter-correct values to prevent
+                # cross-chapter label duplication when the LLM copies the ch1 example.
+                for i, scene in enumerate(scenes):
+                    scene.entry_label = (
+                        f"prototype_{chapter.id}_start"
+                        if i == 0
+                        else f"prototype_{chapter.id}_scene_{i + 1}"
+                    )
                 return scenes
 
             except json.JSONDecodeError as e:
@@ -1838,11 +1921,12 @@ Requirements:
         configured = False
         new_files: list[str] = []
 
-        if _CJK_FONT_SOURCE.exists() and not font_dest.exists():
+        font_source = resolve_cjk_font_path()
+        if font_source is not None and not font_dest.exists():
             try:
                 target_font_path = staged_font_dest or font_dest
                 target_font_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(_CJK_FONT_SOURCE, target_font_path)
+                shutil.copy2(font_source, target_font_path)
                 configured = True
                 new_files.append(str(target_font_path.relative_to(project_dir).as_posix()))
             except OSError as exc:
@@ -2063,11 +2147,11 @@ Requirements:
                 lines.append(f"    scene black  # PLACEHOLDER: {escaped_loc}")
             if scene.location:
                 escaped_loc = _escape_renpy_string(scene.location)
-                lines.append(f'    "【地点：{escaped_loc}】"')
+                lines.append(f"    # 地点：{escaped_loc}")
             if scene.characters_present:
                 chars = "、".join(scene.characters_present)
                 escaped_chars = _escape_renpy_string(chars)
-                lines.append(f'    "【登场角色：{escaped_chars}】"')
+                lines.append(f"    # 登场角色：{escaped_chars}")
             # Show sprites for characters in this scene (only when renderable)
             shown_sprites: list[str] = []
             for sp in scene.sprite_plan:
@@ -2442,6 +2526,7 @@ Requirements:
                 "order": i + 1,
                 "background_asset_path": bg_path_str,
                 "background_placeholder": bg_placeholder,
+                "status": "generated",
             }
             index["scenes"][scene.scene_id] = entry
 

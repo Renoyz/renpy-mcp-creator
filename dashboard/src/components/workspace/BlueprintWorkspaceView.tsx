@@ -1,20 +1,25 @@
 import { FileText, Download, Edit3, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
-import type { Blueprint, RefinementStatus } from "@/context/ProjectContext";
+import type { Blueprint, RefinementStatus, Chapter } from "@/context/ProjectContext";
 import { cn } from "@/lib/utils";
 import { useMemo, useState } from "react";
 
 interface Props {
   blueprint: Blueprint | null;
+  chapters?: Chapter[];
   refinementStatus?: RefinementStatus | null;
   onFreeze?: (() => Promise<void>) | null;
 }
 
-export function BlueprintWorkspaceView({ blueprint, refinementStatus, onFreeze }: Props) {
+export function BlueprintWorkspaceView({ blueprint, chapters = [], refinementStatus, onFreeze }: Props) {
   const [freezePending, setFreezePending] = useState(false);
+  const displayChapters = useMemo(() => {
+    if (chapters.length > 0) return chapters;
+    return blueprint?.chapters ?? [];
+  }, [blueprint, chapters]);
+
   const flatScenes = useMemo(() => {
-    if (!blueprint?.chapters) return [];
-    return blueprint.chapters.flatMap((ch) => ch.scenes);
-  }, [blueprint]);
+    return displayChapters.flatMap((ch) => ch.scenes);
+  }, [displayChapters]);
 
   const stats = useMemo(() => {
     const confirmed = flatScenes.filter((s) => s.status === "confirmed").length;
@@ -94,7 +99,7 @@ export function BlueprintWorkspaceView({ blueprint, refinementStatus, onFreeze }
               </span>
             </div>
             <p className="text-sm text-gray-500">
-              {blueprint.chapters?.length || 0} 章节 · {stats.total} 场景 · 已确认 {stats.confirmed} 个
+              {displayChapters.length || 0} 章节 · {stats.total} 场景 · 已确认 {stats.confirmed} 个
             </p>
           </div>
 
@@ -171,7 +176,7 @@ export function BlueprintWorkspaceView({ blueprint, refinementStatus, onFreeze }
             章节结构
           </h3>
           <div className="space-y-4">
-            {blueprint.chapters?.map((chapter, idx) => (
+            {displayChapters.map((chapter, idx) => (
               <div
                 key={chapter.id}
                 className="rounded-xl border border-gray-200 overflow-hidden"

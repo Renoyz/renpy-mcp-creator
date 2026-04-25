@@ -389,7 +389,7 @@ async def test_rollback_removes_intermediate_character_artifacts(
 
 @pytest.mark.asyncio
 async def test_rollback_keeps_old_font_assets_but_removes_new_font_assets(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Rollback must preserve pre-existing font files while removing newly created ones."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
@@ -411,53 +411,49 @@ async def test_rollback_keeps_old_font_assets_but_removes_new_font_assets(
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
-    proto_module._CJK_FONT_SOURCE = fake_source
+    monkeypatch.setattr(proto_module, "resolve_cjk_font_path", lambda: fake_source)
+
+    # Round 1: generate font config successfully
+    round1_id = "r1"
+    cjk_config_r1 = service.ensure_cjk_font_config(project_name)
+    staging_path_r1 = service.write_script(project_name, chapter, scenes)
+    final_path_r1 = service._final_path_from_staging(staging_path_r1)
+    new_scene_ids = [s.scene_id for s in scenes]
+    old_script = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+    service.update_index(project_name, chapter, scenes, final_path_r1, cjk_font_config=cjk_config_r1)
+    service.commit_prototype_replacement(project_name, new_scene_ids, staging_path_r1, round_id=round1_id)
+
+    font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
+    assert font_path.exists(), "Font file should exist after round 1"
+    font_content = font_path.read_bytes()
+
+    # Round 2: fail after font setup
+    round2_id = "r2"
+    cjk_config_r2 = service.ensure_cjk_font_config(project_name)
+    staging_path_r2 = service.write_script(project_name, chapter, scenes)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
 
     try:
-        # Round 1: generate font config successfully
-        round1_id = "r1"
-        cjk_config_r1 = service.ensure_cjk_font_config(project_name)
-        staging_path_r1 = service.write_script(project_name, chapter, scenes)
-        final_path_r1 = service._final_path_from_staging(staging_path_r1)
-        new_scene_ids = [s.scene_id for s in scenes]
-        old_script = service.backup_main_script(project_name)
-        service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
-        service.update_index(project_name, chapter, scenes, final_path_r1, cjk_font_config=cjk_config_r1)
-        service.commit_prototype_replacement(project_name, new_scene_ids, staging_path_r1, round_id=round1_id)
+        service.update_index(project_name, chapter, scenes, service._final_path_from_staging(staging_path_r2), cjk_font_config=cjk_config_r2)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, staging_path_r2, new_scene_ids, old_script,
+            generated_asset_paths=cjk_config_r2.get("new_files", []),
+            round_id=round2_id,
+        )
 
-        font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
-        assert font_path.exists(), "Font file should exist after round 1"
-        font_content = font_path.read_bytes()
+    # Old font file must survive
+    assert font_path.exists(), "Pre-existing font file must survive rollback"
+    assert font_path.read_bytes() == font_content, "Font file must not be altered"
 
-        # Round 2: fail after font setup
-        round2_id = "r2"
-        cjk_config_r2 = service.ensure_cjk_font_config(project_name)
-        staging_path_r2 = service.write_script(project_name, chapter, scenes)
-        service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
-
-        def failing_update(*args, **kwargs):
-            raise RuntimeError("Simulated index failure")
-        service.update_index = failing_update
-
-        try:
-            service.update_index(project_name, chapter, scenes, service._final_path_from_staging(staging_path_r2), cjk_font_config=cjk_config_r2)
-        except RuntimeError:
-            service.rollback_prototype_generation(
-                project_name, staging_path_r2, new_scene_ids, old_script,
-                generated_asset_paths=cjk_config_r2.get("new_files", []),
-                round_id=round2_id,
-            )
-
-        # Old font file must survive
-        assert font_path.exists(), "Pre-existing font file must survive rollback"
-        assert font_path.read_bytes() == font_content, "Font file must not be altered"
-
-        # New round-2 staging font config must be gone
-        staging_dir_r2 = tmp_path / project_name / "game" / "__staging__" / round2_id
-        assert not staging_dir_r2.exists(), "Round-2 staging dir should be removed"
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    # New round-2 staging font config must be gone
+    staging_dir_r2 = tmp_path / project_name / "game" / "__staging__" / round2_id
+    assert not staging_dir_r2.exists(), "Round-2 staging dir should be removed"
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,11 @@
 """Live game integration tools — v2 file-based IPC with running game."""
 
-import asyncio
 import base64
 import json
 import shutil
-import time
 from pathlib import Path
 
+from ..bridge import BridgeClient
 from ..config import RenPyConfig
 
 _BRIDGE_SCRIPT = (Path(__file__).parent.parent / "bridge" / "bridge_script.rpy").resolve()
@@ -15,42 +14,19 @@ _BRIDGE_SCRIPT = (Path(__file__).parent.parent / "bridge" / "bridge_script.rpy")
 def register_live_tools(mcp, config: RenPyConfig):
     """Register live game integration MCP tools."""
 
-    def _mcp_dir() -> Path:
-        if not config.project_path:
-            raise ValueError("No project set.")
-        return config.project_path / "game" / "_mcp"
+    _bridge_client: BridgeClient | None = None
 
-    def _write_command(cmd: dict) -> Path:
-        """Write a command JSON for the bridge to consume."""
-        d = _mcp_dir()
-        d.mkdir(exist_ok=True)
-        cmd_file = d / "cmd.json"
-        tmp = d / "cmd.json.tmp"
-        tmp.write_text(json.dumps(cmd, ensure_ascii=False), encoding="utf-8")
-        if cmd_file.exists():
-            cmd_file.unlink()
-        tmp.rename(cmd_file)
-        return cmd_file
+    def _get_bridge_client() -> BridgeClient:
+        nonlocal _bridge_client
+        if _bridge_client is None:
+            if not config.project_path:
+                raise ValueError("No project set.")
+            _bridge_client = BridgeClient(config.project_path)
+        return _bridge_client
 
     async def _send_command(cmd: dict, timeout: float = 5.0) -> dict:
         """Send a command and wait for response."""
-        status_file = _mcp_dir() / "status.json"
-        start = time.time()
-
-        # Write command (bridge will consume it and write status)
-        _write_command(cmd)
-
-        # Wait for a fresh status response (time >= our send time)
-        while time.time() - start < timeout:
-            if status_file.exists():
-                try:
-                    data = json.loads(status_file.read_text(encoding="utf-8"))
-                    if data.get("time", 0) >= start:
-                        return data
-                except (json.JSONDecodeError, OSError):
-                    pass
-            await asyncio.sleep(0.2)
-        return {"success": False, "error": "Timeout waiting for game response. Is the game running with the MCP bridge?"}
+        return await _get_bridge_client().send_command(cmd, timeout)
 
     @mcp.tool()
     async def install_bridge() -> str:

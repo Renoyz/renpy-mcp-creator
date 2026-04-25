@@ -212,8 +212,8 @@ async def test_write_script_uses_safe_placeholder_commands_without_assets(client
     assert "scene black" in content, "Must use safe scene black placeholder"
 
     # Must express location and characters via narration text
-    assert "【地点：" in content, "Must include location placeholder text"
-    assert "【登场角色：" in content, "Must include characters placeholder text"
+    assert "# 地点：" in content, "Must include location placeholder comment"
+    assert "# 登场角色：" in content, "Must include characters placeholder comment"
 
 
 @pytest.mark.asyncio
@@ -1651,7 +1651,7 @@ async def test_unknown_dialogue_speaker_falls_back_safely_without_invalid_say_st
 
 @pytest.mark.asyncio
 async def test_cjk_font_config_uses_define_style_and_only_when_font_exists(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CJK font config must use 'define' statements and only when font file exists."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
@@ -1666,43 +1666,36 @@ async def test_cjk_font_config_uses_define_style_and_only_when_font_exists(
     service = PrototypeGenerationService(pm=pm, provider=None)
 
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
 
     # Case 1: No font source available
-    proto_module._CJK_FONT_SOURCE = tmp_path / "nonexistent_font.ttf"
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
-        assert config_path.exists()
-        content = config_path.read_text(encoding="utf-8")
-        assert "define gui.text_font" not in content, (
-            "Must NOT define fonts when source is missing"
-        )
-        assert config["configured"] is False
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    monkeypatch.setattr(proto_module, "resolve_cjk_font_path", lambda: None)
+    config = service.ensure_cjk_font_config(project_name)
+    config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+    assert config_path.exists()
+    content = config_path.read_text(encoding="utf-8")
+    assert "define gui.text_font" not in content, (
+        "Must NOT define fonts when source is missing"
+    )
+    assert config["configured"] is False
 
     # Case 2: Simulate font source by creating a dummy file
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
-    proto_module._CJK_FONT_SOURCE = fake_source
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        content = config_path.read_text(encoding="utf-8")
-        assert "gui.text_font" in content, (
-            f"Must set gui.text_font, got:\n{content}"
-        )
-        assert "init python:" in content, (
-            "Must use init python block for runtime font override"
-        )
-        assert config["configured"] is True
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    monkeypatch.setattr(proto_module, "resolve_cjk_font_path", lambda: fake_source)
+    config = service.ensure_cjk_font_config(project_name)
+    content = config_path.read_text(encoding="utf-8")
+    assert "gui.text_font" in content, (
+        f"Must set gui.text_font, got:\n{content}"
+    )
+    assert "init python:" in content, (
+        "Must use init python block for runtime font override"
+    )
+    assert config["configured"] is True
 
 
 @pytest.mark.asyncio
 async def test_font_file_is_copied_into_project_before_font_config_is_enabled(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Font file must exist in the project before config claims it is configured."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
@@ -1721,16 +1714,13 @@ async def test_font_file_is_copied_into_project_before_font_config_is_enabled(
     fake_source.write_bytes(b"fakefont")
 
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
-    proto_module._CJK_FONT_SOURCE = fake_source
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
-        assert font_path.exists(), "Font file must be copied into project"
-        assert config["configured"] is True
-        assert config["font_path"] == "game/fonts/simhei.ttf"
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    monkeypatch.setattr(proto_module, "resolve_cjk_font_path", lambda: fake_source)
+
+    config = service.ensure_cjk_font_config(project_name)
+    font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
+    assert font_path.exists(), "Font file must be copied into project"
+    assert config["configured"] is True
+    assert config["font_path"] == "game/fonts/simhei.ttf"
 
 
 @pytest.mark.asyncio
@@ -1806,7 +1796,7 @@ async def test_write_script_emits_complete_location_and_character_hint_lines(
     content = full_path.read_text(encoding="utf-8")
 
     for scene in scenes:
-        assert f"【地点：{scene.location}】" in content, (
+        assert f"# 地点：{scene.location}" in content, (
             f"Complete location hint missing for {scene.scene_id}"
         )
         for char in scene.characters_present:

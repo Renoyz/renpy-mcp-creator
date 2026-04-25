@@ -6,9 +6,10 @@ import { useMemo } from "react";
 interface Props {
   storymap: StoryMap | null;
   chapters: Chapter[];
+  onSelectScene?: (sceneId: string) => void;
 }
 
-export function StoryMapWorkspaceView({ storymap, chapters }: Props) {
+export function StoryMapWorkspaceView({ storymap, chapters, onSelectScene }: Props) {
   const sceneMap = useMemo(() => {
     const map = new Map<string, { chapterId: string; name: string; type?: string; is_ending?: boolean | null }>();
     for (const ch of chapters) {
@@ -68,6 +69,7 @@ export function StoryMapWorkspaceView({ storymap, chapters }: Props) {
             chIndex={chIndex}
             sceneMap={sceneMap}
             edgesByFrom={edgesByFrom}
+            onSelectScene={onSelectScene}
           />
         ))}
       </div>
@@ -80,11 +82,13 @@ function ChapterBoard({
   chIndex,
   sceneMap,
   edgesByFrom,
+  onSelectScene,
 }: {
   chapter: Chapter;
   chIndex: number;
   sceneMap: Map<string, { chapterId: string; name: string; type?: string; is_ending?: boolean | null }>;
   edgesByFrom: Map<string, { to: string; label?: string | null; type: string }[]>;
+  onSelectScene?: (sceneId: string) => void;
 }) {
   return (
     <div data-testid="story-map-chapter" className="rounded-xl border border-gray-200 overflow-hidden">
@@ -111,7 +115,7 @@ function ChapterBoard({
               <div key={scene.id} className="flex flex-col items-center gap-2">
                 {/* Node row with main flow arrow */}
                 <div className="flex items-center gap-3">
-                  <SceneNode scene={scene} />
+                  <SceneNode scene={scene} onSelectScene={onSelectScene} />
                   {!isLast && (
                     <ArrowRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
                   )}
@@ -143,10 +147,21 @@ function ChapterBoard({
   );
 }
 
-function SceneNode({ scene }: { scene: Chapter["scenes"][0] }) {
+function SceneNode({
+  scene,
+  onSelectScene,
+}: {
+  scene: Chapter["scenes"][0];
+  onSelectScene?: (sceneId: string) => void;
+}) {
   if (scene.type === "branch_point") {
     return (
-      <div data-testid="story-map-scene-node" className="flex flex-col items-center">
+      <button
+        type="button"
+        data-testid="story-map-scene-node"
+        onClick={() => onSelectScene?.(scene.id)}
+        className="flex flex-col items-center"
+      >
         <div className="w-20 h-20 rotate-45 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 shadow-md flex items-center justify-center">
           <div className="-rotate-45 text-center px-1">
             <GitFork className="w-4 h-4 text-white mx-auto mb-0.5" />
@@ -158,16 +173,18 @@ function SceneNode({ scene }: { scene: Chapter["scenes"][0] }) {
         <span className="mt-3 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
           分支点
         </span>
-      </div>
+      </button>
     );
   }
 
   if (scene.type === "ending" || scene.is_ending) {
     return (
-      <div
+      <button
+        type="button"
         data-testid="story-map-scene-node"
+        onClick={() => onSelectScene?.(scene.id)}
         className={cn(
-          "w-32 p-3 rounded-xl border shadow-sm flex flex-col items-center text-center",
+          "w-32 p-3 rounded-xl border shadow-sm flex flex-col items-center text-center cursor-pointer",
           "bg-amber-50 border-amber-200"
         )}
       >
@@ -176,15 +193,17 @@ function SceneNode({ scene }: { scene: Chapter["scenes"][0] }) {
         <span className="mt-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
           结局
         </span>
-      </div>
+      </button>
     );
   }
 
   return (
-    <div
+    <button
+      type="button"
       data-testid="story-map-scene-node"
+      onClick={() => onSelectScene?.(scene.id)}
       className={cn(
-        "w-32 p-3 rounded-xl border shadow-sm flex flex-col items-center text-center transition-all hover:shadow-md",
+        "w-32 p-3 rounded-xl border shadow-sm flex flex-col items-center text-center transition-all hover:shadow-md cursor-pointer",
         scene.status === "confirmed" && "bg-green-50 border-green-200",
         scene.status === "generated" && "bg-blue-50 border-blue-200",
         scene.status === "audit_fail" && "bg-red-50 border-red-200",
@@ -213,6 +232,6 @@ function SceneNode({ scene }: { scene: Chapter["scenes"][0] }) {
         {scene.status === "generating" && "生成中"}
         {!scene.status && "待生成"}
       </span>
-    </div>
+    </button>
   );
 }

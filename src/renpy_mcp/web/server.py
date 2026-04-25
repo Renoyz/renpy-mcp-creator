@@ -11,6 +11,7 @@ from http import HTTPStatus
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
+from ..bridge import BridgeClient
 from ..config import RenPyConfig
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -19,7 +20,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 _server: HTTPServer | None = None
 _server_port: int = 0
 _server_lock = threading.Lock()
-_bridge_lock = threading.Lock()
+_bridge_write_lock = threading.Lock()
+_bridge_client: BridgeClient | None = None
 
 
 def _find_free_port() -> int:
@@ -283,38 +285,20 @@ class _Handler(SimpleHTTPRequestHandler):
 
     # ---- Bridge IPC helper ----
 
+    def _get_bridge_client(self) -> BridgeClient:
+        global _bridge_client
+        if _bridge_client is None:
+            _bridge_client = BridgeClient(
+                self.config.project_path,
+                write_lock=_bridge_write_lock,
+            )
+        return _bridge_client
+
     def _send_bridge_command(self, cmd: dict, timeout: float = 5.0) -> dict:
         """Send a command via file-based IPC and wait for response."""
-        config = self.config
-        if not config.project_path:
+        if not self.config.project_path:
             return {"success": False, "error": "No project set"}
-
-        with _bridge_lock:
-            mcp_dir = config.project_path / "game" / "_mcp"
-            mcp_dir.mkdir(exist_ok=True)
-            status_file = mcp_dir / "status.json"
-            start = time.time()
-            expected_action = cmd.get("action", "")
-
-            # Write command
-            tmp = mcp_dir / "cmd.json.tmp"
-            cmd_file = mcp_dir / "cmd.json"
-            tmp.write_text(json.dumps(cmd, ensure_ascii=False), encoding="utf-8")
-            if cmd_file.exists():
-                cmd_file.unlink()
-            tmp.rename(cmd_file)
-
-            # Wait for fresh response matching the expected action
-            while time.time() - start < timeout:
-                if status_file.exists():
-                    try:
-                        data = json.loads(status_file.read_text(encoding="utf-8"))
-                        if data.get("time", 0) >= start and data.get("action") == expected_action:
-                            return data
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                time.sleep(0.2)
-            return {"success": False, "error": "Timeout waiting for game response"}
+        return self._get_bridge_client().send_command_sync(cmd, timeout)
 
     # ---- Dashboard API endpoints ----
 

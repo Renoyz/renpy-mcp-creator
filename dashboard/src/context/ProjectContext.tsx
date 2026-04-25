@@ -670,9 +670,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.detail || `Confirm card failed: ${resp.status}`);
     }
-    await loadBrief(name);
-    await loadRefinementStatus(name);
-  }, [loadBrief]);
+    await loadProjectData(name);
+  }, [loadProjectData]);
 
   const loadChapterOutline = useCallback(async (name: string) => {
     try {

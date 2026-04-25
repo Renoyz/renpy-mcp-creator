@@ -367,6 +367,10 @@ def _extract_image_url(data: dict) -> Optional[str]:
             if url:
                 return url
     except Exception:
+        logger.warning(
+            "Failed to extract image URL from LLM response",
+            exc_info=True,
+        )
         return None
     return None
 
@@ -385,5 +389,9 @@ def _extract_task_image_url(data: dict) -> Optional[str]:
         if output_image_url:
             return output_image_url
     except Exception:
+        logger.warning(
+            "Failed to extract task image URL from DashScope response",
+            exc_info=True,
+        )
         return None
     return None

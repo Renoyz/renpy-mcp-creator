@@ -1,5 +1,6 @@
 """Phase 6 Round 2: Multi-chapter script generation + workspace readability."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -178,7 +179,7 @@ def test_generate_multi_chapter_scripts_writes_one_rpy_per_chapter(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    result = service.generate_multi_chapter_scripts(project_name, blueprint)
+    result = asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     assert "chapters" in result
     assert len(result["chapters"]) == 2
@@ -231,7 +232,7 @@ def test_multi_chapter_scripts_chain_scenes_and_jump_to_next_chapter(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     ch1_content = (tmp_path / project_name / "game" / "prototype_ch1_Chapter1.rpy").read_text(encoding="utf-8")
     ch2_content = (tmp_path / project_name / "game" / "prototype_ch2_Chapter2.rpy").read_text(encoding="utf-8")
@@ -289,7 +290,7 @@ def test_multi_chapter_index_maps_scene_ids_to_correct_file_and_label(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     index = json.loads((meta_dir / "index.json").read_text(encoding="utf-8"))
     scenes = index.get("scenes", {})
@@ -360,7 +361,7 @@ def test_scene_script_api_reads_correct_chapter_script_for_multi_chapter_scene(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Request ch2 scene script via API
     response = client.get(f"/api/projects/{project_name}/scenes/s4/script")
@@ -572,7 +573,7 @@ def test_generate_multi_chapter_scripts_rolls_back_when_wiring_main_script_fails
     monkeypatch.setattr(pm, "write_project_index", _fail_index)
 
     with pytest.raises(RuntimeError, match="Simulated index write failure"):
-        service.generate_multi_chapter_scripts(project_name, blueprint)
+        asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Old script untouched (generate no longer wires script.rpy)
     assert (game_dir / "script.rpy").read_text(encoding="utf-8") == old_script
@@ -687,7 +688,7 @@ def test_generate_multi_chapter_scripts_removes_stale_prototype_index_entries(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     index = json.loads((meta_dir / "index.json").read_text(encoding="utf-8"))
     scenes = index.get("scenes", {})
@@ -750,7 +751,7 @@ def test_generate_multi_chapter_scripts_removes_stale_prototype_files(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Current files regenerated
     assert (game_dir / "prototype_ch1_Chapter1.rpy").exists()
@@ -831,7 +832,7 @@ def test_generate_multi_chapter_scripts_restores_old_same_named_prototype_files_
     monkeypatch.setattr(pm, "write_project_index", _fail_index)
 
     with pytest.raises(RuntimeError, match="Simulated index write failure"):
-        service.generate_multi_chapter_scripts(project_name, blueprint)
+        asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Old script untouched (generate no longer wires script.rpy)
     assert (game_dir / "script.rpy").read_text(encoding="utf-8") == old_script
@@ -847,3 +848,86 @@ def test_generate_multi_chapter_scripts_restores_old_same_named_prototype_files_
 
     assert (game_dir / "prototype_ch2_Chapter2.rpy").exists()
     assert (game_dir / "prototype_ch2_Chapter2.rpy").read_text(encoding="utf-8") == old_ch2_content
+
+
+def test_multi_chapter_promotion_never_unlinks_final_files_before_replace_succeeds(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If staging->final promotion fails, old final files must never be unlinked first.
+
+    The promotion step must atomically replace the destination, not unlink-then-rename.
+    An unlink-before-rename creates a data-loss window where both files are gone if
+    the rename fails or the process crashes between the two operations.
+    """
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.config import get_settings
+
+    project_name = "no_unlink_before_promote"
+    _create_project(client, tmp_path, project_name)
+
+    game_dir = tmp_path / project_name / "game"
+    meta_dir = tmp_path / project_name / "meta"
+
+    # Seed old stable prototype files with known content (same names new gen will use)
+    old_ch1_content = "label old_ch1_start:\n    \"Old stable chapter 1\"\n    return\n"
+    old_ch2_content = "label old_ch2_start:\n    \"Old stable chapter 2\"\n    return\n"
+    (game_dir / "prototype_ch1_Chapter1.rpy").write_text(old_ch1_content, encoding="utf-8")
+    (game_dir / "prototype_ch2_Chapter2.rpy").write_text(old_ch2_content, encoding="utf-8")
+
+    old_index = {"scenes": {"old_scene": {"source": "prototype", "title": "Old"}}}
+    (meta_dir / "index.json").write_text(json.dumps(old_index), encoding="utf-8")
+
+    scene_packages = _make_scene_packages()
+    (meta_dir / "scene_packages.json").write_text(
+        json.dumps(scene_packages, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    blueprint = ProjectBlueprint(
+        title="Test",
+        genre="Test",
+        worldview="Test",
+        themes=["test"],
+        characters=[
+            {"name": "Alice", "role": "Protagonist", "personality": "brave", "appearance": "tall"},
+            {"name": "Bob", "role": "Companion", "personality": "smart", "appearance": "glasses"},
+        ],
+        chapters=[
+            {"id": "ch1", "name": "Chapter1", "order": 1, "scenes": []},
+            {"id": "ch2", "name": "Chapter2", "order": 2, "scenes": []},
+        ],
+    )
+    pm = ProjectManager(get_settings())
+    pm.write_blueprint(project_name, blueprint)
+
+    service = PrototypeGenerationService(pm=pm, provider=None)
+
+    # Track prototype .rpy files that get unlinked
+    unlinked_prototype_files: list[str] = []
+    _original_unlink = Path.unlink
+
+    def _track_unlink(self):
+        # Only track final prototype files, not staging or backup files
+        if self.suffix == ".rpy" and "prototype" in self.name and ".__staging__" not in str(self) and ".__backup__" not in str(self):
+            unlinked_prototype_files.append(str(self))
+        return _original_unlink(self)
+
+    monkeypatch.setattr(Path, "unlink", _track_unlink)
+
+    # Force replace to fail, simulating a disk-full scenario
+    def _fail_replace(self, target):
+        raise OSError("Simulated replace failure during promotion")
+
+    monkeypatch.setattr(Path, "replace", _fail_replace)
+
+    # generate_multi_chapter_scripts should raise because replace fails
+    with pytest.raises(OSError, match="Simulated replace failure"):
+        asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
+
+    # KEY ASSERTION: no prototype .rpy file should have been unlinked.
+    # The promotion step uses atomic replace, not unlink-then-rename.
+    assert len(unlinked_prototype_files) == 0, (
+        f"Prototype files were unlinked during failed promotion: {unlinked_prototype_files}. "
+        "Path.replace() must be used instead of unlink()+rename() to avoid data-loss window."
+    )

@@ -110,6 +110,24 @@ export function IntakeWorkspaceView({
               {intake.current_summary || "The agent has started intake but has not assembled a usable summary yet."}
             </p>
           </div>
+          {isChapterPhase && !intake.outline_draft_ready && (
+            <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-blue-900">Preparing Outline Review</div>
+                  <p className="mt-1 text-xs text-blue-700">
+                    Chapter intake is still in progress. Keep working with the agent until the outline draft is ready.
+                  </p>
+                </div>
+              </div>
+              <div
+                data-testid="outline-phase-progress"
+                className="mt-3 h-2 w-full overflow-hidden rounded-full bg-blue-100"
+              >
+                <div className="h-full w-1/2 animate-pulse rounded-full bg-blue-600" />
+              </div>
+            </div>
+          )}
         </div>
 
         {isChapterPhase && intake.chapter_draft.length > 0 && (

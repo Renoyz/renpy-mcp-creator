@@ -1,5 +1,6 @@
 """Phase 6 Round 4: Active prototype readiness boundary for build/preview."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -176,7 +177,7 @@ def test_prototype_status_marks_generated_but_unactivated_multi_chapter_as_not_a
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     response = client.get(f"/api/projects/{project_name}/prototype/status")
     assert response.status_code == 200
@@ -235,7 +236,7 @@ def test_prototype_status_marks_activated_multi_chapter_as_active_and_buildable(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
     service.activate_multi_chapter_prototype(project_name)
 
     response = client.get(f"/api/projects/{project_name}/prototype/status")
@@ -466,7 +467,7 @@ def test_build_rejects_candidate_multi_chapter_with_no_active_mode(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # script.rpy is NOT wired (candidate state)
     response = client.post(f"/api/projects/{project_name}/prototype/build", json={"target": "web"})
@@ -672,7 +673,7 @@ def test_prototype_pipeline_status_does_not_report_ready_for_generated_but_unact
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Candidate state: manifest exists with mode=None, script.rpy not wired
     response = client.get(f"/api/projects/{project_name}/prototype/pipeline-status")
@@ -905,7 +906,7 @@ def test_prototype_pipeline_status_keeps_candidate_manifest_idle_even_when_legac
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Verify candidate state: manifest exists but mode=None
     manifest = pm.read_prototype_manifest(project_name)

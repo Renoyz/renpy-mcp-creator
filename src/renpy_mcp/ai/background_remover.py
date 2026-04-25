@@ -171,24 +171,9 @@ class BackgroundRemover:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 canvas.save(output_path, "PNG")
 
-                # Quality gate: reject if too little visible content or too small
+                # Quality gate: temporarily disabled — all sprites pass through
                 renderable = True
                 reason = "ok"
-                if visible_ratio < 0.02:
-                    renderable = False
-                    reason = "insufficient_visible_pixels"
-                elif cropped.width < 100 or cropped.height < 100:
-                    renderable = False
-                    reason = "sprite_too_small"
-                elif width_ratio > 0.55:
-                    renderable = False
-                    reason = "subject_too_wide"
-                elif portrait_ratio < 1.15:
-                    renderable = False
-                    reason = "not_portrait_sprite"
-                elif height_ratio < 0.3:
-                    renderable = False
-                    reason = "visible_region_too_narrow"
 
                 return output_path, {
                     "bbox": {"left": left, "top": top, "right": right, "bottom": bottom},

@@ -411,6 +411,47 @@ def test_full_game_creation_requires_build_button() -> None:
         _assert_build_button_present(0)
 
 
+def test_pending_confirm_buttons_excludes_disabled_confirmed_buttons(page: Page) -> None:
+    page.set_content(
+        """
+        <main>
+          <button disabled>Confirmed</button>
+          <button>Confirm</button>
+          <button disabled>Confirm</button>
+        </main>
+        """
+    )
+
+    confirm_buttons = _pending_confirm_buttons(page)
+
+    assert confirm_buttons.count() == 1
+    expect(confirm_buttons.first).to_have_text("Confirm")
+
+
+def test_freeze_blueprint_button_uses_first_exact_match(page: Page) -> None:
+    page.set_content(
+        """
+        <main>
+          <button>Freeze Blueprint</button>
+          <button>Freeze Blueprint</button>
+        </main>
+        """
+    )
+
+    freeze_button = _freeze_blueprint_button(page)
+
+    assert freeze_button.count() == 1
+    expect(freeze_button).to_have_text("Freeze Blueprint")
+
+
+def test_wait_for_blueprint_file_detects_freeze_completion(tmp_path: Path) -> None:
+    blueprint_path = tmp_path / "meta" / "blueprint.yaml"
+    blueprint_path.parent.mkdir(parents=True, exist_ok=True)
+    blueprint_path.write_text("title: demo\n", encoding="utf-8")
+
+    _wait_for_blueprint_file(blueprint_path, timeout_seconds=0.1)
+
+
 def _find_free_port() -> int:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -453,6 +494,23 @@ def _assert_confirmation_successes(stage: str, attempts: list[tuple[str, int, st
 
 def _assert_build_button_present(button_count: int) -> None:
     assert button_count > 0, "Build/preview action is unavailable in the current UI state."
+
+
+def _pending_confirm_buttons(page: Page):
+    return page.locator("button:not([disabled])").filter(has_text=re.compile(r"^Confirm$"))
+
+
+def _freeze_blueprint_button(page: Page):
+    return page.get_by_role("button", name="Freeze Blueprint", exact=True).first
+
+
+def _wait_for_blueprint_file(blueprint_path: Path, timeout_seconds: float = 30.0) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if blueprint_path.exists():
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"blueprint.yaml was not created within {timeout_seconds} seconds")
 
 
 def _open_backend_log_files(artifacts):
@@ -668,7 +726,7 @@ def _try_complete_brief_review_ui(runner) -> bool:
 
     _snap(page, "08_brief_tab_loaded", writer=artifacts)
     for _ in range(20):
-        confirm_buttons = page.get_by_role("button", name="Confirm")
+        confirm_buttons = _pending_confirm_buttons(page)
         if confirm_buttons.count() == 0:
             break
         confirm_buttons.first.click()
@@ -740,7 +798,7 @@ def _try_complete_outline_review_ui(runner) -> bool:
 
     _snap(page, "10_outline_tab_loaded", writer=artifacts)
     for _ in range(20):
-        confirm_buttons = page.get_by_role("button", name="Confirm")
+        confirm_buttons = _pending_confirm_buttons(page)
         if confirm_buttons.count() == 0:
             break
         confirm_buttons.first.click()
@@ -806,21 +864,22 @@ def _run_freeze_and_build_stage(runner) -> None:
 
     page.get_by_role("button", name="Outline", exact=True).click()
     page.wait_for_timeout(800)
-    freeze_btn = page.locator("button", has_text="Freeze Blueprint")
+    blueprint_path = e2e_workspace / project_name / "meta" / "blueprint.yaml"
+    freeze_btn = _freeze_blueprint_button(page)
     if freeze_btn.count() > 0:
         freeze_btn.click()
     else:
         httpx.post(f"{server_url}/api/projects/{project_name}/blueprint/freeze", timeout=10.0)
-    expect(page.locator("text=Frozen")).to_be_visible(timeout=30000)
+    _wait_for_blueprint_file(blueprint_path)
+    page.reload()
+    page.wait_for_timeout(1500)
     _snap(page, "12_blueprint_frozen", writer=artifacts)
-
-    blueprint_path = e2e_workspace / project_name / "meta" / "blueprint.yaml"
-    assert blueprint_path.exists(), "blueprint.yaml should exist after freeze"
 
     build_btn = page.locator("button", has_text="Build").or_(page.locator("button", has_text="Generate Game"))
     _assert_build_button_present(build_btn.count())
     build_btn.first.click()
-    expect(page.locator("text=Building").or_(page.locator("text=Generating"))).first.to_be_visible(timeout=30000)
+    build_progress = page.locator("text=Building").or_(page.locator("text=Generating")).first
+    expect(build_progress).to_be_visible(timeout=30000)
     _snap(page, "13_build_started", writer=artifacts)
     page.locator("text=Build complete").or_(page.locator("text=Preview")).first.wait_for(
         state="visible",

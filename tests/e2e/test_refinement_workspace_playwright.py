@@ -996,6 +996,72 @@ def _seed_project_chapter_intake(workspace: Path, project_name: str, outline_rea
     (meta_dir / "refinement_intake.json").write_text(json.dumps(intake), encoding="utf-8")
 
 
+def _seed_blueprint_session_draft(workspace: Path, project_name: str) -> None:
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    session = {
+        "pipeline_stage": "idle",
+        "turn_count": 2,
+        "intake_mode": True,
+        "awaiting_confirmation": False,
+        "confirmation_id": None,
+        "draft": {
+            "title": project_name,
+            "genre": "Sci-fi mystery",
+            "worldview": "A regulated FTL society",
+            "themes": ["hope", "grief"],
+            "target_audience": "YA",
+            "estimated_play_time": "2-3 hours",
+            "art_style": "Anime neon",
+            "audio_style": "Ambient synth",
+            "characters": [],
+            "chapters": [
+                {
+                    "id": "ch1",
+                    "name": "Departure",
+                    "order": 1,
+                    "scenes": [
+                        {
+                            "id": "s1",
+                            "name": "Station goodbye",
+                            "order": 1,
+                            "characters": ["Elena", "Marcus"],
+                            "setting": "Station",
+                            "status": "pending",
+                            "type": "normal",
+                        }
+                    ],
+                },
+                {
+                    "id": "ch2",
+                    "name": "The Jump",
+                    "order": 2,
+                    "scenes": [
+                        {
+                            "id": "s2",
+                            "name": "Engine failure",
+                            "order": 1,
+                            "characters": ["Elena"],
+                            "setting": "Ship",
+                            "status": "pending",
+                            "type": "normal",
+                        }
+                    ],
+                },
+            ],
+        },
+    }
+    (meta_dir / "blueprint_session.json").write_text(json.dumps(session), encoding="utf-8")
+
+
+def _seed_project_brief_all_confirmed_except_constraints(workspace: Path, project_name: str) -> None:
+    _seed_project_brief_confirmed(workspace, project_name)
+    brief_path = workspace / project_name / "meta" / "project_brief.json"
+    brief = json.loads(brief_path.read_text(encoding="utf-8"))
+    brief["cards"]["constraints"]["confirmed"] = False
+    brief_path.write_text(json.dumps(brief), encoding="utf-8")
+
+
 def test_workspace_brief_confirmed_without_outline_defaults_to_intake_tab(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
@@ -1063,6 +1129,30 @@ def test_workspace_outline_review_is_not_primary_before_outline_draft_ready(
     expect(page.locator("button", has_text="Go to Intake")).to_be_visible(timeout=10000)
 
 
+def test_workspace_brief_view_shows_continue_chapter_intake_before_outline_ready(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Brief view should explain that chapter intake is still in progress until outline review is ready."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_brief_ch_intake_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_confirmed(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=False)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    brief_tab = page.locator("button", has_text="Brief").first
+    brief_tab.click()
+
+    expect(page.locator("text=Chapter Intake in progress")).to_be_visible(timeout=10000)
+    expect(page.locator("[data-testid='outline-draft-progress']")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Continue Chapter Intake")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Enter Chapter Outline Review")).not_to_be_visible()
+
+    page.get_by_role("button", name="Continue Chapter Intake").click()
+    intake_tab = page.locator("button", has_text="Intake").first
+    expect(intake_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
+
+
 def test_workspace_promote_outline_draft_enters_outline_review(
     page: Page, server_url: str, e2e_workspace: Path
 ) -> None:
@@ -1090,3 +1180,142 @@ def test_workspace_promote_outline_draft_enters_outline_review(
     assert len(data["chapters"]) == 2
     assert data["chapters"][0]["chapter_id"] == "ch1"
     assert data["chapters"][0]["confirmed"] is False
+
+
+def test_workspace_last_brief_confirm_refreshes_outline_ready_cta(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Confirming the last Brief card must refresh refinement intake and reveal the outline review CTA."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_last_brief_confirm_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief_all_confirmed_except_constraints(e2e_workspace, project_name)
+    _seed_project_chapter_intake(e2e_workspace, project_name, outline_ready=False)
+    _seed_blueprint_session_draft(e2e_workspace, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    brief_tab = page.locator("button", has_text="Brief").first
+    brief_tab.click()
+
+    expect(page.get_by_role("button", name="Enter Chapter Outline Review")).not_to_be_visible()
+
+    confirm_buttons = page.get_by_role("button", name="Confirm", exact=True)
+    expect(confirm_buttons).to_have_count(1, timeout=10000)
+    confirm_buttons.first.click()
+
+    expect(page.get_by_role("button", name="Enter Chapter Outline Review")).to_be_visible(timeout=10000)
+
+
+def test_workspace_freeze_auto_generation_chain_shows_progress_and_completion(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Freeze should surface downstream generation progress and completion guidance in the header."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_freeze_chain_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_brief(e2e_workspace, project_name)
+    _seed_project_chapter_outline(e2e_workspace, project_name)
+    _confirm_refinement_via_api(server_url, project_name)
+
+    def fulfill_scene_packages(route) -> None:
+        time.sleep(0.5)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"success": True, "generated": []}),
+        )
+
+    page.route(
+        f"**/api/projects/{project_name}/scene-packages/generate",
+        fulfill_scene_packages,
+    )
+    page.route(
+        f"**/api/projects/{project_name}/prototype/multi-chapter/generate",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"success": True, "generated": []}),
+        ),
+    )
+    page.route(
+        f"**/api/projects/{project_name}/prototype/multi-chapter/activate",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"success": True, "mode": "multi_chapter"}),
+        ),
+    )
+
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    freeze_btn = page.get_by_role("button", name="Freeze Blueprint")
+    expect(freeze_btn).to_be_visible(timeout=10000)
+    freeze_btn.click()
+
+    expect(page.locator("[data-testid='post-freeze-status']")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Generating scene packages from the frozen blueprint")).to_be_visible(timeout=10000)
+    expect(page.locator("[data-testid='post-freeze-status']")).to_contain_text(
+        "Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.",
+        timeout=10000,
+    )
+    expect(page.get_by_role("button", name="Build")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Preview")).to_be_disabled(timeout=10000)
+
+
+def test_workspace_build_uses_scoped_build_when_prototype_is_only_candidate(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
+    """Candidate prototypes must not route the Build button to /prototype/build."""
+    assert wait_for_server(server_url), "Server not ready"
+    project_name = f"playwright_candidate_build_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    _seed_project_blueprint(e2e_workspace, project_name)
+
+    build_calls = {"scoped": 0, "prototype": 0}
+
+    page.route(
+        f"**/api/projects/{project_name}/prototype/status",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "has_prototype": True,
+                    "has_manifest": True,
+                    "mode": None,
+                    "is_active": False,
+                    "is_buildable": False,
+                    "manifest_consistent": False,
+                }
+            ),
+        ),
+    )
+
+    def fulfill_scoped_build(route) -> None:
+        build_calls["scoped"] += 1
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"success": True, "output_path": "mock/web"}),
+        )
+
+    def fulfill_prototype_build(route) -> None:
+        build_calls["prototype"] += 1
+        route.fulfill(
+            status=400,
+            content_type="application/json",
+            body=json.dumps({"detail": "should not use prototype build for candidate prototype"}),
+        )
+
+    page.route(f"**/api/projects/{project_name}/build", fulfill_scoped_build)
+    page.route(f"**/api/projects/{project_name}/prototype/build", fulfill_prototype_build)
+
+    open_workspace_from_project_list(page, server_url, project_name)
+
+    build_button = page.get_by_role("button", name="Build")
+    expect(build_button).to_be_visible(timeout=10000)
+    build_button.click()
+
+    expect(page.locator("[data-testid='build-status']")).to_contain_text("Built to mock/web", timeout=10000)
+    assert build_calls["scoped"] == 1
+    assert build_calls["prototype"] == 0

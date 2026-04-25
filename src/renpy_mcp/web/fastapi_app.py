@@ -1,10 +1,10 @@
 """FastAPI application for unified-design Dashboard and API."""
 
 import json
+import logging
 import os
 import re
 import struct
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,23 +40,24 @@ from ..blueprint.models import (
     RefinementState,
     SceneScript,
 )
+from ..blueprint.outline_derivation import derive_chapter_outline_fields
 from ..models import BuildRequest, BuildResult
 from ..services.build_manager import BuildManager
 from ..services.preview_manager import PreviewManager
 from ..services.project_manager import ProjectManager
 from ..services.prototype_generation_service import PrototypeGenerationService
 from .server import _parse_script_blocks
-from .chat_ws import _get_provider
+from .chat_ws import _append_refinement_flow_log, _get_provider
 
 STATIC_DIR = Path(__file__).parent / "static"
 DASHBOARD_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
 
 _preview_manager = PreviewManager()
 _last_build_results: dict[str, Path] = {}
+logger = logging.getLogger(__name__)
 
 # Injected config (set during bootstrap)
 _app_config: RenPyConfig | None = None
-_bridge_lock = threading.Lock()
 
 
 def set_config(config: RenPyConfig) -> None:
@@ -83,37 +84,6 @@ async def get_config(request: Request) -> AsyncGenerator[RenPyConfig, None]:
     finally:
         if token is not None:
             _current_project_path.reset(token)
-
-
-def _send_bridge_command(config: RenPyConfig, cmd: dict, timeout: float = 5.0) -> dict:
-    """Send a command via file-based IPC and wait for response."""
-    if not config.project_path:
-        return {"success": False, "error": "No project set"}
-
-    with _bridge_lock:
-        mcp_dir = config.project_path / "game" / "_mcp"
-        mcp_dir.mkdir(exist_ok=True)
-        status_file = mcp_dir / "status.json"
-        start = time.time()
-        expected_action = cmd.get("action", "")
-
-        tmp = mcp_dir / "cmd.json.tmp"
-        cmd_file = mcp_dir / "cmd.json"
-        tmp.write_text(json.dumps(cmd, ensure_ascii=False), encoding="utf-8")
-        if cmd_file.exists():
-            cmd_file.unlink()
-        tmp.rename(cmd_file)
-
-        while time.time() - start < timeout:
-            if status_file.exists():
-                try:
-                    data = json.loads(status_file.read_text(encoding="utf-8"))
-                    if data.get("time", 0) >= start and data.get("action") == expected_action:
-                        return data
-                except (json.JSONDecodeError, OSError):
-                    pass
-            time.sleep(0.2)
-        return {"success": False, "error": "Timeout waiting for game response"}
 
 
 def _resolve_current_project_name(request: Request, body: dict | None = None) -> str:
@@ -158,6 +128,10 @@ def _sanitize_sprite_plan_for_api(sprite_plan: list[Any] | None) -> list[dict]:
                 cleaned.pop("sprite_check_path", None)
                 result.append(cleaned)
             except Exception:
+                logger.warning(
+                    "Failed to sanitize sprite plan item",
+                    exc_info=True,
+                )
                 continue
     return result
 
@@ -653,55 +627,16 @@ def create_app() -> FastAPI:
 
     def _build_chapter_intake_entries_from_blueprint(blueprint: ProjectBlueprint) -> list[ChapterIntakeEntry]:
         """Derive chapter intake entries from a blueprint draft."""
+        total_chapters = len(blueprint.chapters)
         entries: list[ChapterIntakeEntry] = []
         for chapter in blueprint.chapters:
-            scene_names = [scene.name for scene in chapter.scenes if scene.name]
-            first_scene_name = scene_names[0] if scene_names else chapter.name
-            last_scene_name = scene_names[-1] if scene_names else chapter.name
-
-            character_focus: list[str] = []
-            for scene in chapter.scenes:
-                for character in scene.characters:
-                    if character and character not in character_focus:
-                        character_focus.append(character)
-
-            chapter_goal = (
-                f"Advance {chapter.name} through {first_scene_name}"
-                if first_scene_name
-                else f"Advance {chapter.name}"
-            )
-            key_conflict = (
-                f"Pressure escalates around {last_scene_name}"
-                if last_scene_name
-                else f"Core conflict in {chapter.name}"
-            )
-            emotional_arc = "setup -> escalation" if len(scene_names) > 1 else "setup -> turn"
-            reveals = last_scene_name or chapter.name
-            end_state = last_scene_name or chapter.name
-            mood_or_pacing_bias = "measured" if len(scene_names) <= 2 else "escalating"
-            relationship_shift = ""
-            if len(character_focus) >= 2:
-                relationship_shift = f"{character_focus[0]} and {character_focus[1]} face new pressure together"
-            character_presentation_notes = (
-                f"Keep visual focus on {', '.join(character_focus)}"
-                if character_focus
-                else f"Carry forward the chapter identity of {chapter.name}"
-            )
-
+            fields = derive_chapter_outline_fields(chapter, total_chapters=total_chapters)
             entries.append(
                 ChapterIntakeEntry(
                     chapter_id=chapter.id,
                     order=chapter.order,
                     chapter_name=chapter.name,
-                    chapter_goal=chapter_goal,
-                    key_conflict=key_conflict,
-                    emotional_arc=emotional_arc,
-                    reveals=reveals,
-                    end_state=end_state,
-                    mood_or_pacing_bias=mood_or_pacing_bias,
-                    character_focus=character_focus,
-                    relationship_shift=relationship_shift,
-                    character_presentation_notes=character_presentation_notes,
+                    **fields,
                 )
             )
         return entries
@@ -868,6 +803,8 @@ def create_app() -> FastAPI:
         project_dir = resolve_project_dir(project_name)
         if not project_dir:
             raise HTTPException(status_code=404, detail="Project not found")
+        logger.info("Chapter outline promote requested for project %s", project_name)
+        _append_refinement_flow_log(project_name, "INFO", "Chapter outline promote requested for project %s", project_name)
         settings = get_settings()
         pm = ProjectManager(settings)
         try:
@@ -875,10 +812,30 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
         if intake is None:
+            logger.info("Chapter outline promote blocked for project %s: refinement intake missing", project_name)
+            _append_refinement_flow_log(
+                project_name, "INFO", "Chapter outline promote blocked for project %s: refinement intake missing", project_name
+            )
             raise HTTPException(status_code=404, detail="Refinement intake not found")
         if not intake.outline_draft_ready:
+            logger.info("Chapter outline promote blocked for project %s: outline draft not ready", project_name)
+            _append_refinement_flow_log(
+                project_name, "INFO", "Chapter outline promote blocked for project %s: outline draft not ready", project_name
+            )
             raise HTTPException(status_code=409, detail="Chapter Outline draft is not ready yet")
         if intake.phase not in (IntakePhase.CHAPTER, IntakePhase.OUTLINE_READY):
+            logger.info(
+                "Chapter outline promote blocked for project %s: invalid intake phase %s",
+                project_name,
+                intake.phase.value,
+            )
+            _append_refinement_flow_log(
+                project_name,
+                "INFO",
+                "Chapter outline promote blocked for project %s: invalid intake phase %s",
+                project_name,
+                intake.phase.value,
+            )
             raise HTTPException(
                 status_code=409,
                 detail=f"Chapter Outline promotion requires intake phase 'chapter' or 'outline_ready', got '{intake.phase.value}'",
@@ -889,6 +846,10 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
         if brief is None or not _is_brief_fully_confirmed(brief):
+            logger.info("Chapter outline promote blocked for project %s: brief not fully confirmed", project_name)
+            _append_refinement_flow_log(
+                project_name, "INFO", "Chapter outline promote blocked for project %s: brief not fully confirmed", project_name
+            )
             raise HTTPException(
                 status_code=409,
                 detail="Cannot promote Chapter Outline draft before Project Brief is fully confirmed",
@@ -904,6 +865,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc))
 
         outline = _materialize_outline_from_intake(intake)
+        logger.info(
+            "Chapter outline promote materialized %d chapters for project %s",
+            len(outline.chapters),
+            project_name,
+        )
+        _append_refinement_flow_log(
+            project_name,
+            "INFO",
+            "Chapter outline promote materialized %d chapters for project %s",
+            len(outline.chapters),
+            project_name,
+        )
         target_state = _compute_refinement_state(brief, outline)
         target_freeze_status = _freeze_status_after_upstream_change(
             meta.blueprint_freeze_status if meta else None
@@ -1093,8 +1066,11 @@ def create_app() -> FastAPI:
                         )
                         pm.write_refinement_intake(project_name, updated_intake)
                     except Exception:
-                        # Best-effort: don't fail confirm-card if auto-promotion fails
-                        pass
+                        logger.warning(
+                            "Auto-promotion failed during confirm-card for %s",
+                            project_name,
+                            exc_info=True,
+                        )
 
         return {"success": True, "card_key": card_key, "confirmed": True}
 
@@ -1414,10 +1390,11 @@ def create_app() -> FastAPI:
         """Generate multi-chapter prototype scripts from scene_packages.
 
         This is the Phase 6 script generation entry point.  It reads the
-        persisted ``meta/scene_packages.json`` and writes one ``.rpy`` per
-        chapter, chains them with ``jump`` labels, updates
+        persisted ``meta/scene_packages.json``, generates background and
+        character assets for all scenes, configures CJK-safe fonts, writes
+        one ``.rpy`` per chapter, chains them with ``jump`` labels, updates
         ``meta/index.json``, and wires ``game/script.rpy`` to the first
-        chapter.  No asset generation, build, or preview is performed.
+        chapter.
         """
         project_dir = resolve_project_dir(project_name)
         if not project_dir:
@@ -1445,7 +1422,7 @@ def create_app() -> FastAPI:
         service = PrototypeGenerationService(pm=pm, provider=None)
 
         try:
-            result = service.generate_multi_chapter_scripts(project_name, blueprint)
+            result = await service.generate_multi_chapter_scripts(project_name, blueprint)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc))
 
@@ -1539,7 +1516,7 @@ def create_app() -> FastAPI:
                             s["sprite_plan"] = _sanitize_sprite_plan_for_api(idx_scene["sprite_plan"])
                         if idx_scene.get("characters_present"):
                             s["characters"] = idx_scene["characters_present"]
-                        for field in ("location", "location_visual_brief", "mood", "summary"):
+                        for field in ("location", "location_visual_brief", "mood", "summary", "status"):
                             if idx_scene.get(field) is not None:
                                 s[field] = idx_scene[field]
                     else:
@@ -1562,7 +1539,7 @@ def create_app() -> FastAPI:
                             "music": None,
                             "choices": None,
                             "ending_name": None,
-                            "status": "pending",
+                            "status": idx_scene.get("status", "generated"),
                             "type": "normal",
                             "is_ending": None,
                             "location": idx_scene.get("location"),
@@ -1620,7 +1597,7 @@ def create_app() -> FastAPI:
                                 "music": None,
                                 "choices": None,
                                 "ending_name": None,
-                                "status": "pending",
+                                "status": s.get("status", "generated"),
                                 "type": "normal",
                                 "is_ending": None,
                                 "location": s.get("location"),
@@ -2351,6 +2328,12 @@ def create_app() -> FastAPI:
                     continue
                 scripts[rel] = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning(
+                    "Failed to read script file %s for %s",
+                    rel,
+                    project_name,
+                    exc_info=True,
+                )
                 continue
 
         labels: dict[str, dict] = {}
@@ -2455,6 +2438,7 @@ def create_app() -> FastAPI:
                 age = time.time() - data.get("time", 0)
                 return {"connected": age < 5, "age": age}
             except Exception:
+                logger.warning("Failed to parse bridge status", exc_info=True)
                 pass
         return {"connected": False}
 
@@ -2476,6 +2460,11 @@ def create_app() -> FastAPI:
                     if m and not m.group(1).startswith("_"):
                         labels.append(m.group(1))
             except Exception:
+                logger.warning(
+                    "Failed to parse labels from %s",
+                    rel,
+                    exc_info=True,
+                )
                 continue
         return {"labels": labels}
 
@@ -2493,6 +2482,11 @@ def create_app() -> FastAPI:
                     continue
                 files.append(rel)
             except Exception:
+                logger.warning(
+                    "Failed to list files for project %s",
+                    project_name,
+                    exc_info=True,
+                )
                 continue
         return {"files": files}
 
@@ -2540,6 +2534,11 @@ def create_app() -> FastAPI:
                     if m:
                         characters.append({"id": m.group(1), "name": m.group(2)})
             except Exception:
+                logger.warning(
+                    "Failed to parse characters from %s",
+                    rel,
+                    exc_info=True,
+                )
                 continue
         return {"characters": characters}
 
@@ -2609,6 +2608,11 @@ def create_app() -> FastAPI:
                             loc = f"{rel}:{i+1}"
                             ref_locations.setdefault(ref, []).append(loc)
             except Exception:
+                logger.warning(
+                    "Failed to parse asset references from %s",
+                    rel,
+                    exc_info=True,
+                )
                 continue
 
         screen_w, screen_h = 1280, 720
@@ -2624,6 +2628,11 @@ def create_app() -> FastAPI:
                     if hm:
                         screen_h = int(hm.group(1))
                 except Exception:
+                    logger.warning(
+                        "Failed to parse screen dimensions from %s",
+                        cfg,
+                        exc_info=True,
+                    )
                     pass
 
         IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
@@ -2685,6 +2694,11 @@ def create_app() -> FastAPI:
                             if w > screen_w * 2 or h > screen_h * 2:
                                 entry["size_warning"] = "oversized"
                 except Exception:
+                    logger.warning(
+                        "Failed to read image dimensions for %s",
+                        fpath.name,
+                        exc_info=True,
+                    )
                     pass
 
             assets.append(entry)
@@ -2716,6 +2730,11 @@ def create_app() -> FastAPI:
                     if name in line.lower():
                         locations.append({"file": rel, "line": i + 1, "text": line.strip()[:120]})
             except Exception:
+                logger.warning(
+                    "Failed to search asset usage for %s in %s",
+                    name, rel,
+                    exc_info=True,
+                )
                 continue
         return {"name": name, "locations": locations[:50]}
 

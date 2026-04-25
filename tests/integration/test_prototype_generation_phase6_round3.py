@@ -1,5 +1,6 @@
 """Phase 6 Round 3: Prototype activation boundary + build/preview contract."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def test_generate_multi_chapter_scripts_does_not_activate_runtime_entry(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    result = service.generate_multi_chapter_scripts(project_name, blueprint)
+    result = asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     assert "chapters" in result
     assert len(result["chapters"]) == 2
@@ -242,7 +243,7 @@ def test_activate_multi_chapter_prototype_updates_manifest_and_entrypoint(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     assert (game_dir / "script.rpy").read_text(encoding="utf-8") == stable_script
 
@@ -310,7 +311,7 @@ def test_activate_multi_chapter_prototype_rolls_back_manifest_and_entrypoint_on_
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     candidate_manifest = json.loads((meta_dir / "prototype_manifest.json").read_text(encoding="utf-8"))
     assert candidate_manifest.get("mode") is None
@@ -374,7 +375,7 @@ def test_single_chapter_pipeline_restores_single_chapter_active_manifest_after_m
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
     service.activate_multi_chapter_prototype(project_name)
 
     manifest = json.loads((meta_dir / "prototype_manifest.json").read_text(encoding="utf-8"))
@@ -457,7 +458,7 @@ def test_prototype_status_api_reports_active_mode_and_entry_metadata(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     response = client.get(f"/api/projects/{project_name}/prototype/status")
     assert response.status_code == 200
@@ -558,7 +559,7 @@ def test_generate_multi_chapter_scripts_rolls_back_when_manifest_write_fails(
     monkeypatch.setattr(pm, "write_prototype_manifest", _fail_after_write)
 
     with pytest.raises(RuntimeError, match="Simulated manifest write failure after overwrite"):
-        service.generate_multi_chapter_scripts(project_name, blueprint)
+        asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # Confirm the monkeypatch actually overwrote the manifest before failing
     assert manifest_overwritten, "Monkeypatch must have overwritten the manifest before failing"
@@ -712,7 +713,7 @@ def test_prototype_manifest_roundtrip_uses_structured_model(
     pm.write_blueprint(project_name, blueprint)
 
     service = PrototypeGenerationService(pm=pm, provider=None)
-    service.generate_multi_chapter_scripts(project_name, blueprint)
+    asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     manifest = pm.read_prototype_manifest(project_name)
     assert isinstance(manifest, PrototypeManifest)
@@ -786,7 +787,7 @@ def test_generate_multi_chapter_scripts_removes_new_manifest_on_first_write_fail
     monkeypatch.setattr(pm, "write_prototype_manifest", _fail_after_write)
 
     with pytest.raises(RuntimeError, match="Simulated manifest write failure"):
-        service.generate_multi_chapter_scripts(project_name, blueprint)
+        asyncio.run(service.generate_multi_chapter_scripts(project_name, blueprint))
 
     # manifest must NOT exist after rollback (it never existed before)
     assert not (meta_dir / "prototype_manifest.json").exists()

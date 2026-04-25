@@ -1,6 +1,7 @@
 """Phase 7 Round 1: Structured requirements refinement, state machine, and generation gates."""
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -485,7 +486,7 @@ class TestRefinementIntakeApi:
         assert data["outline_draft_ready"] is True
 
     def test_promote_outline_draft_requires_outline_draft_ready(
-        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ):
         from renpy_mcp.config import get_settings
         from renpy_mcp.services.project_manager import ProjectManager
@@ -503,10 +504,17 @@ class TestRefinementIntakeApi:
         payload = _make_chapter_intake()
         payload["outline_draft_ready"] = False
         pm.write_refinement_intake("ch_promote_blocked", RefinementIntake.model_validate(payload))
+        caplog.set_level(logging.INFO, logger="renpy_mcp.web.fastapi_app")
 
         r = client.post("/api/projects/ch_promote_blocked/chapter-outline/promote-draft")
         assert r.status_code == 409, r.text
         assert "draft" in r.json()["detail"].lower()
+        assert "Chapter outline promote blocked for project ch_promote_blocked: outline draft not ready" in caplog.text
+        flow_log = tmp_path / "ch_promote_blocked" / "logs" / "refinement-flow.log"
+        assert flow_log.exists()
+        assert "Chapter outline promote blocked for project ch_promote_blocked: outline draft not ready" in flow_log.read_text(
+            encoding="utf-8"
+        )
 
     def test_promote_outline_draft_requires_brief_fully_confirmed(
         self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
