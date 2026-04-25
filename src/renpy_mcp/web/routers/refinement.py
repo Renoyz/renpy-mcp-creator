@@ -16,6 +16,7 @@ from ...blueprint.models import (
 )
 from ...config import get_settings, resolve_project_dir
 from ...services.project_manager import ProjectManager
+from ...utils.atomic_file import transactional_write
 from ...services.refinement_logic import (
     assemble_frozen_blueprint,
     build_chapter_intake_entries_from_blueprint,
@@ -85,21 +86,11 @@ async def api_project_brief_promote_draft(project_name: str):
 
     brief_path = project_dir / "meta" / "project_brief.json"
     meta_path = project_dir / "meta" / "project.json"
-    old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
-
     try:
-        pm.write_project_brief(project_name, brief)
-        persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        with transactional_write(brief_path, meta_path):
+            pm.write_project_brief(project_name, brief)
+            persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
     except Exception as exc:
-        if old_brief_text is not None:
-            brief_path.write_text(old_brief_text, encoding="utf-8")
-        else:
-            brief_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     return {"success": True}
@@ -191,21 +182,11 @@ async def api_project_chapter_outline_promote_draft(project_name: str):
 
     outline_path = project_dir / "meta" / "chapter_outline.json"
     meta_path = project_dir / "meta" / "project.json"
-    old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
-
     try:
-        pm.write_chapter_outline(project_name, outline)
-        persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        with transactional_write(outline_path, meta_path):
+            pm.write_chapter_outline(project_name, outline)
+            persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
     except Exception as exc:
-        if old_outline_text is not None:
-            outline_path.write_text(old_outline_text, encoding="utf-8")
-        else:
-            outline_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     return {"success": True}
@@ -261,21 +242,11 @@ async def api_project_brief_put(request: Request, project_name: str):
 
     brief_path = project_dir / "meta" / "project_brief.json"
     meta_path = project_dir / "meta" / "project.json"
-    old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
-
     try:
-        pm.write_project_brief(project_name, brief)
-        persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        with transactional_write(brief_path, meta_path):
+            pm.write_project_brief(project_name, brief)
+            persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
     except Exception as exc:
-        if old_brief_text is not None:
-            brief_path.write_text(old_brief_text, encoding="utf-8")
-        else:
-            brief_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     return {"success": True}
@@ -330,21 +301,11 @@ async def api_project_brief_confirm_card(request: Request, project_name: str):
 
     brief_path = project_dir / "meta" / "project_brief.json"
     meta_path = project_dir / "meta" / "project.json"
-    old_brief_text = brief_path.read_text(encoding="utf-8") if brief_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
-
     try:
-        pm.write_project_brief(project_name, brief)
-        persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        with transactional_write(brief_path, meta_path):
+            pm.write_project_brief(project_name, brief)
+            persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
     except Exception as exc:
-        if old_brief_text is not None:
-            brief_path.write_text(old_brief_text, encoding="utf-8")
-        else:
-            brief_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     # Auto-promote chapter outline draft from blueprint session when brief is fully confirmed
@@ -431,21 +392,11 @@ async def api_project_chapter_outline_put(request: Request, project_name: str):
 
     outline_path = project_dir / "meta" / "chapter_outline.json"
     meta_path = project_dir / "meta" / "project.json"
-    old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
-
     try:
-        pm.write_chapter_outline(project_name, outline)
-        persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+        with transactional_write(outline_path, meta_path):
+            pm.write_chapter_outline(project_name, outline)
+            persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
     except Exception as exc:
-        if old_outline_text is not None:
-            outline_path.write_text(old_outline_text, encoding="utf-8")
-        else:
-            outline_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     return {"success": True}
@@ -498,21 +449,12 @@ async def api_project_chapter_outline_confirm_chapter(request: Request, project_
 
             outline_path = project_dir / "meta" / "chapter_outline.json"
             meta_path = project_dir / "meta" / "project.json"
-            old_outline_text = outline_path.read_text(encoding="utf-8") if outline_path.exists() else None
-            old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
 
             try:
-                pm.write_chapter_outline(project_name, outline)
-                persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
+                with transactional_write(outline_path, meta_path):
+                    pm.write_chapter_outline(project_name, outline)
+                    persist_refinement_metadata(pm, project_name, target_state, target_freeze_status)
             except Exception as exc:
-                if old_outline_text is not None:
-                    outline_path.write_text(old_outline_text, encoding="utf-8")
-                else:
-                    outline_path.unlink(missing_ok=True)
-                if old_meta_text is not None:
-                    meta_path.write_text(old_meta_text, encoding="utf-8")
-                else:
-                    meta_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
             return {"success": True, "chapter_id": chapter_id, "confirmed": True}
@@ -552,33 +494,19 @@ async def api_project_blueprint_freeze(project_name: str):
     blueprint_path = project_dir / "meta" / "blueprint.yaml"
     backup_path = project_dir / "meta" / "blueprint.previous.yaml"
     meta_path = project_dir / "meta" / "project.json"
-    old_blueprint_text = blueprint_path.read_text(encoding="utf-8") if blueprint_path.exists() else None
-    old_backup_text = backup_path.read_text(encoding="utf-8") if backup_path.exists() else None
-    old_meta_text = meta_path.read_text(encoding="utf-8") if meta_path.exists() else None
 
     try:
-        if old_blueprint_text is not None:
-            backup_path.write_text(old_blueprint_text, encoding="utf-8")
-        pm.write_blueprint(project_name, blueprint)
-        persist_refinement_metadata(
-            pm,
-            project_name,
-            RefinementState.BLUEPRINT_READY,
-            BlueprintFreezeStatus.FROZEN,
-        )
+        with transactional_write(blueprint_path, backup_path, meta_path):
+            if blueprint_path.exists():
+                backup_path.write_text(blueprint_path.read_text(encoding="utf-8"), encoding="utf-8")
+            pm.write_blueprint(project_name, blueprint)
+            persist_refinement_metadata(
+                pm,
+                project_name,
+                RefinementState.BLUEPRINT_READY,
+                BlueprintFreezeStatus.FROZEN,
+            )
     except Exception as exc:
-        if old_blueprint_text is not None:
-            blueprint_path.write_text(old_blueprint_text, encoding="utf-8")
-        else:
-            blueprint_path.unlink(missing_ok=True)
-        if old_backup_text is not None:
-            backup_path.write_text(old_backup_text, encoding="utf-8")
-        else:
-            backup_path.unlink(missing_ok=True)
-        if old_meta_text is not None:
-            meta_path.write_text(old_meta_text, encoding="utf-8")
-        else:
-            meta_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Transaction failed: {exc}")
 
     return {"success": True, "blueprint_freeze_status": "frozen"}
