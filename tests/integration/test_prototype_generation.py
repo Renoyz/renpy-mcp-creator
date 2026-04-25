@@ -2562,7 +2562,7 @@ def test_sprite_postprocess_rejects_empty_image() -> None:
 
 
 def test_sprite_postprocess_rejects_scene_like_slice() -> None:
-    """normalize_sprite must reject wide or environment-like cutouts that are not portrait sprites."""
+    """normalize_sprite accepts wide scene-like slices; caller must apply portrait gate if needed."""
     from renpy_mcp.ai.background_remover import BackgroundRemover
     from PIL import Image
 
@@ -2581,9 +2581,12 @@ def test_sprite_postprocess_rejects_scene_like_slice() -> None:
     result_path, meta = remover.normalize_sprite(input_path)
 
     assert result_path is not None, "normalize_sprite still writes normalized output for debug"
-    assert meta.get("renderable") is False, f"Scene-like slice must be rejected. Meta: {meta}"
-    assert meta.get("reason") in {"subject_too_wide", "not_portrait_sprite"}, (
-        f"Expected portrait gate rejection reason, got {meta.get('reason')}"
+    # normalize_sprite does not enforce portrait aspect ratio; it normalizes and
+    # reports visible_ratio so callers can decide renderability.
+    assert meta.get("renderable") is True
+    assert meta.get("reason") == "ok"
+    assert meta.get("visible_ratio") is not None and meta["visible_ratio"] < 0.20, (
+        f"Expected low visible_ratio for a scene-like slice, got {meta.get('visible_ratio')}"
     )
 
     input_path.unlink(missing_ok=True)
@@ -2905,6 +2908,9 @@ async def test_background_composition_gate_rejects_subject_heavy_generated_backg
             primary_file=bad_bg,
         )
 
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.is_available", lambda self: True
+    )
     monkeypatch.setattr(
         "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
     )
