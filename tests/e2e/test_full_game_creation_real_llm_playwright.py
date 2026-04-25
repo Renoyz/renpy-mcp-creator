@@ -729,8 +729,9 @@ def _try_complete_brief_review_ui(runner) -> bool:
         confirm_buttons = _pending_confirm_buttons(page)
         if confirm_buttons.count() == 0:
             break
-        confirm_buttons.first.click()
-        page.wait_for_timeout(800)
+        btn = confirm_buttons.first
+        btn.click()
+        expect(btn).to_be_disabled(timeout=15000)
 
     enter_outline = page.locator("button", has_text="Enter Chapter Outline Review")
     if enter_outline.count() == 0:
@@ -801,8 +802,9 @@ def _try_complete_outline_review_ui(runner) -> bool:
         confirm_buttons = _pending_confirm_buttons(page)
         if confirm_buttons.count() == 0:
             break
-        confirm_buttons.first.click()
-        page.wait_for_timeout(300)
+        btn = confirm_buttons.first
+        btn.click()
+        expect(btn).to_be_disabled(timeout=15000)
 
     freeze_btn = page.locator("button", has_text="Freeze Blueprint")
     if freeze_btn.count() == 0:
@@ -871,20 +873,43 @@ def _run_freeze_and_build_stage(runner) -> None:
     else:
         httpx.post(f"{server_url}/api/projects/{project_name}/blueprint/freeze", timeout=10.0)
     _wait_for_blueprint_file(blueprint_path)
-    page.reload()
-    page.wait_for_timeout(1500)
+
+    # Wait for auto-generation chain to complete (postFreezeFlow)
+    post_freeze_status = page.locator("[data-testid='post-freeze-status']")
+    post_freeze_success = post_freeze_status.filter(has_text="Scene packages and prototype scripts are ready")
+    post_freeze_failed = post_freeze_status.filter(has_text="failed").or_(
+        post_freeze_status.locator("text=Error").or_(post_freeze_status.locator("text=error"))
+    )
+    post_freeze_success.or_(post_freeze_failed).first.wait_for(state="visible", timeout=120000)
+
+    if post_freeze_failed.count() > 0:
+        _snap(page, "12b_post_freeze_failed", writer=artifacts)
+        raise AssertionError(
+            f"Post-freeze auto-generation chain failed: {post_freeze_status.text_content()}"
+        )
+
     _snap(page, "12_blueprint_frozen", writer=artifacts)
 
-    build_btn = page.locator("button", has_text="Build").or_(page.locator("button", has_text="Generate Game"))
+    build_btn = page.locator("button", has_text="Build")
     _assert_build_button_present(build_btn.count())
     build_btn.first.click()
+    # "Generating" here refers to the prototype-generation phase (pre-build),
+    # not the build itself; kept because the UI may show either label.
     build_progress = page.locator("text=Building").or_(page.locator("text=Generating")).first
     expect(build_progress).to_be_visible(timeout=30000)
     _snap(page, "13_build_started", writer=artifacts)
-    page.locator("text=Build complete").or_(page.locator("text=Preview")).first.wait_for(
-        state="visible",
-        timeout=120000,
-    )
+
+    build_ok = page.locator("button", has_text="Build OK")
+    build_failed = page.locator("button", has_text="Retry Build")
+    build_status = page.locator("[data-testid='build-status']")
+
+    build_ok.or_(build_failed).first.wait_for(state="visible", timeout=120000)
+
+    if build_failed.count() > 0:
+        status_text = build_status.text_content() or "(no build status text)"
+        _snap(page, "14b_build_failed", writer=artifacts)
+        raise AssertionError(f"Build failed: {status_text}")
+
     _snap(page, "14_build_complete", writer=artifacts)
 
     print(f"\n=== All screenshots saved to: {artifacts.run_dir} ===")
@@ -947,15 +972,14 @@ def _write_run_summary(
     return artifacts.write_markdown("summary.md", "\n".join(lines) + "\n")
 
 
-def test_full_game_creation_with_real_llm(
+def _run_full_game_creation_test(
     page: Page,
     e2e_workspace: Path,
+    execution_mode: ExecutionMode,
+    run_id_prefix: str,
 ) -> None:
-    """Full end-to-end: create project -> intake chat (real LLM) -> brief -> outline -> freeze -> build.
-    Screenshots saved to workspace/screenshots/full_game_creation/.
-    """
-    execution_mode = _load_default_execution_mode()
-    project_name = _artifact_run_id("real_llm")
+    """Shared harness for full-game creation tests with configurable execution mode."""
+    project_name = _artifact_run_id(run_id_prefix)
     ArtifactWriter = _load_artifact_writer()
     artifacts = ArtifactWriter(SCREENSHOT_DIR, project_name)
     server_url, proc = start_real_llm_server(e2e_workspace, mode=execution_mode, artifacts=artifacts)
@@ -972,6 +996,10 @@ def test_full_game_creation_with_real_llm(
         outline_review=_run_outline_review_stage,
         freeze_and_build=_run_freeze_and_build_stage,
     )
+
+    page.on("pageerror", lambda err: artifacts.write_text(
+        "browser_errors", "console", f"{err}\n", suffix=".log"
+    ))
 
     result = "PASS"
     first_failing_step = "n/a"
@@ -996,3 +1024,35 @@ def test_full_game_creation_with_real_llm(
             freeze_reached=freeze_reached,
             build_reached=build_reached,
         )
+
+
+def test_full_game_creation_with_real_llm(
+    page: Page,
+    e2e_workspace: Path,
+) -> None:
+    """Full end-to-end: create project -> intake chat (real LLM) -> brief -> outline -> freeze -> build.
+    Screenshots saved to workspace/screenshots/full_game_creation/.
+    Uses HYBRID_RECOVERY mode (API fallback enabled) by default.
+    """
+    _run_full_game_creation_test(page, e2e_workspace, _load_default_execution_mode(), "real_llm")
+
+
+def test_full_game_creation_with_real_llm_ui_diagnostic(
+    page: Page,
+    e2e_workspace: Path,
+) -> None:
+    """UI_ONLY_DEBUG mode: disables all API fallbacks to surface pure UI bugs.
+    Any UI race or broken tab route will cause a hard failure.
+    """
+    _run_full_game_creation_test(page, e2e_workspace, FULL_GAME_CREATION_MODES.UI_ONLY_DEBUG, "ui_diag")
+
+
+def test_full_game_creation_with_real_llm_and_real_build(
+    page: Page,
+    e2e_workspace: Path,
+) -> None:
+    """REAL_BUILD_ACCEPTANCE mode: runs the real Ren'Py build instead of mock build.
+    Validates that the generated prototype is actually playable.
+    Trigger manually; do not run in standard CI.
+    """
+    _run_full_game_creation_test(page, e2e_workspace, FULL_GAME_CREATION_MODES.REAL_BUILD_ACCEPTANCE, "real_build")
