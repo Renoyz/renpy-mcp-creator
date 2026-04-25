@@ -1928,6 +1928,9 @@ async def test_generate_character_assets_creates_sprite_when_generation_succeeds
         )
 
     monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.is_available", lambda self: True
+    )
+    monkeypatch.setattr(
         "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
     )
 
@@ -2407,7 +2410,7 @@ async def test_write_script_uses_layout_specific_show_transforms(
 
 @pytest.mark.asyncio
 async def test_cjk_font_config_covers_runtime_dialogue_styles(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CJK font config must cover say_dialogue and say_label styles, not just gui.text_font."""
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
@@ -2421,35 +2424,35 @@ async def test_cjk_font_config_covers_runtime_dialogue_styles(
     service = PrototypeGenerationService(pm=pm, provider=None)
 
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
-    proto_module._CJK_FONT_SOURCE = fake_source
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
-        assert config_path.exists()
-        content = config_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        proto_module, "resolve_cjk_font_path",
+        lambda config_path=None: fake_source,
+    )
 
-        # Must set GUI fonts
-        assert "gui.text_font" in content
-        assert "gui.name_text_font" in content
+    config = service.ensure_cjk_font_config(project_name)
+    config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+    assert config_path.exists()
+    content = config_path.read_text(encoding="utf-8")
 
-        # Must override say-related styles through guarded runtime loop
-        assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
-            f"Must override say-related styles at runtime. Content:\n{content}"
-        )
-        assert 'try:' in content and 'except Exception:' in content, (
-            f"Must guard missing style names with try/except at runtime. Content:\n{content}"
-        )
-        assert config["configured"] is True
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    # Must set GUI fonts
+    assert "gui.text_font" in content
+    assert "gui.name_text_font" in content
+
+    # Must override say-related styles through guarded runtime loop
+    assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
+        f"Must override say-related styles at runtime. Content:\n{content}"
+    )
+    assert 'try:' in content and 'except Exception:' in content, (
+        f"Must guard missing style names with try/except at runtime. Content:\n{content}"
+    )
+    assert config["configured"] is True
 
 
 @pytest.mark.asyncio
 async def test_font_config_is_disabled_when_font_file_missing(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When the system font is missing, config must not write bad font references."""
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
@@ -2463,24 +2466,24 @@ async def test_font_config_is_disabled_when_font_file_missing(
     service = PrototypeGenerationService(pm=pm, provider=None)
 
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
-    proto_module._CJK_FONT_SOURCE = tmp_path / "nonexistent.ttf"
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
-        assert config_path.exists()
-        content = config_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        proto_module, "resolve_cjk_font_path",
+        lambda config_path=None: None,
+    )
 
-        # No font definitions should be written
-        assert "gui.text_font" not in content, (
-            f"Must not define fonts when missing. Content:\n{content}"
-        )
-        assert "style say_dialogue" not in content, (
-            f"Must not define say styles when missing. Content:\n{content}"
-        )
-        assert config["configured"] is False
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    config = service.ensure_cjk_font_config(project_name)
+    config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+    assert config_path.exists()
+    content = config_path.read_text(encoding="utf-8")
+
+    # No font definitions should be written
+    assert "gui.text_font" not in content, (
+        f"Must not define fonts when missing. Content:\n{content}"
+    )
+    assert "style say_dialogue" not in content, (
+        f"Must not define say styles when missing. Content:\n{content}"
+    )
+    assert config["configured"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -2753,6 +2756,9 @@ async def test_character_generation_prompt_includes_scene_visual_context(
         )
 
     monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.is_available", lambda self: True
+    )
+    monkeypatch.setattr(
         "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
     )
 
@@ -2912,7 +2918,7 @@ async def test_background_composition_gate_rejects_subject_heavy_generated_backg
 
 @pytest.mark.asyncio
 async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CJK font config must use init python (runtime execution) and reference the actual font file."""
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
@@ -2926,60 +2932,60 @@ async def test_cjk_font_runtime_contract_is_stronger_than_config_file_presence(
     service = PrototypeGenerationService(pm=pm, provider=None)
 
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
-    proto_module._CJK_FONT_SOURCE = fake_source
-    try:
-        config = service.ensure_cjk_font_config(project_name)
-        config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
-        assert config_path.exists()
-        content = config_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        proto_module, "resolve_cjk_font_path",
+        lambda config_path=None: fake_source,
+    )
 
-        # Must use init python so it executes at runtime (after gui.rpy defaults)
-        assert "init python:" in content, (
-            f"Must use init python for runtime execution. Content:\n{content}"
-        )
+    config = service.ensure_cjk_font_config(project_name)
+    config_path = tmp_path / project_name / "game" / "prototype_fonts.rpy"
+    assert config_path.exists()
+    content = config_path.read_text(encoding="utf-8")
 
-        # Must check file existence at runtime
-        assert "os.path.exists" in content, (
-            f"Must check font file existence at runtime. Content:\n{content}"
-        )
+    # Must use init python so it executes at runtime (after gui.rpy defaults)
+    assert "init python:" in content, (
+        f"Must use init python for runtime execution. Content:\n{content}"
+    )
 
-        # Must set style attributes through guarded runtime chain
-        assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
-            f"Must iterate guarded style overrides at runtime. Content:\n{content}"
-        )
-        assert 'try:' in content and 'except Exception:' in content, (
-            f"Must guard missing style names with try/except at runtime. Content:\n{content}"
-        )
-        assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content, (
-            f"Must assign font through guarded getattr chain. Content:\n{content}"
-        )
-        assert "style.default.font" in content, (
-            f"Must set style.default.font to catch fallback chains. Content:\n{content}"
-        )
-        assert "config.font_replacement_map" in content, (
-            f"Must register font replacement map for stubborn runtime defaults. Content:\n{content}"
-        )
-        assert "DejaVuSans.ttf" in content, (
-            f"Must replace DejaVuSans runtime fallback. Content:\n{content}"
-        )
+    # Must check file existence at runtime
+    assert "os.path.exists" in content, (
+        f"Must check font file existence at runtime. Content:\n{content}"
+    )
 
-        # Font file must actually exist in the project
-        font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
-        assert font_path.exists(), "Font file must be copied into project"
+    # Must set style attributes through guarded runtime chain
+    assert 'for _style_name in ("say_dialogue", "say_label", "namebox", "window", "input", "button_text", "hyperlink_text")' in content, (
+        f"Must iterate guarded style overrides at runtime. Content:\n{content}"
+    )
+    assert 'try:' in content and 'except Exception:' in content, (
+        f"Must guard missing style names with try/except at runtime. Content:\n{content}"
+    )
+    assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content, (
+        f"Must assign font through guarded getattr chain. Content:\n{content}"
+    )
+    assert "style.default.font" in content, (
+        f"Must set style.default.font to catch fallback chains. Content:\n{content}"
+    )
+    assert "config.font_replacement_map" in content, (
+        f"Must register font replacement map for stubborn runtime defaults. Content:\n{content}"
+    )
+    assert "DejaVuSans.ttf" in content, (
+        f"Must replace DejaVuSans runtime fallback. Content:\n{content}"
+    )
 
-        # Config must claim configured
-        assert config["configured"] is True
-        assert config["font_path"] == "game/fonts/simhei.ttf"
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    # Font file must actually exist in the project
+    font_path = tmp_path / project_name / "game" / "fonts" / "simhei.ttf"
+    assert font_path.exists(), "Font file must be copied into project"
+
+    # Config must claim configured
+    assert config["configured"] is True
+    assert config["font_path"] == "game/fonts/simhei.ttf"
 
 
 @pytest.mark.asyncio
 async def test_write_script_embeds_runtime_cjk_overrides_when_font_configured(
-    client: TestClient, tmp_path: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Prototype script should embed CJK runtime overrides so preview does not depend solely on prototype_fonts.rpy."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
@@ -2998,19 +3004,19 @@ async def test_write_script_embeds_runtime_cjk_overrides_when_font_configured(
     chapter = blueprint.chapters[0]
     scenes = await service.generate_scenes(chapter, blueprint)
 
-    original_source = proto_module._CJK_FONT_SOURCE
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
-    proto_module._CJK_FONT_SOURCE = fake_source
-    try:
-        cjk_font_config = service.ensure_cjk_font_config(project_name)
-        staging_path = service.write_script(project_name, chapter, scenes, cjk_font_config=cjk_font_config)
-        content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
-        assert "style.default.font = \"fonts/simhei.ttf\"" in content
-        assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content
-        assert "config.font_replacement_map[\"DejaVuSans.ttf\"] = \"fonts/simhei.ttf\"" in content
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    monkeypatch.setattr(
+        proto_module, "resolve_cjk_font_path",
+        lambda config_path=None: fake_source,
+    )
+
+    cjk_font_config = service.ensure_cjk_font_config(project_name)
+    staging_path = service.write_script(project_name, chapter, scenes, cjk_font_config=cjk_font_config)
+    content = (tmp_path / project_name / staging_path).read_text(encoding="utf-8")
+    assert "style.default.font = \"fonts/simhei.ttf\"" in content
+    assert 'getattr(style, _style_name).font = "fonts/simhei.ttf"' in content
+    assert "config.font_replacement_map[\"DejaVuSans.ttf\"] = \"fonts/simhei.ttf\"" in content
 
 
 # ---------------------------------------------------------------------------
@@ -3147,35 +3153,35 @@ async def test_rollback_removes_new_font_assets_when_generation_fails_after_font
     fake_source = tmp_path / "fake_simhei.ttf"
     fake_source.write_bytes(b"fakefont")
     import renpy_mcp.services.prototype_generation_service as proto_module
-    original_source = proto_module._CJK_FONT_SOURCE
-    proto_module._CJK_FONT_SOURCE = fake_source
+    monkeypatch.setattr(
+        proto_module, "resolve_cjk_font_path",
+        lambda config_path=None: fake_source,
+    )
+
+    cjk_font_config = service.ensure_cjk_font_config(project_name)
+    new_files = cjk_font_config.get("new_files", [])
+    assert len(new_files) > 0, "Font config should report new files"
+
+    staging_path = service.write_script(project_name, chapter, scenes)
+    old_script_content = service.backup_main_script(project_name)
+    service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
+
+    def failing_update(*args, **kwargs):
+        raise RuntimeError("Simulated index failure")
+    service.update_index = failing_update
+
+    new_scene_ids = [s.scene_id for s in scenes]
     try:
-        cjk_font_config = service.ensure_cjk_font_config(project_name)
-        new_files = cjk_font_config.get("new_files", [])
-        assert len(new_files) > 0, "Font config should report new files"
+        service.update_index(project_name, chapter, scenes, staging_path)
+    except RuntimeError:
+        service.rollback_prototype_generation(
+            project_name, staging_path, new_scene_ids, old_script_content,
+            generated_asset_paths=new_files,
+        )
 
-        staging_path = service.write_script(project_name, chapter, scenes)
-        old_script_content = service.backup_main_script(project_name)
-        service.wire_main_script_to_prototype(project_name, scenes[0].entry_label)
-
-        def failing_update(*args, **kwargs):
-            raise RuntimeError("Simulated index failure")
-        service.update_index = failing_update
-
-        new_scene_ids = [s.scene_id for s in scenes]
-        try:
-            service.update_index(project_name, chapter, scenes, staging_path)
-        except RuntimeError:
-            service.rollback_prototype_generation(
-                project_name, staging_path, new_scene_ids, old_script_content,
-                generated_asset_paths=new_files,
-            )
-
-        for p in new_files:
-            abs_p = tmp_path / project_name / p
-            assert not abs_p.exists(), f"Font asset should be rolled back: {p}"
-    finally:
-        proto_module._CJK_FONT_SOURCE = original_source
+    for p in new_files:
+        abs_p = tmp_path / project_name / p
+        assert not abs_p.exists(), f"Font asset should be rolled back: {p}"
 
 
 @pytest.mark.asyncio
@@ -3305,6 +3311,9 @@ async def test_character_asset_is_not_renderable_when_background_removal_fails(
             files=[fake_char_path], primary_file=fake_char_path,
         )
 
+    monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.is_available", lambda self: True
+    )
     monkeypatch.setattr(
         "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
     )

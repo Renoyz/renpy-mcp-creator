@@ -504,7 +504,7 @@ class TestRefinementIntakeApi:
         payload = _make_chapter_intake()
         payload["outline_draft_ready"] = False
         pm.write_refinement_intake("ch_promote_blocked", RefinementIntake.model_validate(payload))
-        caplog.set_level(logging.INFO, logger="renpy_mcp.web.fastapi_app")
+        caplog.set_level(logging.INFO, logger="renpy_mcp.web.routers.refinement")
 
         r = client.post("/api/projects/ch_promote_blocked/chapter-outline/promote-draft")
         assert r.status_code == 409, r.text
