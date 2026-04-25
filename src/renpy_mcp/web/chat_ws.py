@@ -5,14 +5,12 @@ import json
 import logging
 import os
 import re
-import uuid
+
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
-
 from ..blueprint.models import (
     BlueprintCharacter,
     ChapterIntakeEntry,
@@ -22,7 +20,6 @@ from ..blueprint.models import (
     PipelineStage,
     ProjectBlueprint,
     ProjectBrief,
-    ProjectStatus,
     RefinementIntake,
     SceneSummary,
 )
@@ -33,8 +30,6 @@ from ..server import mcp
 from ..models import BuildRequest, BuildResult
 from ..services.build_manager import BuildManager
 from ..services.project_manager import ProjectManager
-from ..services.prototype_generation_service import PrototypeGenerationService
-
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
@@ -769,17 +764,8 @@ class BlueprintOrchestrator:
         _write_chat_history(self.project_name, self.messages)
 
     def _project_intake_slot_keys(self) -> list[str]:
-        return [
-            "core_premise",
-            "audience_genre",
-            "tone_themes",
-            "visual_style",
-            "world_rules",
-            "core_cast",
-            "character_identity",
-            "relationship_baselines",
-            "constraints",
-        ]
+        from ..services.refinement_logic import INTAKE_SLOT_KEYS
+        return INTAKE_SLOT_KEYS
 
     def _build_chapter_intake_entry(self, chapter) -> ChapterIntakeEntry:
         total_chapters = len(self.draft.chapters) if self.draft else 1
@@ -802,113 +788,21 @@ class BlueprintOrchestrator:
                 exc_info=True,
             )
             return False
-        if brief is None or not brief.cards:
+        if brief is None:
             return False
-        for card_key, card in brief.cards.items():
-            if not card.confirmed:
-                return False
-            if card_key == "character_identity":
-                if not isinstance(card.content, dict):
-                    return False
-                characters = card.content.get("characters", [])
-                if not characters:
-                    return False
-                for entry in characters:
-                    has_substance = bool(
-                        entry.get("story_role", "").strip()
-                        or entry.get("core_motivation", "").strip()
-                        or entry.get("personality_anchors", [])
-                        or entry.get("visual_identity_anchors", [])
-                        or entry.get("forbidden_drift", [])
-                    )
-                    if not has_substance:
-                        return False
-        return True
+        from ..services.refinement_logic import is_brief_fully_confirmed
+        return is_brief_fully_confirmed(brief)
 
     def _write_refinement_intake(self, *, latest_user_content: str | None = None) -> RefinementIntake:
+        from ..services.refinement_logic import compute_refinement_intake
+
         brief_confirmed = self._is_brief_fully_confirmed()
-
-        if self.phase == PipelineStage.REVIEWING and self.draft is not None:
-            if brief_confirmed:
-                # Chapter-level outline draft ready
-                chapter_draft = [self._build_chapter_intake_entry(ch) for ch in self.draft.chapters]
-                current_summary = f"Chapter outline draft ready with {len(chapter_draft)} chapters"
-                phase = IntakePhase.OUTLINE_READY
-                brief_draft_ready = True
-                outline_draft_ready = True
-            else:
-                # Project-level brief draft ready
-                characters = [
-                    {
-                        "character_id": re.sub(r"[^a-z0-9]+", "_", ch.name.lower()).strip("_") or f"char_{idx + 1}",
-                        "name": ch.name,
-                        "story_role": ch.role,
-                        "core_motivation": "",
-                        "personality_anchors": [ch.personality] if ch.personality else [],
-                        "visual_identity_anchors": [ch.appearance] if ch.appearance else [],
-                        "forbidden_drift": [],
-                    }
-                    for idx, ch in enumerate(self.draft.characters)
-                ]
-                slots = {
-                    "core_premise": IntakeSlot(
-                        value=f"{self.draft.genre} story in {self.draft.worldview}".strip(),
-                        complete=bool(self.draft.genre or self.draft.worldview),
-                    ),
-                    "audience_genre": IntakeSlot(value=self.draft.genre, complete=bool(self.draft.genre)),
-                    "tone_themes": IntakeSlot(value=", ".join(self.draft.themes), complete=bool(self.draft.themes)),
-                    "visual_style": IntakeSlot(value=self.draft.art_style, complete=bool(self.draft.art_style)),
-                    "world_rules": IntakeSlot(value=self.draft.worldview, complete=bool(self.draft.worldview)),
-                    "core_cast": IntakeSlot(
-                        value=", ".join(ch.name for ch in self.draft.characters),
-                        complete=bool(self.draft.characters),
-                    ),
-                    "character_identity": IntakeSlot(
-                        value={"characters": characters},
-                        complete=bool(characters),
-                    ),
-                    "relationship_baselines": IntakeSlot(value={"relationships": []}, complete=False),
-                    "constraints": IntakeSlot(value="", complete=False),
-                }
-                current_summary = f"{self.draft.genre} in {self.draft.worldview}".strip()
-                phase = IntakePhase.BRIEF_READY
-                brief_draft_ready = True
-                outline_draft_ready = False
-                chapter_draft = []
-        else:
-            latest = (latest_user_content or "").strip()
-            if brief_confirmed:
-                # Chapter-level collecting
-                slots = {}
-                current_summary = latest
-                phase = IntakePhase.CHAPTER
-                brief_draft_ready = True
-                outline_draft_ready = False
-                chapter_draft = []
-            else:
-                # Project-level collecting
-                slots = {key: IntakeSlot() for key in self._project_intake_slot_keys()}
-                if latest:
-                    slots["core_premise"] = IntakeSlot(value=latest, complete=True)
-                current_summary = latest
-                phase = IntakePhase.PROJECT
-                brief_draft_ready = False
-                outline_draft_ready = False
-                chapter_draft = []
-
-        missing_slots = [key for key, slot in slots.items() if not slot.complete] if "slots" in dir() else []
-        # Build intake with whatever state we determined
-        kwargs: dict[str, Any] = {
-            "phase": phase,
-            "current_summary": current_summary,
-            "missing_slots": missing_slots,
-            "slots": slots if "slots" in dir() else {},
-            "brief_draft_ready": brief_draft_ready,
-            "outline_draft_ready": outline_draft_ready,
-            "chapter_draft": chapter_draft,
-            "updated_at": datetime.utcnow().isoformat(),
-        }
-        intake = RefinementIntake(**kwargs)
+        intake = compute_refinement_intake(
+            orchestrator_phase=self.phase,
+            draft=self.draft,
+            brief_confirmed=brief_confirmed,
+            latest_user_content=latest_user_content,
+        )
         self.pm.write_refinement_intake(self.project_name, intake)
         if intake.phase == IntakePhase.OUTLINE_READY:
             logger.info(
@@ -949,217 +843,16 @@ class BlueprintOrchestrator:
     async def _generate_draft_via_llm(self) -> ProjectBlueprint:
         """Generate a blueprint draft by calling the LLM provider.
 
-        Builds a prompt from the interview transcript, calls the provider,
-        extracts JSON, and validates against ProjectBlueprint schema.
-        Retries up to 2 times on parse/validation errors.
+        Delegates to BlueprintGenerationService for the actual LLM interaction,
+        JSON extraction, repair, and schema validation.
         """
+        from ..services.blueprint_generation import BlueprintGenerationService
+
         provider = _get_provider()
-        if provider is None:
-            raise RuntimeError("No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key.")
-        logger.info(
-            "Starting draft generation via LLM for project %s (intake_mode=%s, turn_count=%d)",
-            self.project_name,
-            self.intake_mode,
-            self.turn_count,
-        )
-        _append_refinement_flow_log(
-            self.project_name,
-            "INFO",
-            "Starting draft generation via LLM for project %s (intake_mode=%s, turn_count=%d)",
-            self.project_name,
-            self.intake_mode,
-            self.turn_count,
-        )
-
-        # Build transcript from string-content messages only
-        transcript_lines: list[str] = []
-        for m in self.messages:
-            content = m.get("content", "")
-            if isinstance(content, str) and content.strip():
-                role_label = "User" if m["role"] == "user" else "Assistant"
-                transcript_lines.append(f"{role_label}: {content}")
-        transcript = "\n".join(transcript_lines)
-
-        lang = _preferred_output_language_from_messages(self.messages)
-
-        system_prompt = (
-            "You are an expert visual novel blueprint designer. "
-            "You create structured project blueprints based on user interviews. "
-            "You MUST respond with ONLY a valid JSON object. No markdown, no explanations. "
-            f"{_language_instruction(lang)}"
-        )
-
-        prompt = f"""Based on the following interview, design a complete visual novel blueprint.
-
-Project Name: {self.project_name}
-
-Interview Transcript:
-{transcript}
-
-Respond with ONLY a JSON object matching this exact structure:
-{{
-  "title": "string (use project name or a creative title)",
-  "genre": "string",
-  "worldview": "string",
-  "themes": ["string"],
-  "target_audience": "string",
-  "estimated_play_time": "string",
-  "art_style": "string",
-  "audio_style": "string",
-  "characters": [
-    {{
-      "name": "string",
-      "role": "string",
-      "personality": "string",
-      "appearance": "string"
-    }}
-  ],
-  "chapters": [
-    {{
-      "id": "string",
-      "name": "string",
-      "order": 1,
-      "scenes": [
-        {{
-          "id": "string",
-          "name": "string",
-          "order": 1
-        }}
-      ]
-    }}
-  ]
-}}
-
-Requirements:
-- 2-4 chapters, each with 2-4 scenes
-- At least 2 well-defined characters
-- Themes must match the described tone
-- All user-visible string values in the JSON must be written in {_localized_text(lang, "Simplified Chinese", "English")}
-- Output ONLY the JSON object, nothing else.
-"""
-
-        max_retries = 2
-        last_error: str | None = None
-
-        for attempt in range(max_retries + 1):
-            logger.info(
-                "Draft generation attempt %d/%d for project %s",
-                attempt + 1,
-                max_retries + 1,
-                self.project_name,
-            )
-            _append_refinement_flow_log(
-                self.project_name,
-                "INFO",
-                "Draft generation attempt %d/%d for project %s",
-                attempt + 1,
-                max_retries + 1,
-                self.project_name,
-            )
-            try:
-                response = await asyncio.to_thread(
-                    provider.chat,
-                    messages=[{"role": "user", "content": prompt}],
-                    system=system_prompt,
-                    max_tokens=4096,
-                )
-            except Exception as e:
-                logger.exception("Draft generation provider error for project %s", self.project_name)
-                raise RuntimeError(f"Blueprint generation provider error: {e}") from e
-
-            try:
-                text = response.text.strip()
-
-                # Extract JSON from markdown code blocks if present
-                if text.startswith("```"):
-                    lines = text.splitlines()
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    text = "\n".join(lines).strip()
-
-                data = json.loads(text)
-            except json.JSONDecodeError as e:
-                # Attempt repair for common LLM JSON issues (trailing commas, comments, etc.)
-                repaired = _repair_json_text(text)
-                try:
-                    data = json.loads(repaired)
-                except json.JSONDecodeError:
-                    last_error = f"JSON parse error: {e}"
-                    logger.warning(
-                        "Draft generation JSON parse failed for project %s on attempt %d/%d: %s",
-                        self.project_name,
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
-                    )
-                    _append_refinement_flow_log(
-                        self.project_name,
-                        "WARNING",
-                        "Draft generation JSON parse failed for project %s on attempt %d/%d: %s",
-                        self.project_name,
-                        attempt + 1,
-                        max_retries + 1,
-                        e,
-                    )
-                    prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY valid JSON."
-                    continue
-
-            try:
-                blueprint = ProjectBlueprint(**data)
-                logger.info(
-                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
-                    self.project_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    len(blueprint.chapters),
-                )
-                _append_refinement_flow_log(
-                    self.project_name,
-                    "INFO",
-                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
-                    self.project_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    len(blueprint.chapters),
-                )
-                return blueprint
-            except ValidationError as e:
-                last_error = f"Schema validation error: {e}"
-                logger.warning(
-                    "Draft generation schema validation failed for project %s on attempt %d/%d: %s",
-                    self.project_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    e,
-                )
-                _append_refinement_flow_log(
-                    self.project_name,
-                    "WARNING",
-                    "Draft generation schema validation failed for project %s on attempt %d/%d: %s",
-                    self.project_name,
-                    attempt + 1,
-                    max_retries + 1,
-                    e,
-                )
-                prompt += f"\n\nERROR: Your previous response did not match the required schema ({e}). Fix and return valid JSON."
-                continue
-
-        logger.error(
-            "Draft generation exhausted retries for project %s: %s",
-            self.project_name,
-            last_error,
-        )
-        _append_refinement_flow_log(
-            self.project_name,
-            "ERROR",
-            "Draft generation exhausted retries for project %s: %s",
-            self.project_name,
-            last_error,
-        )
-        raise RuntimeError(
-            f"Blueprint generation failed after {max_retries + 1} attempts. {last_error}"
+        service = BlueprintGenerationService(provider)
+        return await service.generate_draft(
+            self.project_name, self.messages,
+            intake_mode=self.intake_mode, turn_count=self.turn_count,
         )
 
     async def handle_user_message(self, content: str) -> list[dict[str, Any]]:
@@ -1184,20 +877,9 @@ Requirements:
                 content,
                 self.intake_mode,
             )
-            if self.intake_mode:
-                assistant_content = _localized_text(
-                    lang,
-                    "太好了！我会先帮你整理 Project Brief 草稿。首先，请告诉我：故事大概有几章？题材、时代或世界观是什么？主要角色和整体基调是什么？",
-                    "Great. I'll first help you prepare a Project Brief draft. To start, roughly how many chapters do you want, what genre/setting/world rules should it use, and who are the main characters and tone?",
-                )
-                message_kind = "intake_text"
-            else:
-                assistant_content = _localized_text(
-                    lang,
-                    "太好了！让我来帮你把这个想法变成完整的蓝图。首先，你希望这个故事大概有几章？有没有特别想设定的主角人设或故事基调？",
-                    "Great. I'll help turn this idea into a complete blueprint. To start, roughly how many chapters do you want, and are there any specific protagonist traits or story tone you want to establish?",
-                )
-                message_kind = "text"
+            from ..services.refinement_logic import select_collecting_response
+
+            assistant_content, message_kind = select_collecting_response(0, self.intake_mode, lang)
             self.messages.append({"role": "assistant", "message_kind": message_kind, "content": assistant_content})
             self._save_history()
             intake = self._write_refinement_intake()
@@ -1221,28 +903,9 @@ Requirements:
             self.phase = PipelineStage.COLLECTING
 
             if self.turn_count < 2:
-                if self.intake_mode:
-                    assistant_content = _localized_text(
-                        lang,
-                        "收到。为了让 Project Brief 更完整，请再补充：\n1. 主角的核心动机\n2. 主要人物的视觉特征\n3. 角色之间的关系基线\n4. 不希望角色发生哪些形象偏移",
-                        "Got it. To make the Project Brief more complete, please add:\n1. The protagonist's core motivation\n2. Key visual traits for the main characters\n3. Relationship baselines between characters\n4. Any character drift you want to forbid",
-                    )
-                    message_kind = "intake_text"
-                elif self.turn_count == 1:
-                    assistant_content = _localized_text(
-                        lang,
-                        "收到。为了生成更准确的蓝图，请补充一下：\n1. 世界观或时代背景\n2. 核心角色（1-3位）\n3. 你希望的游戏时长",
-                        "Got it. To generate a more accurate blueprint, please add:\n1. The setting or historical era\n2. The core cast (1-3 characters)\n3. The playtime you want for the game",
-                    )
-                    message_kind = "text"
-                else:
-                    assistant_content = _localized_text(
-                        lang,
-                        "很好。接下来我会用这些信息为你生成一份结构化的项目蓝图。确认后，我们会进入分章生成。\n\n请再简单描述一下游戏的整体氛围（例如：轻松、悬疑、治愈）。",
-                        "Good. Next I will use this information to generate a structured project blueprint. After you confirm it, we'll move on to chapter generation.\n\nPlease briefly describe the overall mood of the game as well, for example: lighthearted, suspenseful, or healing.",
-                    )
-                    message_kind = "text"
+                from ..services.refinement_logic import select_collecting_response
 
+                assistant_content, message_kind = select_collecting_response(self.turn_count, self.intake_mode, lang)
                 self.messages.append({"role": "assistant", "message_kind": message_kind, "content": assistant_content})
                 self._save_history()
                 intake = self._write_refinement_intake(latest_user_content=content)
@@ -1296,115 +959,22 @@ Requirements:
 
             self.phase = PipelineStage.REVIEWING
 
-            if self.intake_mode:
-                brief_confirmed = self._is_brief_fully_confirmed()
-                intake = self._write_refinement_intake()
-                self.phase = PipelineStage.IDLE
-                self.confirmation_id = None
+            from ..services.refinement_logic import build_post_draft_result
 
-                if brief_confirmed:
-                    assistant_content = _localized_text(
-                        lang,
-                        "章节大纲草稿已经整理好。请在 Intake 面板点击 Enter Outline Review，进入章节大纲确认。",
-                        "Chapter outline draft is ready. Open the Intake panel and click Enter Outline Review.",
-                    )
-                    ready_kind = "outline_draft_ready"
-                else:
-                    assistant_content = _localized_text(
-                        lang,
-                        "项目简报草稿已经整理好。请在 Intake 面板点击 Enter Brief Review，进入结构化确认。",
-                        "Project Brief draft is ready. Open the Intake panel and click Enter Brief Review.",
-                    )
-                    ready_kind = "brief_draft_ready"
+            intake = self._write_refinement_intake()
+            brief_confirmed = self._is_brief_fully_confirmed()
+            intake_dump = intake.model_dump(mode="json") if self.intake_mode else None
 
-                self.messages.append({"role": "assistant", "content": assistant_content})
-                self.messages.append({
-                    "role": "assistant",
-                    "message_kind": ready_kind,
-                    "content": assistant_content,
-                })
-                self._save_history()
-                self._save_session()
-
-                return [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "message_kind": "text",
-                        "content": assistant_content,
-                        "pipeline_stage": self.phase.value,
-                        "intake": intake.model_dump(mode="json"),
-                    },
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "message_kind": ready_kind,
-                        "content": assistant_content,
-                        "pipeline_stage": self.phase.value,
-                        "intake": intake.model_dump(mode="json"),
-                    },
-                ]
-
-            self.confirmation_id = f"conf_{uuid.uuid4().hex[:8]}"
-
-            assistant_content = _localized_text(
-                lang,
-                "信息已经足够丰富了。我现在为你整理一份蓝图草案，你可以在右侧查看。",
-                "We have enough information now. I'm organizing a blueprint draft for you, and you can review it on the right.",
+            result = build_post_draft_result(
+                self.draft, self.intake_mode, brief_confirmed, lang,
+                self.phase.value, intake_dump,
             )
-            draft_notice = _localized_text(
-                lang,
-                "蓝图草案已生成，请查看并确认。",
-                "The blueprint draft is ready. Please review and confirm it.",
-            )
-            confirm_notice = _localized_text(
-                lang,
-                "请确认以下蓝图草案，确认后我们将开始正式生成。",
-                "Please confirm the blueprint draft below. Once confirmed, we'll begin full generation.",
-            )
-            draft_dict = self.draft.model_dump(mode="json")
-            self.messages.append({"role": "assistant", "content": assistant_content})
-            self.messages.append({
-                "role": "assistant",
-                "message_kind": "blueprint_draft",
-                "content": draft_notice,
-                "draft": draft_dict,
-            })
-            self.messages.append({
-                "role": "assistant",
-                "message_kind": "confirmation_request",
-                "content": confirm_notice,
-                "draft": draft_dict,
-                "confirmation_id": self.confirmation_id,
-            })
+            self.phase = result.next_phase
+            self.confirmation_id = result.confirmation_id
+            self.messages.extend(result.history_entries)
             self._save_history()
-            self._write_refinement_intake()
             self._save_session()
-
-            return [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "message_kind": "text",
-                    "content": assistant_content,
-                    "pipeline_stage": self.phase.value,
-                },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "message_kind": "blueprint_draft",
-                    "content": draft_notice,
-                    "draft": draft_dict,
-                    "pipeline_stage": self.phase.value,
-                },
-                {
-                    "type": "confirmation_request",
-                    "confirmation_id": self.confirmation_id,
-                    "message": confirm_notice,
-                    "draft": draft_dict,
-                    "pipeline_stage": self.phase.value,
-                },
-            ]
+            return result.ws_events
 
         if self.phase == PipelineStage.REVIEWING:
             return [
@@ -1435,6 +1005,7 @@ Requirements:
         """Handle blueprint confirmation. Yields events as an async generator.
 
         Progress events are streamed immediately rather than batched at the end.
+        Delegates the 10-step prototype pipeline to PrototypeOrchestrationService.
         """
         self._load_history()
         lang = _preferred_output_language_from_messages(self.messages)
@@ -1456,17 +1027,11 @@ Requirements:
 
             # Stream the first progress event immediately so the frontend
             # enters generating state without waiting for the whole pipeline.
-            first_step = {
-                "step": _localized_text(lang, "正在准备生成原型...", "Preparing prototype generation..."),
-                "percent": 1,
-            }
-            self.messages.append({
-                "role": "assistant",
-                "message_kind": "progress",
-                "content": first_step["step"],
-                "step": first_step["step"],
-                "percent": first_step["percent"],
-            })
+            from ..services.refinement_logic import build_first_progress_entry
+
+            first_entry = build_first_progress_entry(lang)
+            first_step = {"step": first_entry["step"], "percent": first_entry["percent"]}
+            self.messages.append(first_entry)
             self._save_history()
             self._save_session_with_progress(first_step["step"], first_step["percent"])
             yield {"type": "progress", **first_step, "pipeline_stage": self.phase.value}
@@ -1476,277 +1041,62 @@ Requirements:
                 await asyncio.to_thread(self.pm.write_blueprint, self.project_name, self.draft)
 
             # Update meta
-            meta = self.pm.read_project_meta(self.project_name)
-            if meta:
-                meta.pipeline_stage = PipelineStage.EDITING
-                meta.status = ProjectStatus.BLUEPRINTED
-                if self.draft:
-                    meta.chapter_count = len(self.draft.chapters)
-                    meta.scene_count = sum(len(ch.scenes) for ch in self.draft.chapters)
-                await asyncio.to_thread(self.pm.write_project_meta, self.project_name, meta)
+            from ..services.refinement_logic import update_project_meta_after_confirmation
 
-            # Generate prototype scenes and script (staged replace)
+            await asyncio.to_thread(
+                update_project_meta_after_confirmation,
+                self.pm, self.project_name, self.draft,
+            )
+
+            # Run prototype generation + auto-build pipeline via service
             prototype_error: str | None = None
             build_error: str | None = None
-            staging_path: str | None = None
-            final_path: str | None = None
-            new_scene_ids: list[str] = []
-            old_script_content: str | None = None
-            bg_assets: dict | None = None
-            char_assets: dict | None = None
-            cjk_font_config: dict | None = None
-            round_id: str | None = None
 
             if self.draft:
-                try:
-                    provider = _get_provider()
-                    service = PrototypeGenerationService(self.pm, provider)
-                    chapter = service.select_prototype_chapter(self.draft)
-                    round_id = f"r{uuid.uuid4().hex[:8]}"
+                from ..services.prototype_orchestration import PrototypeOrchestrationService
 
-                    # Build generation contract so that project-level style
-                    # constraints are respected across scene/asset generation.
-                    contract = service.build_generation_contract(
-                        self.project_name, self.draft, chapter
-                    )
+                pipeline_svc = PrototypeOrchestrationService(self.pm)
 
-                    # Step 1: generate scenes
-                    step = {
-                        "step": _localized_text(lang, "正在生成场景...", "Generating scenes..."),
-                        "percent": 15,
-                    }
+                # Collect progress events and yield after pipeline completes,
+                # since we can't yield inside the callback.
+                progress_events: list[dict] = []
+
+                async def _on_progress_collect(step_text: str, percent: int) -> None:
                     self.messages.append({
                         "role": "assistant",
                         "message_kind": "progress",
-                        "content": step["step"],
-                        "step": step["step"],
-                        "percent": step["percent"],
+                        "content": step_text,
+                        "step": step_text,
+                        "percent": percent,
                     })
                     self._save_history()
-                    self._save_session_with_progress(step["step"], step["percent"])
-                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    scenes = await service.generate_scenes(chapter, self.draft, contract=contract)
-                    new_scene_ids = [s.scene_id for s in scenes]
-
-                    # Step 2: generate background assets
-                    step = {
-                        "step": _localized_text(lang, "正在生成背景...", "Generating backgrounds..."),
-                        "percent": 35,
-                    }
-                    self.messages.append({
-                        "role": "assistant",
-                        "message_kind": "progress",
-                        "content": step["step"],
-                        "step": step["step"],
-                        "percent": step["percent"],
+                    self._save_session_with_progress(step_text, percent)
+                    progress_events.append({
+                        "type": "progress",
+                        "step": step_text,
+                        "percent": percent,
+                        "pipeline_stage": self.phase.value,
                     })
-                    self._save_history()
-                    self._save_session_with_progress(step["step"], step["percent"])
-                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    bg_assets = await service.generate_background_assets(
-                        self.project_name, scenes, round_id=round_id, contract=contract
-                    )
 
-                    # Step 3: generate character sprite assets
-                    step = {
-                        "step": _localized_text(lang, "正在生成角色...", "Generating characters..."),
-                        "percent": 55,
-                    }
-                    self.messages.append({
-                        "role": "assistant",
-                        "message_kind": "progress",
-                        "content": step["step"],
-                        "step": step["step"],
-                        "percent": step["percent"],
-                    })
-                    self._save_history()
-                    self._save_session_with_progress(step["step"], step["percent"])
-                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    char_assets = await service.generate_character_assets(
-                        self.project_name, self.draft, scenes, round_id=round_id, contract=contract
-                    )
+                result = await pipeline_svc.run_pipeline(
+                    self.project_name, self.draft,
+                    on_progress=_on_progress_collect,
+                )
 
-                    # Step 4: build sprite plans for each scene
-                    service.build_sprite_plan(scenes, char_assets, project_name=self.project_name)
+                # Yield collected progress events
+                for evt in progress_events:
+                    yield evt
 
-                    # Step 5: ensure CJK-safe font configuration
-                    cjk_font_config = service.ensure_cjk_font_config(self.project_name, round_id=round_id)
-
-                    # Step 6: write new prototype script to staging file
-                    step = {
-                        "step": _localized_text(lang, "正在写脚本...", "Writing script..."),
-                        "percent": 75,
-                    }
-                    self.messages.append({
-                        "role": "assistant",
-                        "message_kind": "progress",
-                        "content": step["step"],
-                        "step": step["step"],
-                        "percent": step["percent"],
-                    })
-                    self._save_history()
-                    self._save_session_with_progress(step["step"], step["percent"])
-                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    staging_path = service.write_script(
-                        self.project_name, chapter, scenes,
-                        background_assets=bg_assets, character_assets=char_assets,
-                        cjk_font_config=cjk_font_config,
-                    )
-                    final_path = service._final_path_from_staging(staging_path)
-
-                    # Step 7: backup main script before rewiring
-                    old_script_content = service.backup_main_script(self.project_name)
-
-                    # Step 8: wire main script to new prototype entry
-                    service.wire_main_script_to_prototype(self.project_name, scenes[0].entry_label)
-
-                    # Step 9: write new prototype index entries
-                    service.update_index(
-                        self.project_name, chapter, scenes, final_path,
-                        background_assets=bg_assets, character_assets=char_assets,
-                        cjk_font_config=cjk_font_config,
-                    )
-
-                    # Step 10: commit
-                    step = {
-                        "step": _localized_text(lang, "正在提交原型...", "Committing prototype..."),
-                        "percent": 90,
-                    }
-                    self.messages.append({
-                        "role": "assistant",
-                        "message_kind": "progress",
-                        "content": step["step"],
-                        "step": step["step"],
-                        "percent": step["percent"],
-                    })
-                    self._save_history()
-                    self._save_session_with_progress(step["step"], step["percent"])
-                    yield {"type": "progress", **step, "pipeline_stage": self.phase.value}
-                    service.commit_prototype_replacement(
-                        self.project_name, new_scene_ids, staging_path, round_id=round_id
-                    )
-
-                    # Step 10b: update manifest to reflect active single-chapter mode
-                    service.activate_single_chapter_prototype(
-                        self.project_name,
-                        entry_label=scenes[0].entry_label,
-                        entry_file=final_path,
-                        chapter_ids=[chapter.id],
-                        script_files=[final_path],
-                    )
-
-                except Exception as e:
-                    prototype_error = str(e)
-                    logger.exception("Prototype generation failed for project %s", self.project_name)
-                    # Rollback partial artifacts
-                    try:
-                        if self.pm is not None:
-                            new_asset_paths: list[str] = []
-                            if bg_assets:
-                                for info in bg_assets.values():
-                                    if info.get("is_new_file") and info.get("path"):
-                                        new_asset_paths.append(str(info["path"]))
-                            if char_assets:
-                                for info in char_assets.values():
-                                    if info.get("is_new_file") and info.get("path"):
-                                        new_asset_paths.append(info["path"])
-                                    if info.get("intermediate_paths"):
-                                        new_asset_paths.extend(info["intermediate_paths"])
-                            if cjk_font_config:
-                                new_asset_paths.extend(cjk_font_config.get("new_files", []))
-
-                            rollback_service = PrototypeGenerationService(self.pm, None)
-                            rollback_service.rollback_prototype_generation(
-                                self.project_name, staging_path, new_scene_ids, old_script_content,
-                                generated_asset_paths=new_asset_paths,
-                                round_id=round_id,
-                            )
-                    except Exception:
-                        logger.exception(
-                            "Prototype rollback also failed for project %s", self.project_name
-                        )
-
-                # Auto-build prototype if generation succeeded
-                if not prototype_error and self.pm is not None:
-                    try:
-                        _write_build_status_for_project(
-                            self.project_name,
-                            "building",
-                            _localized_text(lang, "正在构建可预览原型...", "Building playable prototype..."),
-                        )
-
-                        if os.environ.get("RENPY_MCP_MOCK_BUILD"):
-                            settings = get_settings()
-                            build_dir = (
-                                settings.workspace
-                                / f"{self.project_name}-dists"
-                                / f"{self.project_name}-web"
-                            )
-                            build_dir.mkdir(parents=True, exist_ok=True)
-                            (build_dir / "index.html").write_text(
-                                "<html><body>mock preview</body></html>", encoding="utf-8"
-                            )
-                            build_result = BuildResult(
-                                project_name=self.project_name,
-                                target="web",
-                                success=True,
-                                output_path=build_dir,
-                            )
-                        else:
-                            build_manager = BuildManager(get_settings())
-                            build_result = await build_manager.build(
-                                BuildRequest(project_name=self.project_name, target="web")
-                            )
-
-                        if not build_result.success:
-                            build_error = build_result.error or _localized_text(
-                                lang, "构建失败", "Build failed"
-                            )
-                            _write_build_status_for_project(
-                                self.project_name,
-                                "failed",
-                                build_error,
-                            )
-                        else:
-                            _write_build_status_for_project(
-                                self.project_name,
-                                "success",
-                                _localized_text(
-                                    lang,
-                                    f"原型构建完成：{build_result.output_path}",
-                                    f"Prototype built to {build_result.output_path}",
-                                ),
-                                build_result.output_path,
-                            )
-                    except Exception as e:
-                        build_error = str(e)
-                        logger.exception("Prototype auto-build failed for project %s", self.project_name)
-                        _write_build_status_for_project(
-                            self.project_name,
-                            "failed",
-                            build_error,
-                        )
+                prototype_error = result.prototype_error
+                build_error = result.build_error
 
             self.phase = PipelineStage.EDITING
 
-            if prototype_error:
-                assistant_content = _localized_text(
-                    lang,
-                    f"蓝图已保存，但原型生成失败：{prototype_error}",
-                    f"Blueprint saved, but prototype generation failed: {prototype_error}",
-                )
-            elif build_error:
-                assistant_content = _localized_text(
-                    lang,
-                    f"蓝图已保存，原型已生成，但构建失败：{build_error}",
-                    f"Blueprint saved, prototype generated, but build failed: {build_error}",
-                )
-            else:
-                assistant_content = _localized_text(
-                    lang,
-                    "蓝图生成完成！原型已构建完毕，可以预览了。",
-                    "Blueprint generation is complete. The prototype is built and ready for preview.",
-                )
+            from ..services.refinement_logic import select_confirmation_result_message
+
+            assistant_content = select_confirmation_result_message(
+                lang, prototype_error, build_error,
+            )
             self.messages.append({
                 "role": "assistant",
                 "message_kind": "system",
@@ -1768,11 +1118,9 @@ Requirements:
         self.phase = PipelineStage.COLLECTING
         self.turn_count = 0
 
-        assistant_content = _localized_text(
-            lang,
-            "好的，我们继续调整蓝图。你希望优先修改角色、章节还是整体基调？",
-            "Understood. Let's keep refining the blueprint. Would you like to adjust the characters, the chapter structure, or the overall tone first?",
-        )
+        from ..services.refinement_logic import select_confirmation_rejection_message
+
+        assistant_content = select_confirmation_rejection_message(lang)
         self.messages.append({"role": "assistant", "content": assistant_content})
         self._save_history()
         self._save_session()

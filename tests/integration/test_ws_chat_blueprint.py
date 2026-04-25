@@ -1717,6 +1717,7 @@ def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
 
     monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: _make_mock_blueprint_provider(title=project_name))
     caplog.set_level(logging.INFO, logger="renpy_mcp.web.chat_ws")
+    caplog.set_level(logging.INFO, logger="renpy_mcp.services.blueprint_generation")
 
     with client.websocket_connect("/ws/chat") as websocket:
         websocket.send_json({"type": "user_message", "content": "start_blueprint_collection", "project_name": project_name})

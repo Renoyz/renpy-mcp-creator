@@ -411,3 +411,185 @@ class TestAssembleFrozenBlueprint:
         assert "dark" in bp.themes
         assert "mystery" in bp.themes
         assert "hope" in bp.themes
+
+
+# ---------------------------------------------------------------------------
+# INTAKE_SLOT_KEYS constant
+# ---------------------------------------------------------------------------
+
+class TestIntakeSlotKeys:
+    def test_slot_keys_is_list(self):
+        from renpy_mcp.services.refinement_logic import INTAKE_SLOT_KEYS
+        assert isinstance(INTAKE_SLOT_KEYS, list)
+
+    def test_slot_keys_contains_expected_keys(self):
+        from renpy_mcp.services.refinement_logic import INTAKE_SLOT_KEYS
+        expected = {
+            "core_premise", "audience_genre", "tone_themes",
+            "visual_style", "world_rules", "core_cast",
+            "character_identity", "relationship_baselines", "constraints",
+        }
+        assert set(INTAKE_SLOT_KEYS) == expected
+
+    def test_slot_keys_has_nine_entries(self):
+        from renpy_mcp.services.refinement_logic import INTAKE_SLOT_KEYS
+        assert len(INTAKE_SLOT_KEYS) == 9
+
+
+# ---------------------------------------------------------------------------
+# compute_refinement_intake
+# ---------------------------------------------------------------------------
+
+def _make_draft_blueprint() -> ProjectBlueprint:
+    return ProjectBlueprint(
+        title="Test",
+        genre="Fantasy",
+        worldview="Medieval",
+        themes=["adventure"],
+        target_audience="YA",
+        estimated_play_time="1hr",
+        art_style="Anime",
+        audio_style="Orchestral",
+        characters=[
+            {"name": "Alice", "role": "protagonist", "personality": "brave", "appearance": "tall"},
+            {"name": "Bob", "role": "antagonist", "personality": "cunning", "appearance": "dark"},
+        ],
+        chapters=[
+            {
+                "id": "ch1", "name": "Beginning", "order": 1,
+                "scenes": [{"id": "s1", "name": "Intro", "order": 1}],
+            },
+            {
+                "id": "ch2", "name": "End", "order": 2,
+                "scenes": [{"id": "s2", "name": "Finale", "order": 1}],
+            },
+        ],
+    )
+
+
+class TestComputeRefinementIntake:
+    def test_collecting_project_level_no_brief(self):
+        """COLLECTING phase, brief not confirmed → IntakePhase.PROJECT."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.COLLECTING,
+            draft=None,
+            brief_confirmed=False,
+        )
+        assert intake.phase == IntakePhase.PROJECT
+        assert intake.brief_draft_ready is False
+        assert intake.outline_draft_ready is False
+        assert len(intake.slots) == 9
+
+    def test_collecting_project_level_populates_core_premise(self):
+        """latest_user_content should populate core_premise slot."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.COLLECTING,
+            draft=None,
+            brief_confirmed=False,
+            latest_user_content="A romance story in modern Tokyo",
+        )
+        assert intake.phase == IntakePhase.PROJECT
+        assert intake.slots["core_premise"].value == "A romance story in modern Tokyo"
+        assert intake.slots["core_premise"].complete is True
+
+    def test_collecting_chapter_level_when_brief_confirmed(self):
+        """COLLECTING phase, brief confirmed → IntakePhase.CHAPTER."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.COLLECTING,
+            draft=None,
+            brief_confirmed=True,
+        )
+        assert intake.phase == IntakePhase.CHAPTER
+        assert intake.brief_draft_ready is True
+        assert intake.outline_draft_ready is False
+
+    def test_reviewing_brief_ready_when_brief_not_confirmed(self):
+        """REVIEWING with draft but brief not confirmed → IntakePhase.BRIEF_READY."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        draft = _make_draft_blueprint()
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.REVIEWING,
+            draft=draft,
+            brief_confirmed=False,
+        )
+        assert intake.phase == IntakePhase.BRIEF_READY
+        assert intake.brief_draft_ready is True
+        assert intake.outline_draft_ready is False
+        assert "core_premise" in intake.slots
+        assert intake.slots["character_identity"].complete is True
+
+    def test_reviewing_outline_ready_when_brief_confirmed(self):
+        """REVIEWING with draft and brief confirmed → IntakePhase.OUTLINE_READY."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        draft = _make_draft_blueprint()
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.REVIEWING,
+            draft=draft,
+            brief_confirmed=True,
+        )
+        assert intake.phase == IntakePhase.OUTLINE_READY
+        assert intake.brief_draft_ready is True
+        assert intake.outline_draft_ready is True
+        assert len(intake.chapter_draft) == 2
+        assert intake.chapter_draft[0].chapter_id == "ch1"
+        assert intake.chapter_draft[1].chapter_id == "ch2"
+
+    def test_reviewing_character_slots_built_from_draft(self):
+        """REVIEWING extracts character details from draft into character_identity slot."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        draft = _make_draft_blueprint()
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.REVIEWING,
+            draft=draft,
+            brief_confirmed=False,
+        )
+        char_slot = intake.slots["character_identity"]
+        assert isinstance(char_slot.value, dict)
+        chars = char_slot.value["characters"]
+        assert len(chars) == 2
+        assert chars[0]["name"] == "Alice"
+        assert chars[0]["story_role"] == "protagonist"
+
+    def test_idle_phase_treated_as_collecting(self):
+        """IDLE phase behaves the same as COLLECTING."""
+        from renpy_mcp.services.refinement_logic import compute_refinement_intake
+
+        intake = compute_refinement_intake(
+            orchestrator_phase=PipelineStage.IDLE,
+            draft=None,
+            brief_confirmed=False,
+            latest_user_content="Hello",
+        )
+        assert intake.phase == IntakePhase.PROJECT
+
+
+# ---------------------------------------------------------------------------
+# Structural tests for P2-3 split
+# ---------------------------------------------------------------------------
+
+class TestOrchestratorSplitStructure:
+    def test_blueprint_generation_service_importable(self):
+        from renpy_mcp.services.blueprint_generation import BlueprintGenerationService
+        assert BlueprintGenerationService is not None
+
+    def test_prototype_orchestration_service_importable(self):
+        from renpy_mcp.services.prototype_orchestration import PrototypeOrchestrationService
+        assert PrototypeOrchestrationService is not None
+
+    def test_orchestrator_line_count_reduced(self):
+        """BlueprintOrchestrator class should be significantly smaller after extraction."""
+        import inspect
+        from renpy_mcp.web.chat_ws import BlueprintOrchestrator
+        source = inspect.getsource(BlueprintOrchestrator)
+        line_count = len(source.splitlines())
+        # Original: ~1089 lines. Target: < 650 lines (at least 40% reduction)
+        assert line_count < 650, f"BlueprintOrchestrator is still {line_count} lines"
