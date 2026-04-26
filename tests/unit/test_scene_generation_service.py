@@ -464,6 +464,56 @@ class TestGenerateScenes:
         assert "Alice, Bob" in prompt
         assert "Alice starts trusting Bob" in prompt
 
+    def test_generate_scenes_prompt_includes_concrete_resolution_instruction_for_climax_arc(self):
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch1-s1",
+                "title": "Ending",
+                "summary": "The story ends.",
+                "location": "harbor",
+                "location_visual_brief": "foggy harbor at night",
+                "mood": "grim",
+                "characters_present": ["Alice", "Bob"],
+                "dialogue_beats": [
+                    {
+                        "speaker": "Alice",
+                        "intent": "conclude",
+                        "content_brief": "agrees to a final plan",
+                        "spoken_line": "It's over. We leave at dawn.",
+                    }
+                ],
+                "entry_label": "prototype_ch1_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=None, provider=provider)
+        blueprint = _make_blueprint()
+        chapter = blueprint.chapters[0]
+
+        asyncio.get_event_loop().run_until_complete(
+            svc.generate_scenes(
+                chapter,
+                blueprint,
+                outline_entry={
+                    "chapter_goal": "Resolve the final betrayal",
+                    "emotional_arc": "climax -> resolution",
+                    "key_conflict": "The true leader is exposed",
+                    "character_focus": ["Alice", "Bob"],
+                    "relationship_shift": "Alice and Bob reconcile briefly",
+                    "reveals": "The crown is fake",
+                    "end_state": "Alice refuses revenge and leaves",
+                    "mood_or_pacing_bias": "urgent",
+                },
+            )
+        )
+
+        prompt = provider.chat.call_args.kwargs["messages"][0]["content"]
+        assert "Prefer a concrete story-state resolution" in prompt
+
     def test_generate_scenes_prompt_includes_previous_chapter_continuity(self):
         from renpy_mcp.services.scene_generation_service import SceneGenerationService
 

@@ -161,3 +161,51 @@ class TestDeriveChapterOutlineFields:
         fields = derive_chapter_outline_fields(chapter, total_chapters=4)
 
         assert fields["character_focus"] == ["Zeta", "Alpha", "Beta"]
+
+    def test_does_not_apply_fallback_when_chapter_has_scenes_but_no_scene_characters(self):
+        chapter = _make_chapter(
+            "Empty Cast",
+            order=1,
+            scenes=[_make_scene("Quiet Room"), _make_scene("Lonely Hall")],
+        )
+
+        fields = derive_chapter_outline_fields(
+            chapter,
+            total_chapters=3,
+            fallback_character_names=["Alice", "Bob", "Alice", "Chloe"],
+        )
+
+        assert fields["character_focus"] == []
+        assert fields["relationship_shift"] == ""
+
+    def test_falls_back_to_blueprint_characters_when_chapter_has_no_scenes(self):
+        chapter = _make_chapter(
+            "Empty Cast",
+            order=1,
+            scenes=[],
+        )
+
+        fields = derive_chapter_outline_fields(
+            chapter,
+            total_chapters=3,
+            fallback_character_names=["Alice", "Bob", "Alice", "Chloe"],
+        )
+
+        assert fields["character_focus"] == ["Alice", "Bob", "Chloe"]
+        assert "Alice and Bob" in fields["relationship_shift"]
+
+    def test_prefers_scene_characters_over_blueprint_fallback(self):
+        chapter = _make_chapter(
+            "Scene Focused Cast",
+            order=1,
+            scenes=[_make_scene("Meeting", ["Lena"]), _make_scene("Departure", ["Lena", "Nate"])],
+        )
+
+        fields = derive_chapter_outline_fields(
+            chapter,
+            total_chapters=3,
+            fallback_character_names=["Alice", "Bob"],
+        )
+
+        assert fields["character_focus"] == ["Lena", "Nate"]
+        assert fields["relationship_shift"] == "Lena and Nate face new pressure together"

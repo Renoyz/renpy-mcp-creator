@@ -559,6 +559,19 @@ class TestComputeRefinementIntake:
         assert intake.chapter_draft[0].chapter_id == "ch1"
         assert intake.chapter_draft[1].chapter_id == "ch2"
 
+    def test_build_chapter_intake_entries_uses_blueprint_characters_as_fallback_focus(self):
+        draft = _make_draft_blueprint()
+        for chapter in draft.chapters:
+            chapter.scenes = []
+
+        chapter_entries = build_chapter_intake_entries_from_blueprint(draft)
+
+        assert len(chapter_entries) == 2
+        assert chapter_entries[0].character_focus == ["Alice", "Bob"]
+        assert chapter_entries[1].character_focus == ["Alice", "Bob"]
+        assert chapter_entries[0].relationship_shift == "Alice and Bob face new pressure together"
+        assert chapter_entries[1].relationship_shift == "Alice and Bob face new pressure together"
+
     def test_reviewing_character_slots_built_from_draft(self):
         """REVIEWING extracts character details from draft into character_identity slot."""
         from renpy_mcp.services.refinement_logic import compute_refinement_intake

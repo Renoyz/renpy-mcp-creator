@@ -325,6 +325,13 @@ class SceneGenerationService:
                 narrative_lines.append(f"- Chapter Goal: {outline_entry['chapter_goal']}")
             if outline_entry.get("emotional_arc"):
                 narrative_lines.append(f"- Emotional Arc: {outline_entry['emotional_arc']}")
+                if "climax -> resolution" in outline_entry["emotional_arc"]:
+                    narrative_lines.append(
+                        "- Prefer a concrete story-state resolution when compatible with the "
+                        "requested ending; avoid relying only on reflective/philosophical "
+                        "closure. Whenever possible, include irreversible progression in "
+                        "relationships or world-state."
+                    )
             if outline_entry.get("key_conflict"):
                 narrative_lines.append(f"- Key Conflict: {outline_entry['key_conflict']}")
             if outline_entry.get("character_focus"):

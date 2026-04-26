@@ -60,3 +60,33 @@ def test_draft_restore_sets_none_when_no_old_draft(caplog, monkeypatch, tmp_path
         orch._try_restore_session()
 
     assert orch.draft is None
+
+
+def test_build_chapter_intake_entry_uses_draft_characters_as_fallback_for_empty_chapter():
+    """Character fallback should use draft-level names when chapter has no scenes."""
+    from renpy_mcp.blueprint.models import BlueprintCharacter, ChapterSummary, ProjectBlueprint
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator
+
+    orchestrator = BlueprintOrchestrator.__new__(BlueprintOrchestrator)
+    orchestrator.draft = ProjectBlueprint(
+        title="Fallback Draft",
+        genre="Drama",
+        worldview="Small town",
+        chapters=[],
+        characters=[
+            BlueprintCharacter(name="Alice", role="protagonist", personality="", appearance=""),
+            BlueprintCharacter(name="Bob", role="support", personality="", appearance=""),
+        ],
+    )
+
+    chapter = ChapterSummary(
+        id="ch1",
+        name="Calm Beginning",
+        order=1,
+        scenes=[],
+    )
+
+    entry = orchestrator._build_chapter_intake_entry(chapter)
+
+    assert entry.character_focus == ["Alice", "Bob"]
+    assert entry.relationship_shift == "Alice and Bob face new pressure together"

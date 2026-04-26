@@ -826,7 +826,16 @@ class BlueprintOrchestrator:
 
     def _build_chapter_intake_entry(self, chapter) -> ChapterIntakeEntry:
         total_chapters = len(self.draft.chapters) if self.draft else 1
-        fields = derive_chapter_outline_fields(chapter, total_chapters=total_chapters)
+        fallback_characters = (
+            [character.name for character in self.draft.characters if character.name]
+            if self.draft
+            else None
+        )
+        fields = derive_chapter_outline_fields(
+            chapter,
+            total_chapters=total_chapters,
+            fallback_character_names=fallback_characters,
+        )
         return ChapterIntakeEntry(
             chapter_id=chapter.id,
             order=chapter.order,

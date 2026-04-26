@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 def derive_chapter_outline_fields(
     chapter: ChapterSummary,
     total_chapters: int = 1,
+    fallback_character_names: list[str] | None = None,
 ) -> dict:
     """Derive the narrative intake fields for a single chapter.
 
@@ -30,6 +31,11 @@ def derive_chapter_outline_fields(
     character_focus: list[str] = []
     for scene in chapter.scenes:
         for character in scene.characters:
+            if character and character not in character_focus:
+                character_focus.append(character)
+
+    if not character_focus and not chapter.scenes and fallback_character_names:
+        for character in fallback_character_names:
             if character and character not in character_focus:
                 character_focus.append(character)
 

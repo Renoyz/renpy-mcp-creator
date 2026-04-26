@@ -214,9 +214,14 @@ def build_chapter_intake_entries_from_blueprint(
 ) -> list[ChapterIntakeEntry]:
     """Derive chapter intake entries from a blueprint draft."""
     total_chapters = len(blueprint.chapters)
+    fallback_characters = [ch.name for ch in blueprint.characters if ch.name]
     entries: list[ChapterIntakeEntry] = []
     for chapter in blueprint.chapters:
-        fields = derive_chapter_outline_fields(chapter, total_chapters=total_chapters)
+        fields = derive_chapter_outline_fields(
+            chapter,
+            total_chapters=total_chapters,
+            fallback_character_names=fallback_characters,
+        )
         entries.append(
             ChapterIntakeEntry(
                 chapter_id=chapter.id,
