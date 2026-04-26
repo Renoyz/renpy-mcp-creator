@@ -4,31 +4,23 @@ import asyncio
 import json
 import logging
 import os
-import re
-
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..blueprint.models import (
-    BlueprintCharacter,
     ChapterIntakeEntry,
-    ChapterSummary,
     IntakePhase,
     IntakeSlot,
     PipelineStage,
     ProjectBlueprint,
-    ProjectBrief,
     RefinementIntake,
-    SceneSummary,
 )
 from ..blueprint.outline_derivation import derive_chapter_outline_fields
 from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvider
 from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
-from ..models import BuildRequest, BuildResult
-from ..services.build_manager import BuildManager
 from ..services.project_manager import ProjectManager
 router = APIRouter()
 
@@ -253,187 +245,17 @@ def _allowed_without_project(content: str) -> bool:
     return False
 
 
-def _contains_cjk(text: str) -> bool:
-    return bool(re.search(r"[\u4e00-\u9fff]", text))
-
-
-def _is_clearly_english(text: str) -> bool:
-    if not text.strip() or _contains_cjk(text):
-        return False
-    words = re.findall(r"[A-Za-z]{2,}", text)
-    letters = sum(len(word) for word in words)
-    return len(words) >= 3 or letters >= 18
-
-
-def _preferred_output_language_from_texts(texts: list[str]) -> str:
-    for text in reversed(texts):
-        stripped = text.strip()
-        if not stripped or stripped in _START_TRIGGERS:
-            continue
-        if _contains_cjk(stripped):
-            return "zh"
-        if _is_clearly_english(stripped):
-            return "en"
-    return "zh"
-
-
-def _preferred_output_language_from_messages(messages: list[dict[str, Any]]) -> str:
-    texts: list[str] = []
-    for message in messages:
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            texts.append(content)
-    return _preferred_output_language_from_texts(texts)
-
-
-def _localized_text(lang: str, zh: str, en: str) -> str:
-    return en if lang == "en" else zh
-
-
-def _language_instruction(lang: str) -> str:
-    return _localized_text(
-        lang,
-        "Preferred output language for all user-visible content: Simplified Chinese.",
-        "Preferred output language for all user-visible content: English.",
-    )
-
-
-def _localized_confirmation_message(tool_name: str | None, lang: str, fallback: str) -> str:
-    if lang != "en":
-        return fallback
-    if tool_name == "generate_background":
-        return "Generated a background image. Save it?"
-    if tool_name == "generate_character":
-        return "Generated a character image. Save it?"
-    if tool_name == "delete_project":
-        return "Delete this project?"
-    if tool_name == "build_project":
-        return "Build this project now?"
-    return f"Run {tool_name or 'this action'}?"
-
-
-def _extract_json_block(text: str) -> str | None:
-    """Extract the outermost JSON object or array from mixed text."""
-    text = text.strip()
-    start = -1
-    for i, ch in enumerate(text):
-        if ch in "{[":
-            start = i
-            break
-    if start == -1:
-        return None
-    stack = []
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch in "{[":
-            stack.append(ch)
-        elif ch == "}":
-            if stack and stack[-1] == "{":
-                stack.pop()
-            else:
-                return None  # mismatched
-            if not stack:
-                return text[start : i + 1]
-        elif ch == "]":
-            if stack and stack[-1] == "[":
-                stack.pop()
-            else:
-                return None
-            if not stack:
-                return text[start : i + 1]
-    return None
-
-
-def _repair_json_text(text: str) -> str:
-    """Attempt to repair common LLM JSON output errors.
-
-    Fixes:
-    - Extracts JSON from surrounding text
-    - Removes trailing commas before ] and }
-    - Strips C++-style comments
-    - Normalizes stray whitespace around structural commas
-    """
-    block = _extract_json_block(text)
-    if block is None:
-        return text
-
-    # Remove single-line comments (// ...)
-    lines = []
-    for line in block.splitlines():
-        # Be careful not to strip // inside strings
-        cleaned = []
-        in_str = False
-        esc = False
-        for i, ch in enumerate(line):
-            if esc:
-                esc = False
-                cleaned.append(ch)
-                continue
-            if ch == "\\":
-                esc = True
-                cleaned.append(ch)
-                continue
-            if ch == '"':
-                in_str = not in_str
-                cleaned.append(ch)
-                continue
-            if not in_str and ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
-                break
-            cleaned.append(ch)
-        lines.append("".join(cleaned))
-    block = "\n".join(lines)
-
-    # Remove trailing commas before } or ]
-    # Use a stateful pass so we don't affect commas inside strings
-    result_chars: list[str] = []
-    i = 0
-    while i < len(block):
-        ch = block[i]
-        if ch == '"':
-            # Copy whole string literal
-            result_chars.append(ch)
-            i += 1
-            esc = False
-            while i < len(block):
-                c2 = block[i]
-                result_chars.append(c2)
-                if esc:
-                    esc = False
-                elif c2 == "\\":
-                    esc = True
-                elif c2 == '"':
-                    i += 1
-                    break
-                i += 1
-            continue
-        if ch == ",":
-            # Peek ahead for whitespace then } or ]
-            j = i + 1
-            while j < len(block) and block[j] in " \t\n\r":
-                j += 1
-            if j < len(block) and block[j] in "}]":
-                # Skip the comma (and whitespace) — just advance i to j
-                i = j
-                continue
-        result_chars.append(ch)
-        i += 1
-
-    return "".join(result_chars)
+from ..utils.i18n import (
+    _contains_cjk,
+    _is_clearly_english,
+    _language_instruction,
+    _localized_confirmation_message,
+    _localized_text,
+    _preferred_output_language_from_messages,
+    _preferred_output_language_from_texts,
+    _START_TRIGGERS,
+)
+from ..utils.json_repair import _extract_json_block, _repair_json_text
 
 
 def _get_provider():
@@ -680,11 +502,6 @@ def _bind_project_context(websocket: WebSocket, token_holder: list, project_name
 
 _orchestrators: dict[str, "BlueprintOrchestrator"] = {}
 _orchestrators_lock = asyncio.Lock()
-
-_START_TRIGGERS = frozenset([
-    "start_blueprint_collection",
-    "让 AI 生成蓝图",
-])
 
 _INTAKE_START_TRIGGERS = frozenset([
     "start_refinement_intake",
