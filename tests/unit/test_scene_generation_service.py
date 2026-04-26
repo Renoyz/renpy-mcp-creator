@@ -372,6 +372,143 @@ class TestGenerateScenes:
         )
         assert len(scenes) == 1
 
+    def test_generate_scenes_default_prompt_requires_four_to_eight_dialogue_beats(self):
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch1-s1",
+                "title": "Opening",
+                "summary": "Introduction",
+                "location": "library",
+                "location_visual_brief": "quiet library",
+                "mood": "calm",
+                "characters_present": ["Alice"],
+                "dialogue_beats": [
+                    {
+                        "speaker": "Alice",
+                        "intent": "speak",
+                        "content_brief": "speaks",
+                        "spoken_line": "Hello.",
+                    }
+                ],
+                "entry_label": "prototype_ch1_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=None, provider=provider)
+        blueprint = _make_blueprint()
+        chapter = blueprint.chapters[0]
+
+        asyncio.get_event_loop().run_until_complete(
+            svc.generate_scenes(chapter, blueprint)
+        )
+
+        prompt = provider.chat.call_args.kwargs["messages"][0]["content"]
+        assert "between 4 and 8 dialogue_beats" in prompt
+
+    def test_generate_scenes_prompt_includes_chapter_outline_direction(self):
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch1-s1",
+                "title": "Opening",
+                "summary": "Introduction",
+                "location": "library",
+                "location_visual_brief": "quiet library",
+                "mood": "calm",
+                "characters_present": ["Alice"],
+                "dialogue_beats": [
+                    {
+                        "speaker": "Alice",
+                        "intent": "speak",
+                        "content_brief": "speaks",
+                        "spoken_line": "Hello.",
+                    }
+                ],
+                "entry_label": "prototype_ch1_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=None, provider=provider)
+        blueprint = _make_blueprint()
+        chapter = blueprint.chapters[0]
+
+        asyncio.get_event_loop().run_until_complete(
+            svc.generate_scenes(
+                chapter,
+                blueprint,
+                outline_entry={
+                    "chapter_goal": "Expose the first mystery",
+                    "emotional_arc": "setup -> escalation",
+                    "key_conflict": "The map contradicts the official record",
+                    "character_focus": ["Alice", "Bob"],
+                    "relationship_shift": "Alice starts trusting Bob",
+                    "reveals": "The map is forged",
+                    "end_state": "Alice chooses to investigate",
+                    "mood_or_pacing_bias": "tense and investigative",
+                },
+            )
+        )
+
+        prompt = provider.chat.call_args.kwargs["messages"][0]["content"]
+        assert "Chapter Narrative Direction:" in prompt
+        assert "Expose the first mystery" in prompt
+        assert "setup -> escalation" in prompt
+        assert "The map contradicts the official record" in prompt
+        assert "Alice, Bob" in prompt
+        assert "Alice starts trusting Bob" in prompt
+
+    def test_generate_scenes_prompt_includes_previous_chapter_continuity(self):
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch2-s1",
+                "title": "Aftermath",
+                "summary": "The investigation continues.",
+                "location": "archive",
+                "location_visual_brief": "dusty archive",
+                "mood": "tense",
+                "characters_present": ["Alice"],
+                "dialogue_beats": [
+                    {
+                        "speaker": "Alice",
+                        "intent": "reflect",
+                        "content_brief": "reflects",
+                        "spoken_line": "We cannot repeat our first mistake.",
+                    }
+                ],
+                "entry_label": "prototype_ch2_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=None, provider=provider)
+        blueprint = _make_blueprint(chapter_count=2)
+        chapter = blueprint.chapters[1]
+
+        asyncio.get_event_loop().run_until_complete(
+            svc.generate_scenes(
+                chapter,
+                blueprint,
+                previous_chapter_summaries=[
+                    "Chapter 1: Opening\n  - ch1-s1: Alice arrived at the island gate."
+                ],
+            )
+        )
+
+        prompt = provider.chat.call_args.kwargs["messages"][0]["content"]
+        assert "Previously Established (DO NOT REPEAT):" in prompt
+        assert "Alice arrived at the island gate" in prompt
+        assert "Do NOT repeat the same arrival/introduction pattern" in prompt
+
 
 class TestGenerateAllChapterScenes:
     """generate_all_chapter_scenes orchestrates per-chapter generation."""
@@ -451,6 +588,41 @@ class TestGenerateAllChapterScenes:
         assert snapshot is not None
         assert len(snapshot.chapters) == 1
         assert snapshot.chapters[0].chapter_id == "ch1"
+
+    def test_outline_read_failure_is_logged(self, pm, project_env, caplog):
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch1-s1",
+                "title": "T",
+                "summary": "S",
+                "location": "L",
+                "location_visual_brief": "V",
+                "mood": "m",
+                "characters_present": [],
+                "dialogue_beats": [],
+                "entry_label": "x",
+                "next_scene_id": None,
+            }
+        ])
+
+        def boom(project_name):
+            raise ValueError("bad outline json")
+
+        pm.read_chapter_outline = boom
+
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=1)
+
+        with caplog.at_level("WARNING"):
+            asyncio.get_event_loop().run_until_complete(
+                svc.generate_all_chapter_scenes(project_env[0], bp)
+            )
+
+        assert "Failed to read chapter outline" in caplog.text
+        assert "bad outline json" in caplog.text
 
 
 class TestBuildGenerationContract:

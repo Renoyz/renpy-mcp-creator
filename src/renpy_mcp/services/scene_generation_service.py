@@ -254,7 +254,7 @@ class SceneGenerationService:
         contract: GenerationContract | None = None,
         outline_entry: dict | None = None,
         previous_chapter_summaries: list[str] | None = None,
-        min_beats_per_scene: int = 2,
+        min_beats_per_scene: int = 4,
         max_beats_per_scene: int = 8,
     ) -> list:
         """Generate 2-4 structured scenes for the prototype chapter via LLM.
@@ -489,8 +489,13 @@ Requirements:
                 if outline:
                     for entry in outline.chapters:
                         outline_lookup[entry.chapter_id] = entry.model_dump()
-            except Exception:
-                pass  # outline reading failure should not block generation
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read chapter outline for project %s; continuing without narrative direction: %s",
+                    project_name,
+                    exc,
+                    exc_info=True,
+                )
 
         packages: dict[str, list] = {}
         chapter_map: dict[str, ChapterSummary] = {}

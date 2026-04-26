@@ -107,6 +107,26 @@ class TestDeriveChapterOutlineFields:
 
         assert fields["emotional_arc"] == "climax -> resolution"
 
+    def test_two_chapter_story_first_is_setup_second_is_climax(self):
+        first = _make_chapter(
+            "Opening",
+            order=1,
+            scenes=[_make_scene("Arrival", ["Hero"])],
+        )
+        second = _make_chapter(
+            "Finale",
+            order=2,
+            scenes=[_make_scene("Showdown", ["Hero", "Rival"])],
+        )
+
+        first_fields = derive_chapter_outline_fields(first, total_chapters=2)
+        second_fields = derive_chapter_outline_fields(second, total_chapters=2)
+
+        assert first_fields["emotional_arc"] == "setup -> escalation"
+        assert second_fields["emotional_arc"] == "climax -> resolution"
+        assert first_fields["chapter_goal"].startswith("Introduce the world and characters")
+        assert second_fields["chapter_goal"].startswith("Bring the story to its climax and resolution")
+
     def test_two_characters_generates_relationship_shift(self):
         chapter = _make_chapter(
             "Partners",

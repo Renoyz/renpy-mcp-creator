@@ -33,7 +33,10 @@ def derive_chapter_outline_fields(
             if character and character not in character_focus:
                 character_focus.append(character)
 
-    pos = chapter.order / max(total_chapters, 1)
+    if total_chapters <= 1:
+        pos = 1.0
+    else:
+        pos = (chapter.order - 1) / max(total_chapters - 1, 1)
 
     if pos <= 0.33:
         emotional_arc = "setup -> escalation"
