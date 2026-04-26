@@ -80,8 +80,7 @@ def is_character_identity_card_valid(card: BriefCard) -> bool:
         return False
     for entry in characters:
         has_substance = bool(
-            entry.get("name", "").strip()
-            or entry.get("story_role", "").strip()
+            entry.get("story_role", "").strip()
             or entry.get("core_motivation", "").strip()
             or entry.get("personality_anchors", [])
             or entry.get("visual_identity_anchors", [])

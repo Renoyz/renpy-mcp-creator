@@ -150,9 +150,9 @@ class TestIsCharacterIdentityCardValid:
         card = BriefCard(content={"characters": []}, confirmed=True)
         assert is_character_identity_card_valid(card) is False
 
-    def test_valid_character_by_name(self):
+    def test_name_only_character_is_not_valid(self):
         card = BriefCard(content={"characters": [{"name": "Alice"}]}, confirmed=True)
-        assert is_character_identity_card_valid(card) is True
+        assert is_character_identity_card_valid(card) is False
 
     def test_valid_character_by_role(self):
         card = BriefCard(
