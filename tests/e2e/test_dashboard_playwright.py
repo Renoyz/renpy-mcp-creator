@@ -1818,6 +1818,9 @@ def test_workspace_has_single_project_title(page: Page, server_url: str) -> None
     # Main workspace title is visible in content area
     workspace_title = page.locator("[data-testid='workspace-project-title']")
     expect(workspace_title).to_have_text(project_name, timeout=30000)
+    title_box = workspace_title.bounding_box()
+    assert title_box is not None
+    assert title_box["x"] >= 12
 
     # AppShell top header must NOT repeat the project name
     assert page.locator("header").get_by_text(project_name).count() == 0

@@ -245,6 +245,35 @@ Option B: river trade mystery
     assert "slot_updates" not in display
 
 
+def test_auto_conclusion_intent_helper_detects_delegation_phrases():
+    """User delegation phrases should end interview immediately."""
+    from renpy_mcp.web.chat_ws import _is_user_auto_conclusion_intent
+
+    for phrase in [
+        "授权自主决定",
+        "你决定吧",
+        "剩下你决定",
+        "剩下你来",
+        "其余你来",
+        "你自己决定",
+        "剩下的问题你自己决定吧",
+        "你来定吧",
+        "后面你来定",
+        "you decide",
+        "decide the rest",
+    ]:
+        assert _is_user_auto_conclusion_intent(phrase) is True, phrase
+
+
+def test_auto_conclusion_intent_helper_rejects_non_delegation_phrases():
+    """Non-delegation text should not trigger auto-conclusion."""
+    from renpy_mcp.web.chat_ws import _is_user_auto_conclusion_intent
+
+    assert _is_user_auto_conclusion_intent("继续聊聊角色背景") is False
+    assert _is_user_auto_conclusion_intent("Let's continue") is False
+    assert _is_user_auto_conclusion_intent("") is False
+
+
 @pytest.mark.asyncio
 async def test_interview_round_returns_display_content_without_control_tags(tmp_path, monkeypatch):
     """Interview parsing should use raw provider text, but returned chat content should be display-safe."""
@@ -281,6 +310,47 @@ Option A: court horror
 
     assert result["content"] == "Option A: court horror"
     assert result["slot_updates"] == {"core_premise": "Ming vampire story"}
+
+
+@pytest.mark.asyncio
+async def test_conduct_interview_round_skips_provider_on_delegation(tmp_path, monkeypatch):
+    """Delegation phrase should mark conclusion and keep provider unused."""
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator, PipelineStage
+
+    calls = {"provider": 0}
+    proposal_history = [{
+        "proposal_id": "story_direction",
+        "for_slot": "core_premise",
+        "options": ["A", "B"],
+        "user_choice": None,
+    }]
+
+    class ExplodingProvider:
+        def chat(self, messages, **kwargs):
+            calls["provider"] += 1
+            raise AssertionError("provider should not be called for delegation intent")
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: ExplodingProvider())
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("conduct_delegation")
+
+    orchestrator = BlueprintOrchestrator("conduct_delegation", pm)
+    orchestrator.phase = PipelineStage.COLLECTING
+    orchestrator.intake_mode = True
+    orchestrator.turn_count = 3
+    orchestrator._proposal_history = proposal_history
+
+    result = await orchestrator._conduct_interview_round("授权自主决定")
+
+    assert result["is_conclusion"] is True
+    assert result["slot_updates"] == {}
+    assert proposal_history[0]["user_choice"] == "授权自主决定"
+    assert calls["provider"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +457,66 @@ async def test_collecting_user_message_calls_adaptive_interview_by_default(tmp_p
     assert calls == ["我想做明朝悬疑"]
     assert events[0]["type"] == "message"
     assert events[0]["content"] == "Adaptive question"
+
+
+# ---------------------------------------------------------------------------
+# 3b. Delegation intent short-circuit
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_collecting_intake_delegation_message_jumps_to_draft_generation(tmp_path, monkeypatch):
+    """Collecting + intake mode should jump to draft generation on delegation intent."""
+    from renpy_mcp.blueprint.models import ProjectBlueprint
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator, PipelineStage
+
+    calls = {"provider": 0, "draft": 0}
+
+    class ExplodingProvider:
+        def chat(self, messages, **kwargs):
+            calls["provider"] += 1
+            raise AssertionError("provider should not be called in delegation branch")
+
+    async def fake_generate_draft(self):
+        calls["draft"] += 1
+        return ProjectBlueprint(
+            title="Delegation test",
+            genre="fantasy",
+            worldview="contemporary",
+        )
+
+    async def fail_fallback(self, lang):
+        raise AssertionError("interview fallback path should not be used")
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: ExplodingProvider())
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._read_chat_history", lambda project_name: [])
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._write_chat_history", lambda project_name, messages: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._save_runtime_session", lambda project_name, state: None)
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws.BlueprintOrchestrator._generate_draft_via_llm",
+        fake_generate_draft,
+    )
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws.BlueprintOrchestrator._fallback_generate_draft",
+        fail_fallback,
+    )
+
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("collecting_delegation")
+
+    orchestrator = BlueprintOrchestrator("collecting_delegation", pm)
+    orchestrator.phase = PipelineStage.COLLECTING
+    orchestrator.intake_mode = True
+
+    events = await orchestrator.handle_user_message("授权自主决定")
+
+    assert calls["provider"] == 0
+    assert calls["draft"] == 1
+    assert orchestrator.phase == PipelineStage.IDLE
+    assert events[0]["type"] == "message"
+    assert events[0]["pipeline_stage"] == PipelineStage.IDLE.value
 
 
 # ---------------------------------------------------------------------------

@@ -646,6 +646,32 @@ def _parse_interview_response(response: str) -> dict:
     return result
 
 
+def _is_user_auto_conclusion_intent(user_message: str) -> bool:
+    """Return True when the user wants the assistant to continue autonomously."""
+    if not user_message:
+        return False
+
+    import re
+
+    message = user_message.lower().strip()
+    chinese_patterns = (
+        "授权自主决定",
+        "剩下你决定",
+        "剩下你来",
+        "其余你来",
+        "你自己决定",
+        "你决定吧",
+        "你来定吧",
+        "后面你来定",
+    )
+    for phrase in chinese_patterns:
+        if phrase in message:
+            return True
+
+    # English shorthand where user delegates the rest.
+    return bool(re.search(r"\byou\s+decide\b", message) or re.search(r"\bdecide the rest\b", message))
+
+
 def _display_interview_response(response: str) -> str:
     """Remove internal interview control tags before showing text to users."""
     import re
@@ -921,6 +947,13 @@ class BlueprintOrchestrator:
                 self._current_slots.setdefault(key, "")
 
         _record_user_choice_for_pending_proposal(self._proposal_history, user_message)
+
+        if _is_user_auto_conclusion_intent(user_message):
+            return {
+                "content": "",
+                "is_conclusion": True,
+                "slot_updates": {},
+            }
 
         # Update slots from user message (simple heuristic: if user seems to answer a proposal)
         proposal_history = self._proposal_history

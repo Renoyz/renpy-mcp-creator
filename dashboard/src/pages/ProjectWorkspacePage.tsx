@@ -388,7 +388,7 @@ export function ProjectWorkspacePage() {
   }
 
   return (
-    <div className="h-full flex flex-col -m-4">
+    <div className="h-full flex flex-col">
       {/* Top header */}
       <div className="shrink-0 border-b bg-white px-4 py-3">
         <div className="flex items-start justify-between gap-4">
