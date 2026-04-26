@@ -10,6 +10,7 @@ After the P2-2 router extraction, this module retains only:
 import json
 import logging
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ DASHBOARD_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist
 
 _preview_manager = PreviewManager()
 _last_build_results: dict[str, Path] = {}
+_last_build_results_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 # Injected config (set during bootstrap)
@@ -112,9 +114,15 @@ def _previewable_output_path(path: Path | None) -> Path | None:
 
 def _store_previewable_build_result(project_name: str, output_path: Path | None) -> None:
     resolved = _previewable_output_path(output_path)
-    if resolved is not None:
-        _last_build_results[project_name] = resolved
-    else:
+    with _last_build_results_lock:
+        if resolved is not None:
+            _last_build_results[project_name] = resolved
+        else:
+            _last_build_results.pop(project_name, None)
+
+
+def _clear_cached_build_result(project_name: str) -> None:
+    with _last_build_results_lock:
         _last_build_results.pop(project_name, None)
 
 
@@ -156,7 +164,8 @@ def _read_build_status(project_name: str) -> dict | None:
 
 def _resolve_preview_build_dir(project_name: str) -> Path | None:
     """Resolve the previewable build directory from memory cache or persisted status."""
-    cached = _last_build_results.get(project_name)
+    with _last_build_results_lock:
+        cached = _last_build_results.get(project_name)
     if cached is not None:
         return Path(cached)
     persisted = _read_build_status(project_name)

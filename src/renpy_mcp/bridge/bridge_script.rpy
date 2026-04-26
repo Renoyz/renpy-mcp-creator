@@ -30,10 +30,8 @@ init -999 python:
             tmp = _mcp_status_file + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 _mcp_json.dump(data, f, ensure_ascii=False)
-            # Atomic rename
-            if _mcp_os.path.exists(_mcp_status_file):
-                _mcp_os.remove(_mcp_status_file)
-            _mcp_os.rename(tmp, _mcp_status_file)
+            # Atomic replace (os.replace is atomic on all platforms)
+            _mcp_os.replace(tmp, _mcp_status_file)
         except Exception:
             pass
 

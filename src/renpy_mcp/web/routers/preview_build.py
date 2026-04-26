@@ -131,7 +131,7 @@ async def api_build_project_prototype(request: Request, project_name: str):
             target=target,
         )
     else:
-        _fa._last_build_results.pop(project_name, None)
+        _fa._clear_cached_build_result(project_name)
         _write_build_status(
             project_name,
             "failed",
@@ -181,7 +181,7 @@ async def api_build_project(request: Request):
             target=target,
         )
     else:
-        _fa._last_build_results.pop(name, None)
+        _fa._clear_cached_build_result(name)
         _write_build_status(
             name,
             "failed",
@@ -226,7 +226,7 @@ async def api_build_project_scoped(request: Request, project_name: str):
             target=target,
         )
     else:
-        _fa._last_build_results.pop(project_name, None)
+        _fa._clear_cached_build_result(project_name)
         _write_build_status(
             project_name,
             "failed",

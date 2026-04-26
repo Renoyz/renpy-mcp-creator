@@ -53,9 +53,10 @@ class BridgeClient:
         while time.time() - start < timeout:
             if status_file.exists():
                 try:
-                    data = json.loads(
-                        status_file.read_text(encoding="utf-8")
+                    raw = await asyncio.to_thread(
+                        lambda: status_file.read_text(encoding="utf-8")
                     )
+                    data = json.loads(raw)
                     if (
                         data.get("time", 0) >= start
                         and data.get("action") == expected_action
