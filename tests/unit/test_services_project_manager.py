@@ -40,6 +40,21 @@ class TestProjectManager:
         assert "project_b" in names
         assert result.errors == []
 
+    def test_list_projects_excludes_distribution_output_dirs(self, settings: Settings) -> None:
+        from renpy_mcp.services.project_manager import ProjectManager
+
+        pm = ProjectManager(settings)
+        pm.ensure_project_dir("project_a")
+        dist_dir = settings.workspace / "project_a-dists"
+        (dist_dir / "project_a-web").mkdir(parents=True, exist_ok=True)
+
+        result = pm.list_projects()
+
+        names = [p.name for p in result.projects]
+        assert "project_a" in names
+        assert "project_a-dists" not in names
+        assert result.errors == []
+
     def test_delete_project(self, settings: Settings, tmp_path: Path) -> None:
         from renpy_mcp.services.project_manager import ProjectManager
 

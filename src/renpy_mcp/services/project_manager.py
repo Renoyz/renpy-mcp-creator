@@ -52,6 +52,10 @@ class ProjectManager:
         """Return the meta directory path for a project."""
         return project_dir / "meta"
 
+    def _is_project_list_artifact_dir(self, path: Path) -> bool:
+        """Return True for workspace build artifacts that are not source projects."""
+        return path.name.endswith("-dists")
+
     def _init_project_meta(self, project_dir: Path) -> None:
         """Create meta/ and a default project.json for a newly-initialized project."""
         meta_dir = self._meta_dir(project_dir)
@@ -85,6 +89,8 @@ class ProjectManager:
         errors: list[str] = []
         for path in sorted(self.settings.workspace.glob("*")):
             if path.is_dir():
+                if self._is_project_list_artifact_dir(path):
+                    continue
                 try:
                     meta = self.read_project_meta(path.name)
                 except ValueError as exc:

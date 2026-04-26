@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2, CheckCircle, RefreshCw, Sparkles } from "lucide-react";
 import { useProject } from "../context/ProjectContext";
+import { ChatMarkdown } from "./ChatMarkdown";
 
 export type MessageType =
   | "user"
@@ -671,7 +672,7 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
                       <span className="font-medium">{msg.percent}%</span>
                     )}
                   </div>
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  <ChatMarkdown content={msg.content} />
                   {msg.imageUrl && (
                     <img
                       src={msg.imageUrl}
