@@ -32,12 +32,12 @@ def tmp_workspace(tmp_path: Path):
 
 
 @pytest.fixture()
-def pm(tmp_workspace: Path):
+def pm(tmp_workspace: Path, monkeypatch):
     from renpy_mcp.config import get_settings
     from renpy_mcp.services.project_manager import ProjectManager
 
     settings = get_settings()
-    settings.workspace = tmp_workspace
+    monkeypatch.setattr(settings, "workspace", tmp_workspace)
     return ProjectManager(settings)
 
 

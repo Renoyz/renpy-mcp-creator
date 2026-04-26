@@ -71,13 +71,13 @@ class TestScriptRenderServiceImport:
         from renpy_mcp.services.script_render_service import ScriptRenderService
         assert ScriptRenderService is not None
 
-    def test_can_instantiate_with_project_manager(self, tmp_path: Path):
+    def test_can_instantiate_with_project_manager(self, tmp_path: Path, monkeypatch):
         from renpy_mcp.services.script_render_service import ScriptRenderService
         from renpy_mcp.services.project_manager import ProjectManager
         from renpy_mcp.config import get_settings
 
         settings = get_settings()
-        settings.workspace = tmp_path
+        monkeypatch.setattr(settings, "workspace", tmp_path)
         pm = ProjectManager(settings)
         service = ScriptRenderService(pm)
         assert service.pm is pm

@@ -204,37 +204,41 @@ def test_ws_chat_confirmation_keeps_original_project(monkeypatch, client: TestCl
     r = client.post("/api/projects/select", json={"name": "proj_a"})
     assert r.status_code == 200
 
-    with client.websocket_connect("/ws/chat") as websocket:
-        websocket.send_json({"type": "user_message", "content": "generate a background", "project_name": "proj_a"})
+    token = _current_project_path.set(tmp_path / "proj_a")
+    try:
+        with client.websocket_connect("/ws/chat") as websocket:
+            websocket.send_json({"type": "user_message", "content": "generate a background", "project_name": "proj_a"})
 
-        data = websocket.receive_json()
-        assert data["type"] == "awaiting_confirmation"
-        confirmation_id = data["confirmation_id"]
+            data = websocket.receive_json()
+            assert data["type"] == "awaiting_confirmation"
+            confirmation_id = data["confirmation_id"]
 
-        # Switch session to project B before approving
-        r = client.post("/api/projects/select", json={"name": "proj_b"})
-        assert r.status_code == 200
+            # Switch session to project B before approving
+            r = client.post("/api/projects/select", json={"name": "proj_b"})
+            assert r.status_code == 200
 
-        # Send confirmation response with project_b in payload (simulating stale frontend state)
-        websocket.send_json(
-            {
-                "type": "confirmation_response",
-                "confirmation_id": confirmation_id,
-                "approved": True,
-                "project_name": "proj_b",
-            }
-        )
+            # Send confirmation response with project_b in payload (simulating stale frontend state)
+            websocket.send_json(
+                {
+                    "type": "confirmation_response",
+                    "confirmation_id": confirmation_id,
+                    "approved": True,
+                    "project_name": "proj_b",
+                }
+            )
 
-        # The second run_turn should still execute under proj_a because pending.project_name is proj_a
-        data = websocket.receive_json()
-        assert data["type"] == "tool_start"
+            # The second run_turn should still execute under proj_a because pending.project_name is proj_a
+            data = websocket.receive_json()
+            assert data["type"] == "tool_start"
 
-        data = websocket.receive_json()
-        assert data["type"] == "tool_result"
+            data = websocket.receive_json()
+            assert data["type"] == "tool_result"
 
-        data = websocket.receive_json()
-        assert data["type"] == "assistant_delta"
-        assert "proj_a" in data["delta"]
+            data = websocket.receive_json()
+            assert data["type"] == "assistant_delta"
+            assert "proj_a" in data["delta"]
+    finally:
+        _current_project_path.reset(token)
 
 
 def test_tool_confirmation_writes_runtime_session(monkeypatch, client: TestClient, tmp_path: Path) -> None:
