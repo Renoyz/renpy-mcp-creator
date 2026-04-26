@@ -567,6 +567,43 @@ def _build_interview_context(slots: dict, proposal_history: list, turn_count: in
     return "\n".join(lines)
 
 
+def _message_text_for_interview_history(content: Any) -> str:
+    """Extract user-visible text from a stored chat message."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _format_recent_interview_history(
+    messages: list[dict[str, Any]],
+    *,
+    max_messages: int = 8,
+    max_chars_per_message: int = 1200,
+) -> str:
+    """Format recent chat history so the interview LLM can continue coherently."""
+    rows: list[str] = []
+    for msg in messages[-max_messages:]:
+        role = msg.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        text = _message_text_for_interview_history(msg.get("content")).strip()
+        if not text:
+            continue
+        if len(text) > max_chars_per_message:
+            text = text[:max_chars_per_message].rstrip() + "..."
+        label = "User" if role == "user" else "Assistant"
+        rows.append(f"{label}: {text}")
+    return "\n".join(rows)
+
+
 def _parse_interview_response(response: str) -> dict:
     """Extract structured data from LLM interview response."""
     import re
@@ -607,6 +644,22 @@ def _parse_interview_response(response: str) -> dict:
         result["is_conclusion"] = True
 
     return result
+
+
+def _display_interview_response(response: str) -> str:
+    """Remove internal interview control tags before showing text to users."""
+    import re
+
+    text = re.sub(r"<META>.*?</META>", "", response, flags=re.DOTALL)
+    text = re.sub(r"<PHASE>.*?</PHASE>", "", text, flags=re.DOTALL)
+    text = re.sub(r"</?OPTIONS\b[^>]*>", "", text)
+    text = re.sub(r"</?QUESTION>", "", text)
+    text = re.sub(r"<CONCLUSION\b[^>]*>", "", text)
+    text = re.sub(r"</CONCLUSION>", "", text)
+
+    lines = [line.rstrip() for line in text.splitlines()]
+    cleaned = "\n".join(lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
 
 
 def _track_proposal(
@@ -875,6 +928,12 @@ class BlueprintOrchestrator:
         # Build context
         context = _build_interview_context(self._current_slots, proposal_history, self.turn_count)
         system_prompt = _build_interview_system_prompt()
+        history_messages = self.messages
+        if history_messages:
+            last = history_messages[-1]
+            if last.get("role") == "user" and _message_text_for_interview_history(last.get("content")).strip() == user_message.strip():
+                history_messages = history_messages[:-1]
+        recent_history = _format_recent_interview_history(history_messages)
 
         # Get provider
         provider = _get_provider()
@@ -884,7 +943,14 @@ class BlueprintOrchestrator:
         # Call LLM
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"## Slot State\n{context}\n\n## User Message\n{user_message}"},
+            {
+                "role": "user",
+                "content": (
+                    f"## Slot State\n{context}\n\n"
+                    f"## Recent Conversation\n{recent_history or '(none)'}\n\n"
+                    f"## User Message\n{user_message}"
+                ),
+            },
         ]
 
         response = await asyncio.to_thread(provider.chat, messages=messages, max_tokens=2048)
@@ -892,6 +958,7 @@ class BlueprintOrchestrator:
 
         # Parse response
         parsed = _parse_interview_response(text)
+        display_text = _display_interview_response(text) or text
 
         # Apply slot updates from META
         for slot_name, value in parsed["slot_updates"].items():
@@ -913,7 +980,7 @@ class BlueprintOrchestrator:
                 )
 
         return {
-            "content": text,
+            "content": display_text,
             "is_conclusion": parsed["is_conclusion"],
             "slot_updates": parsed["slot_updates"],
         }

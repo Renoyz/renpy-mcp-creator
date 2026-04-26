@@ -121,6 +121,52 @@ async def test_interview_round_context_includes_all_required_slots_when_empty(tm
     assert prompt.count("(empty)") >= len(INTAKE_SLOT_KEYS)
 
 
+@pytest.mark.asyncio
+async def test_interview_round_sends_recent_conversation_history_to_llm(tmp_path, monkeypatch):
+    """Adaptive interview turns must include prior chat context, not only the latest user text."""
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator, PipelineStage
+    from renpy_mcp.chat_engine.providers import LLMResponse
+
+    captured: dict[str, str] = {}
+
+    class FakeProvider:
+        def chat(self, messages, **kwargs):
+            captured["prompt"] = messages[-1]["content"]
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": "<QUESTION>Next?</QUESTION><META>{\"slot_updates\": {}}</META>"}],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: FakeProvider())
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("history_context")
+
+    orchestrator = BlueprintOrchestrator("history_context", pm)
+    orchestrator.phase = PipelineStage.COLLECTING
+    orchestrator.intake_mode = True
+    orchestrator.turn_count = 2
+    orchestrator.messages = [
+        {"role": "assistant", "content": "Opening: share any story idea."},
+        {"role": "user", "content": "Ming dynasty vampire story"},
+        {"role": "assistant", "content": "Option A: court horror. Option B: river trade mystery."},
+        {"role": "user", "content": "Use option A but keep the vampire identity secret."},
+    ]
+
+    await orchestrator._conduct_interview_round("Use option A but keep the vampire identity secret.")
+
+    prompt = captured["prompt"]
+    assert "## Recent Conversation" in prompt
+    assert "Opening: share any story idea." in prompt
+    assert "Ming dynasty vampire story" in prompt
+    assert "Option A: court horror" in prompt
+    assert "## User Message" in prompt
+    assert "Use option A but keep the vampire identity secret." in prompt
+
+
 # ---------------------------------------------------------------------------
 # 2a. Response parser extracts structured tags
 # ---------------------------------------------------------------------------
@@ -175,6 +221,66 @@ def test_parse_interview_response_handles_missing_tags():
     assert parsed["options"] is None
     assert parsed["slot_updates"] == {}
     assert parsed["is_conclusion"] is False
+
+
+def test_display_interview_response_strips_internal_control_tags():
+    """Users should see natural interview text, not internal OPTIONS/META wrappers."""
+    from renpy_mcp.web.chat_ws import _display_interview_response
+
+    response = '''<OPTIONS id="core_premise">
+Option A: court horror
+Option B: river trade mystery
+</OPTIONS>
+<QUESTION>Which direction do you prefer?</QUESTION>
+<META>{"slot_updates": {"core_premise": "Ming vampire story"}}</META>'''
+
+    display = _display_interview_response(response)
+
+    assert "<OPTIONS" not in display
+    assert "</OPTIONS>" not in display
+    assert "<QUESTION>" not in display
+    assert "<META>" not in display
+    assert "Option A: court horror" in display
+    assert "Which direction do you prefer?" in display
+    assert "slot_updates" not in display
+
+
+@pytest.mark.asyncio
+async def test_interview_round_returns_display_content_without_control_tags(tmp_path, monkeypatch):
+    """Interview parsing should use raw provider text, but returned chat content should be display-safe."""
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator, PipelineStage
+    from renpy_mcp.chat_engine.providers import LLMResponse
+
+    class FakeProvider:
+        def chat(self, messages, **kwargs):
+            return LLMResponse(
+                content_blocks=[{
+                    "type": "text",
+                    "text": '''<OPTIONS id="core_premise">
+Option A: court horror
+</OPTIONS>
+<META>{"slot_updates": {"core_premise": "Ming vampire story"}}</META>''',
+                }],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: FakeProvider())
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("display_safe")
+
+    orchestrator = BlueprintOrchestrator("display_safe", pm)
+    orchestrator.phase = PipelineStage.COLLECTING
+    orchestrator.intake_mode = True
+    orchestrator.turn_count = 1
+
+    result = await orchestrator._conduct_interview_round("Ming vampire story")
+
+    assert result["content"] == "Option A: court horror"
+    assert result["slot_updates"] == {"core_premise": "Ming vampire story"}
 
 
 # ---------------------------------------------------------------------------
