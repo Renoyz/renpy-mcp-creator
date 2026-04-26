@@ -13,8 +13,6 @@ def test_settings_default_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RENPY_MCP_PORT", raising=False)
     monkeypatch.delenv("RENPY_SDK_PATH", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("JIMENG_API_KEY", raising=False)
-
     from renpy_mcp.config import Settings
 
     settings = Settings()
@@ -24,7 +22,6 @@ def test_settings_default_values(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(settings.workspace, Path)
     assert settings.renpy_sdk_path is None
     assert settings.deepseek_api_key is None
-    assert settings.jimeng_api_key is None
 
 
 def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -33,7 +30,6 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RENPY_MCP_PORT", "9000")
     monkeypatch.setenv("RENPY_SDK_PATH", "/tmp/renpy-sdk")
     monkeypatch.setenv("RENPY_MCP_DEEPSEEK_API_KEY", "sk-test-deepseek")
-    monkeypatch.setenv("RENPY_MCP_JIMENG_API_KEY", "test-jimeng")
 
     from renpy_mcp.config import Settings
 
@@ -43,4 +39,3 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.port == 9000
     assert settings.renpy_sdk_path == Path("/tmp/renpy-sdk")
     assert settings.deepseek_api_key == "sk-test-deepseek"
-    assert settings.jimeng_api_key == "test-jimeng"

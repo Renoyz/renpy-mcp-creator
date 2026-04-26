@@ -451,7 +451,7 @@ def select_collecting_response(
     *turn_count* is 0 for the start trigger and 1 for the first
     follow-up (already incremented by the caller).
     """
-    from ..web.chat_ws import _localized_text  # lazy — avoid import cycle
+    from ..utils.i18n import _localized_text  # lazy — avoid import cycle
 
     if turn_count == 0:
         if intake_mode:
@@ -506,7 +506,7 @@ def build_post_draft_result(
     set ``next_phase`` and ``confirmation_id``, append ``history_entries``
     to ``self.messages``, and return ``ws_events`` to the caller.
     """
-    from ..web.chat_ws import _localized_text  # lazy — avoid import cycle
+    from ..utils.i18n import _localized_text  # lazy — avoid import cycle
 
     draft_dict = draft.model_dump(mode="json")
 
@@ -628,7 +628,7 @@ def select_confirmation_result_message(
     build_error: str | None,
 ) -> str:
     """Return the localized result message after confirmation + pipeline."""
-    from ..web.chat_ws import _localized_text  # lazy — avoid import cycle
+    from ..utils.i18n import _localized_text  # lazy — avoid import cycle
 
     if prototype_error:
         return _localized_text(
@@ -651,7 +651,7 @@ def select_confirmation_result_message(
 
 def select_confirmation_rejection_message(lang: str) -> str:
     """Return the localized message when the user rejects a blueprint draft."""
-    from ..web.chat_ws import _localized_text  # lazy — avoid import cycle
+    from ..utils.i18n import _localized_text  # lazy — avoid import cycle
 
     return _localized_text(
         lang,
@@ -679,7 +679,7 @@ def update_project_meta_after_confirmation(
 
 def build_first_progress_entry(lang: str) -> dict[str, Any]:
     """Return the first progress message dict for the pipeline start."""
-    from ..web.chat_ws import _localized_text  # lazy — avoid import cycle
+    from ..utils.i18n import _localized_text  # lazy — avoid import cycle
 
     step_text = _localized_text(
         lang,

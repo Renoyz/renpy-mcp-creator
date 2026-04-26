@@ -205,36 +205,18 @@ async def test_failed_regeneration_preserves_previous_character_assets_when_same
         file_name = f"{base_name or 'char'}-mock.png"
         fake_char_path = project_dir / "game" / "images" / "character" / file_name
         fake_char_path.parent.mkdir(parents=True, exist_ok=True)
-        fake_char_path.write_bytes(b"alice_v1")
+        from PIL import Image
+        Image.new("RGBA", (400, 900), (255, 0, 0, 255)).save(fake_char_path, "PNG")
         return ImageGenerationResult(
             success=True, prompt=prompt, image_type=image_type,
             files=[fake_char_path], primary_file=fake_char_path,
         )
 
     monkeypatch.setattr(
+        "renpy_mcp.ai.image_service.ImageService.is_available", lambda self: True
+    )
+    monkeypatch.setattr(
         "renpy_mcp.ai.image_service.ImageService.generate_image", _mock_generate_image
-    )
-
-    def _mock_remove_bg(self, input_path):
-        return input_path
-
-    monkeypatch.setattr(
-        "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background", _mock_remove_bg
-    )
-
-    def _mock_normalize(self, input_path, output_path=None, target_height=750, canvas_height=900):
-        from PIL import Image
-        out = output_path or input_path.with_name(input_path.stem + "_normalized.png")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        Image.new("RGBA", (400, 750), (255, 0, 0, 255)).save(out, "PNG")
-        return out, {
-            "bbox": {"left": 0, "top": 0, "right": 100, "bottom": 100},
-            "baseline_offset": 50, "normalized_size": (400, 750),
-            "visible_ratio": 0.5, "renderable": True, "reason": "ok",
-        }
-
-    monkeypatch.setattr(
-        "renpy_mcp.ai.background_remover.BackgroundRemover.normalize_sprite", _mock_normalize
     )
 
     # --- Round 1: successful generation + commit ---

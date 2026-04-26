@@ -53,7 +53,7 @@ def test_ws_chat_uses_payload_project_name(monkeypatch, client: TestClient, tmp_
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
     monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
 
@@ -68,7 +68,7 @@ def test_ws_chat_no_project_guardrail(monkeypatch, client: TestClient) -> None:
     """When no project is set and message is not in whitelist, return error."""
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
     monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
 
@@ -90,7 +90,7 @@ def test_ws_chat_allowed_without_project(monkeypatch, client: TestClient) -> Non
     """General chat queries in the whitelist are allowed without a project."""
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
     monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
 
@@ -112,7 +112,7 @@ def test_ws_chat_uses_session_project(monkeypatch, client: TestClient, tmp_path:
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
     monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
 
@@ -138,7 +138,7 @@ def test_ws_chat_switches_project_after_reconnect(
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
     monkeypatch.setattr("renpy_mcp.web.chat_ws.ChatEngine", _make_fake_engine())
 
@@ -442,7 +442,7 @@ def test_ws_chat_only_streams_new_assistant_messages(
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
 
     class FakeEngine:
@@ -501,7 +501,7 @@ def test_ws_chat_persists_history_to_file(
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
 
     class FakeEngine:
@@ -563,7 +563,7 @@ def test_ws_chat_project_isolation(monkeypatch, client: TestClient, tmp_path: Pa
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
 
     class FakeEngine:
@@ -613,7 +613,7 @@ def test_ws_chat_persists_history_via_session_project(
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
 
     class FakeEngine:
@@ -665,7 +665,7 @@ def test_ws_chat_history_survives_app_recreate(
 
     monkeypatch.setattr(
         "renpy_mcp.web.chat_ws._get_provider",
-        lambda: type("P", (), {"complete": lambda **kw: []})(),
+        lambda: type("P", (), {"chat": lambda **kw: []})(),
     )
 
     class FakeEngine:

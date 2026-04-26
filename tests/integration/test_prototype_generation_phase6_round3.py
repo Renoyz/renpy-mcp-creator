@@ -319,7 +319,7 @@ def test_activate_multi_chapter_prototype_rolls_back_manifest_and_entrypoint_on_
     def _fail_wire(*args, **kwargs):
         raise RuntimeError("Simulated wire failure during activation")
 
-    monkeypatch.setattr(service, "wire_main_script_to_prototype", _fail_wire)
+    monkeypatch.setattr(service._activator, "wire_main_script_to_prototype", _fail_wire)
 
     with pytest.raises(RuntimeError, match="Simulated wire failure during activation"):
         service.activate_multi_chapter_prototype(project_name)

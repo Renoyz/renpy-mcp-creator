@@ -116,7 +116,7 @@ class TestProjectManagerPersistence:
         meta = ProjectMeta(
             name="roundtrip",
             path=settings.workspace / "roundtrip",
-            status=ProjectStatus.EDITING,
+            status=ProjectStatus.DRAFT,
             pipeline_stage=PipelineStage.COLLECTING,
             chapter_count=3,
             scene_count=12,
@@ -127,7 +127,7 @@ class TestProjectManagerPersistence:
         read = pm.read_project_meta("roundtrip")
         assert read is not None
         assert read.name == "roundtrip"
-        assert read.status == ProjectStatus.EDITING
+        assert read.status == ProjectStatus.DRAFT
         assert read.pipeline_stage == PipelineStage.COLLECTING
         assert read.chapter_count == 3
         assert read.scene_count == 12

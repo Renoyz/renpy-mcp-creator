@@ -44,7 +44,7 @@ def build_generation_prompts(
     lang: str,
 ) -> tuple[str, str]:
     """Return ``(system_prompt, user_prompt)`` for blueprint generation."""
-    from ..web.chat_ws import _language_instruction, _localized_text
+    from ..utils.i18n import _language_instruction, _localized_text
 
     system_prompt = (
         "You are an expert visual novel blueprint designer. "
@@ -109,7 +109,7 @@ def extract_and_validate_blueprint(raw_text: str) -> ProjectBlueprint:
 
     Raises ``json.JSONDecodeError`` or ``ValueError`` on failure.
     """
-    from ..web.chat_ws import _repair_json_text
+    from ..utils.json_repair import _repair_json_text
 
     text = raw_text.strip()
 
@@ -158,10 +158,8 @@ class BlueprintGenerationService:
                 "No LLM provider configured. Set ANTHROPIC_API_KEY or deepseek/qwen API key."
             )
 
-        from ..web.chat_ws import (
-            _append_refinement_flow_log,
-            _preferred_output_language_from_messages,
-        )
+        from ..utils.i18n import _preferred_output_language_from_messages
+        from ..web.chat_ws import _append_refinement_flow_log
 
         logger.info(
             "Starting draft generation via LLM for project %s (intake_mode=%s, turn_count=%d)",
@@ -177,20 +175,9 @@ class BlueprintGenerationService:
         lang = _preferred_output_language_from_messages(messages)
         system_prompt, prompt = build_generation_prompts(project_name, transcript, lang)
 
-        max_retries = 2
-        last_error: str | None = None
+        from ..utils.retry import with_async_retry
 
-        for attempt in range(max_retries + 1):
-            logger.info(
-                "Draft generation attempt %d/%d for project %s",
-                attempt + 1, max_retries + 1, project_name,
-            )
-            _append_refinement_flow_log(
-                project_name, "INFO",
-                "Draft generation attempt %d/%d for project %s",
-                attempt + 1, max_retries + 1, project_name,
-            )
-
+        async def _attempt() -> ProjectBlueprint:
             try:
                 response = await asyncio.to_thread(
                     self.provider.chat,
@@ -201,42 +188,49 @@ class BlueprintGenerationService:
             except Exception as e:
                 logger.exception("Draft generation provider error for project %s", project_name)
                 raise RuntimeError(f"Blueprint generation provider error: {e}") from e
+            return extract_and_validate_blueprint(response.text)
 
-            try:
-                blueprint = extract_and_validate_blueprint(response.text)
-                logger.info(
-                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
-                    project_name, attempt + 1, max_retries + 1, len(blueprint.chapters),
-                )
-                _append_refinement_flow_log(
-                    project_name, "INFO",
-                    "Draft generation succeeded for project %s on attempt %d/%d with %d chapters",
-                    project_name, attempt + 1, max_retries + 1, len(blueprint.chapters),
-                )
-                return blueprint
-            except (json.JSONDecodeError, ValueError) as e:
-                last_error = str(e)
-                logger.warning(
-                    "Draft generation parse/validation failed for project %s on attempt %d/%d: %s",
-                    project_name, attempt + 1, max_retries + 1, e,
-                )
-                _append_refinement_flow_log(
-                    project_name, "WARNING",
-                    "Draft generation parse/validation failed for project %s on attempt %d/%d: %s",
-                    project_name, attempt + 1, max_retries + 1, e,
-                )
-                prompt += f"\n\nERROR: Your previous response was not valid ({e}). Return ONLY valid JSON."
-                continue
+        def _on_retry(exc: Exception, attempt: int) -> None:
+            nonlocal prompt
+            logger.warning(
+                "Draft generation parse/validation failed for project %s on attempt %d/%d: %s",
+                project_name, attempt + 1, 3, exc,
+            )
+            _append_refinement_flow_log(
+                project_name, "WARNING",
+                "Draft generation parse/validation failed for project %s on attempt %d/%d: %s",
+                project_name, attempt + 1, 3, exc,
+            )
+            prompt += f"\n\nERROR: Your previous response was not valid ({exc}). Return ONLY valid JSON."
 
-        logger.error(
-            "Draft generation exhausted retries for project %s: %s",
-            project_name, last_error,
+        try:
+            blueprint = await with_async_retry(
+                _attempt,
+                max_retries=2,
+                retryable=(json.JSONDecodeError, ValueError),
+                on_retry=_on_retry,
+            )
+        except Exception as exc:
+            logger.error(
+                "Draft generation exhausted retries for project %s: %s",
+                project_name, exc,
+            )
+            _append_refinement_flow_log(
+                project_name, "ERROR",
+                "Draft generation exhausted retries for project %s: %s",
+                project_name, exc,
+            )
+            raise RuntimeError(
+                f"Blueprint generation failed after 3 attempts. {exc}"
+            ) from exc
+
+        logger.info(
+            "Draft generation succeeded for project %s with %d chapters",
+            project_name, len(blueprint.chapters),
         )
         _append_refinement_flow_log(
-            project_name, "ERROR",
-            "Draft generation exhausted retries for project %s: %s",
-            project_name, last_error,
+            project_name, "INFO",
+            "Draft generation succeeded for project %s with %d chapters",
+            project_name, len(blueprint.chapters),
         )
-        raise RuntimeError(
-            f"Blueprint generation failed after {max_retries + 1} attempts. {last_error}"
-        )
+        return blueprint

@@ -14,12 +14,7 @@ class ProjectStatus(StrEnum):
     """Lifecycle status of a Ren'Py project."""
 
     DRAFT = "draft"
-    BLUEPRINTING = "blueprinting"
     BLUEPRINTED = "blueprinted"
-    GENERATING = "generating"
-    EDITING = "editing"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
 
 
 class PipelineStage(StrEnum):
@@ -36,12 +31,9 @@ class RefinementState(StrEnum):
     """Staged refinement states for the requirements funnel."""
 
     IDEA_COLLECTING = "idea_collecting"
-    BRIEF_DRAFT = "brief_draft"
     BRIEF_REVIEWING = "brief_reviewing"
     BRIEF_CONFIRMED = "brief_confirmed"
-    CHAPTER_OUTLINE_DRAFT = "chapter_outline_draft"
     CHAPTER_OUTLINE_REVIEWING = "chapter_outline_reviewing"
-    CHAPTER_OUTLINE_CONFIRMED = "chapter_outline_confirmed"
     BLUEPRINT_READY = "blueprint_ready"
 
 
@@ -66,7 +58,6 @@ class ProjectMeta(BaseModel):
     scene_count: int = 0
     confirmed_scenes: int = 0
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    description: str | None = None
     genre: str | None = None
 
 
@@ -80,14 +71,6 @@ class BlueprintCharacter(BaseModel):
     variants: list[str] | None = None
 
 
-class ChoiceItem(BaseModel):
-    """Branch choice inside a scene summary."""
-
-    text: str
-    next_scene_id: str
-    condition: str | None = None
-
-
 class SceneSummary(BaseModel):
     """Lightweight scene descriptor used in blueprints and APIs."""
 
@@ -97,7 +80,6 @@ class SceneSummary(BaseModel):
     characters: list[str] = Field(default_factory=list)
     backgrounds: list[str] = Field(default_factory=list)
     music: str | None = None
-    choices: list[ChoiceItem] | None = None
     ending_name: str | None = None
     status: str = "pending"
     type: str = "normal"

@@ -78,7 +78,7 @@ def _make_scene_packages() -> dict:
                                 "spoken_line": "Be careful",
                             }
                         ],
-                        "entry_label": "prototype_ch1_scene2",
+                        "entry_label": "prototype_ch1_scene_2",
                         "next_scene_id": None,
                         "scene_order": 2,
                     },
@@ -125,7 +125,7 @@ def _make_scene_packages() -> dict:
                                 "spoken_line": "I will do it",
                             }
                         ],
-                        "entry_label": "prototype_ch2_scene2",
+                        "entry_label": "prototype_ch2_scene_2",
                         "next_scene_id": None,
                         "scene_order": 2,
                     },
@@ -238,7 +238,7 @@ def test_multi_chapter_scripts_chain_scenes_and_jump_to_next_chapter(
     ch2_content = (tmp_path / project_name / "game" / "prototype_ch2_Chapter2.rpy").read_text(encoding="utf-8")
 
     # ch1: scene1 jumps to scene2; scene2 jumps to ch2 start
-    assert "jump prototype_ch1_scene2" in ch1_content, "ch1 scene1 must jump to ch1 scene2"
+    assert "jump prototype_ch1_scene_2" in ch1_content, "ch1 scene1 must jump to ch1 scene2"
     assert "jump prototype_ch2_start" in ch1_content, "ch1 last scene must jump to ch2 start"
     assert "return" not in ch1_content.split("jump prototype_ch2_start")[-1].split("\n")[0], (
         "ch1 should not return before jumping to ch2"
@@ -305,13 +305,13 @@ def test_multi_chapter_index_maps_scene_ids_to_correct_file_and_label(
     assert scenes["s1"]["file_path"] == "game/prototype_ch1_Chapter1.rpy"
     assert scenes["s1"]["label"] == "prototype_ch1_start"
     assert scenes["s2"]["file_path"] == "game/prototype_ch1_Chapter1.rpy"
-    assert scenes["s2"]["label"] == "prototype_ch1_scene2"
+    assert scenes["s2"]["label"] == "prototype_ch1_scene_2"
 
     # s3, s4 point to ch2 script
     assert scenes["s3"]["file_path"] == "game/prototype_ch2_Chapter2.rpy"
     assert scenes["s3"]["label"] == "prototype_ch2_start"
     assert scenes["s4"]["file_path"] == "game/prototype_ch2_Chapter2.rpy"
-    assert scenes["s4"]["label"] == "prototype_ch2_scene2"
+    assert scenes["s4"]["label"] == "prototype_ch2_scene_2"
 
     # All marked as prototype
     for sid in ("s1", "s2", "s3", "s4"):
@@ -368,7 +368,7 @@ def test_scene_script_api_reads_correct_chapter_script_for_multi_chapter_scene(
     assert response.status_code == 200
     data = response.json()
     assert "content" in data
-    assert "prototype_ch2_scene2" in data["content"], "API must return ch2 script content"
+    assert "prototype_ch2_scene_2" in data["content"], "API must return ch2 script content"
     assert data["file_path"] == "game/prototype_ch2_Chapter2.rpy"
 
     # Request ch1 scene script via API
@@ -660,7 +660,7 @@ def test_generate_multi_chapter_scripts_removes_stale_prototype_index_entries(
                         "dialogue_beats": [
                             {"speaker": "Alice", "intent": "out", "content_brief": "Bye", "spoken_line": "Bye"}
                         ],
-                        "entry_label": "prototype_ch1_scene2",
+                        "entry_label": "prototype_ch1_scene_2",
                         "next_scene_id": None,
                         "scene_order": 2,
                     },

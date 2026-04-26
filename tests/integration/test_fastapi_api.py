@@ -629,24 +629,22 @@ class TestProjectMetaApi:
 
         payload = {
             "name": project_name,
-            "status": "editing",
+            "status": "draft",
             "pipeline_stage": "collecting",
             "chapter_count": 3,
             "scene_count": 12,
             "confirmed_scenes": 5,
-            "description": "Updated description",
         }
         r = client.put(f"/api/projects/{project_name}/meta", json=payload)
         assert r.status_code == 200
 
         r = client.get(f"/api/projects/{project_name}/meta")
         data = r.json()
-        assert data["status"] == "editing"
+        assert data["status"] == "draft"
         assert data["pipeline_stage"] == "collecting"
         assert data["chapter_count"] == 3
         assert data["scene_count"] == 12
         assert data["confirmed_scenes"] == 5
-        assert data["description"] == "Updated description"
         after = datetime.fromisoformat(data["updated_at"])
         assert after > before
 
@@ -665,14 +663,14 @@ class TestProjectMetaApi:
 
         r = client.put(
             f"/api/projects/{project_name}/meta",
-            json={"name": "hijacked_name", "status": "editing"},
+            json={"name": "hijacked_name", "status": "draft"},
         )
         assert r.status_code == 200
 
         r = client.get(f"/api/projects/{project_name}/meta")
         data = r.json()
         assert data["name"] == project_name
-        assert data["status"] == "editing"
+        assert data["status"] == "draft"
 
     def test_put_meta_returns_400_for_invalid_payload(self, client: TestClient):
         """Validation errors in the meta payload must be 400, not 500."""
@@ -1050,7 +1048,6 @@ class TestProjectStorymapApi:
             ProjectBlueprint,
             ChapterSummary,
             SceneSummary,
-            ChoiceItem,
         )
 
         client.post("/api/projects", json={"name": project_name})
@@ -1070,10 +1067,6 @@ class TestProjectStorymapApi:
                             id="s1-2",
                             name="Choice",
                             order=2,
-                            choices=[
-                                ChoiceItem(text="Go left", next_scene_id="s2-1"),
-                                ChoiceItem(text="Go right", next_scene_id="s2-2"),
-                            ],
                         ),
                     ],
                 ),
@@ -1114,21 +1107,9 @@ class TestProjectStorymapApi:
             for e in main_edges
         )
 
-        # Choice branch edges: s1-2 -> s2-1 and s1-2 -> s2-2
+        # No branch edges when choices are absent
         branch_edges = [e for e in data["edges"] if e["type"] == "branch"]
-        assert len(branch_edges) == 2
-        assert any(
-            e["from_scene_id"] == "s1-2"
-            and e["to_scene_id"] == "s2-1"
-            and e["label"] == "Go left"
-            for e in branch_edges
-        )
-        assert any(
-            e["from_scene_id"] == "s1-2"
-            and e["to_scene_id"] == "s2-2"
-            and e["label"] == "Go right"
-            for e in branch_edges
-        )
+        assert len(branch_edges) == 0
 
     def test_get_storymap_404_for_missing_project(self, client: TestClient):
         r = client.get("/api/projects/nonexistent_project/storymap")
@@ -1202,7 +1183,6 @@ class TestProjectStorymapApi:
             ProjectBlueprint,
             ChapterSummary,
             SceneSummary,
-            ChoiceItem,
         )
 
         project_name = "storymap_missing_choice_target"
@@ -1222,10 +1202,6 @@ class TestProjectStorymapApi:
                             id="s1-1",
                             name="Choice",
                             order=1,
-                            choices=[
-                                ChoiceItem(text="Valid", next_scene_id="s1-2"),
-                                ChoiceItem(text="Invalid", next_scene_id="does_not_exist"),
-                            ],
                         ),
                         SceneSummary(id="s1-2", name="Next", order=2),
                     ],
@@ -1238,10 +1214,8 @@ class TestProjectStorymapApi:
         assert r.status_code == 200
         data = r.json()
         branch_edges = [e for e in data["edges"] if e["type"] == "branch"]
-        # Only the valid choice should produce an edge
-        assert len(branch_edges) == 1
-        assert branch_edges[0]["to_scene_id"] == "s1-2"
-        assert branch_edges[0]["label"] == "Valid"
+        # No choices means no branch edges
+        assert len(branch_edges) == 0
 
 
 class TestProjectSceneScriptApi:

@@ -2,16 +2,7 @@
 
 from pathlib import Path
 
-from renpy_mcp.models import BuildRequest, BuildResult, ImageGenerationResult, ProjectInfo
-
-
-class TestProjectInfo:
-    def test_project_info_defaults(self):
-        p = ProjectInfo(name="test_vn", path=Path("/workspace/test_vn"))
-        assert p.name == "test_vn"
-        assert p.path == Path("/workspace/test_vn")
-        assert p.created_at is not None
-        assert p.updated_at is not None
+from renpy_mcp.models import BuildRequest, BuildResult, ImageGenerationResult
 
 
 class TestBuildRequest:
@@ -38,20 +29,16 @@ class TestBuildResult:
             project_name="test_vn",
             target="web",
             success=False,
-            error="SDK not found",
+            error="Build script not found",
         )
         assert result.success is False
-        assert result.error == "SDK not found"
+        assert result.error == "Build script not found"
+        assert result.output_path is None
 
 
 class TestImageGenerationResult:
     def test_image_generation_result_defaults(self):
-        result = ImageGenerationResult(
-            success=True,
-            prompt="a cafe background",
-            image_type="background",
-            files=[Path("assets/background/cafe.png")],
-            primary_file=Path("assets/background/cafe.png"),
-        )
+        result = ImageGenerationResult(success=True, prompt="a castle", image_type="background")
         assert result.success is True
-        assert result.files[0] == Path("assets/background/cafe.png")
+        assert result.files == []
+        assert result.primary_file is None

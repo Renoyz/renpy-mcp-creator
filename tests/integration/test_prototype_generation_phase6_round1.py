@@ -1332,7 +1332,9 @@ async def test_generate_scene_packages_api_persists_multi_chapter_snapshot(
     pm.write_blueprint(project_name, blueprint)
 
     # Mock provider to return scenes for each chapter
-    monkeypatch.setattr("renpy_mcp.web.fastapi_app._get_provider", lambda: _make_mock_scene_provider())
+    monkeypatch.setattr(
+        "renpy_mcp.web.routers.generation._get_provider", lambda: _make_mock_scene_provider()
+    )
 
     response = client.post(f"/api/projects/{project_name}/scene-packages/generate")
     assert response.status_code == 200, response.text

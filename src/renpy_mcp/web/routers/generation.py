@@ -446,21 +446,6 @@ async def api_project_storymap(project_name: str):
                         type="main",
                     )
                 )
-            if scene.choices:
-                for choice in scene.choices:
-                    if choice.next_scene_id not in scene_to_chapter:
-                        continue
-                    target_ch_id = scene_to_chapter[choice.next_scene_id]
-                    edges.append(
-                        FlowEdge(
-                            from_chapter_id=ch.id,
-                            from_scene_id=scene.id,
-                            to_chapter_id=target_ch_id,
-                            to_scene_id=choice.next_scene_id,
-                            type="branch",
-                            label=choice.text,
-                        )
-                    )
             prev_scene = scene
 
     return {

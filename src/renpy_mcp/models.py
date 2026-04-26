@@ -2,20 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
-
-
-class ProjectInfo(BaseModel):
-    """Metadata for a managed Ren'Py project."""
-
-    name: str
-    path: Path
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class BuildRequest(BaseModel):
@@ -35,13 +25,6 @@ class BuildResult(BaseModel):
     output_path: Optional[Path] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
-
-
-class CurrentProjectPayload(BaseModel):
-    """Payload representing the currently selected project."""
-
-    name: str
-    path: Path
 
 
 class ImageGenerationResult(BaseModel):

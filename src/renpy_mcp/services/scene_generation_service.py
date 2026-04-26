@@ -348,10 +348,9 @@ Requirements:
 - Output ONLY the JSON array, nothing else.
 """
 
-        max_retries = 2
-        last_error: str | None = None
+        from ..utils.retry import with_async_retry
 
-        for attempt in range(max_retries + 1):
+        async def _attempt() -> list[PrototypeScene]:
             try:
                 response = await asyncio.to_thread(
                     self.provider.chat,
@@ -361,43 +360,50 @@ Requirements:
             except Exception as e:
                 raise RuntimeError(f"Prototype generation provider error: {e}") from e
 
-            try:
-                text = response.text.strip()
-                # Extract JSON from markdown code blocks if present
-                if text.startswith("```"):
-                    lines = text.splitlines()
-                    if lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    text = "\n".join(lines).strip()
+            text = response.text.strip()
+            # Extract JSON from markdown code blocks if present
+            if text.startswith("```"):
+                lines = text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines).strip()
 
-                data = json.loads(text)
-                if not isinstance(data, list):
-                    raise ValueError("Expected JSON array of scenes")
+            data = json.loads(text)
+            if not isinstance(data, list):
+                raise ValueError("Expected JSON array of scenes")
 
-                scenes = [PrototypeScene(**item) for item in data]
-                self._validate_scene_consistency(scenes)
-                # Override entry_labels with chapter-correct values to prevent
-                # cross-chapter label duplication when the LLM copies the ch1 example.
-                for i, scene in enumerate(scenes):
-                    scene.entry_label = (
-                        f"prototype_{chapter.id}_start"
-                        if i == 0
-                        else f"prototype_{chapter.id}_scene_{i + 1}"
-                    )
-                return scenes
+            scenes = [PrototypeScene(**item) for item in data]
+            self._validate_scene_consistency(scenes)
+            # Override entry_labels with chapter-correct values to prevent
+            # cross-chapter label duplication when the LLM copies the ch1 example.
+            for i, scene in enumerate(scenes):
+                scene.entry_label = (
+                    f"prototype_{chapter.id}_start"
+                    if i == 0
+                    else f"prototype_{chapter.id}_scene_{i + 1}"
+                )
+            return scenes
 
-            except json.JSONDecodeError as e:
-                last_error = f"JSON parse error: {e}"
-                prompt += f"\n\nERROR: Your previous response was not valid JSON ({e}). Return ONLY a valid JSON array."
-            except (ValidationError, ValueError) as e:
-                last_error = f"Schema validation error: {e}"
-                prompt += f"\n\nERROR: Your previous response did not match the required scene schema ({e}). Fix and return a valid JSON array."
+        def _on_retry(exc: Exception, attempt: int) -> None:
+            nonlocal prompt
+            if isinstance(exc, json.JSONDecodeError):
+                prompt += f"\n\nERROR: Your previous response was not valid JSON ({exc}). Return ONLY a valid JSON array."
+            else:
+                prompt += f"\n\nERROR: Your previous response did not match the required scene schema ({exc}). Fix and return a valid JSON array."
 
-        raise RuntimeError(
-            f"Prototype scene generation failed after {max_retries + 1} attempts. {last_error}"
-        )
+        try:
+            return await with_async_retry(
+                _attempt,
+                max_retries=2,
+                retryable=(json.JSONDecodeError, ValidationError, ValueError),
+                on_retry=_on_retry,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Scene generation failed after 3 attempts. {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Multi-chapter scene generation

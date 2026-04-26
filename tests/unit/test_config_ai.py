@@ -19,8 +19,6 @@ def test_settings_ai_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings()
 
     assert settings.gemini_api_key is None
-    assert settings.gemini_image_model == "gemini-2.5-flash-image"
-    assert settings.gemini_text_model == "gemini-2.0-flash-exp"
     assert settings.default_template == "basic"
 
 
@@ -36,6 +34,4 @@ def test_settings_ai_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings()
 
     assert settings.gemini_api_key == "test-gemini-key"
-    assert settings.gemini_image_model == "custom-image-model"
-    assert settings.gemini_text_model == "custom-text-model"
     assert settings.default_template == "advanced"

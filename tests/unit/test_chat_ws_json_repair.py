@@ -3,7 +3,7 @@
 import json
 import pytest
 
-from renpy_mcp.web.chat_ws import _extract_json_block, _repair_json_text
+from renpy_mcp.utils.json_repair import _extract_json_block, _repair_json_text
 
 
 class TestExtractJsonBlock:

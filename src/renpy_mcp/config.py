@@ -49,13 +49,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None)
     deepseek_api_key: str | None = Field(default=None)
     qwen_api_key: str | None = Field(default=None)
-    jimeng_api_key: str | None = Field(default=None)
-    tongyi_api_key: str | None = Field(default=None)
 
     # Gemini configuration (from banjtheman/renpy_mcp_server)
     gemini_api_key: str | None = Field(default=None)
-    gemini_image_model: str = Field(default="gemini-2.5-flash-image")
-    gemini_text_model: str = Field(default="gemini-2.0-flash-exp")
     default_template: str = Field(default="basic")
 
     # DashScope image generation model override

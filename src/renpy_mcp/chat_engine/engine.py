@@ -89,7 +89,7 @@ class ChatEngine:
                 if self.confirmation.should_confirm(call["name"]):
                     confirmation_id = f"conf_{len(executed_tools)}_{call['name']}"
                     # Execute the tool first so we have results to show
-                    result = await self._execute_tool_with_retry(call)
+                    result = await self._execute_tool(call)
                     executed_tools.append(
                         {
                             "name": call["name"],
@@ -120,7 +120,7 @@ class ChatEngine:
                         "error": None,
                     }
 
-                result = await self._execute_tool_with_retry(call)
+                result = await self._execute_tool(call)
                 tool_results.append(result)
                 executed_tools.append(
                     {
@@ -169,8 +169,14 @@ class ChatEngine:
                 )
         return blocks
 
-    async def _execute_tool_with_retry(self, call: dict[str, Any]) -> dict[str, Any]:
-        """Execute a single tool call, with retry on parameter validation errors."""
+    async def _execute_tool(self, call: dict[str, Any]) -> dict[str, Any]:
+        """Execute a single tool call and return the result to the LLM.
+
+        On failure, returns a structured error result with ``is_retryable=True``
+        so the LLM can self-correct and retry with corrected parameters.
+        This does NOT automatically re-invoke the tool — retry is delegated
+        to the LLM ReAct loop.
+        """
         tool_name = call["name"]
         arguments = call.get("arguments", {})
         tool_id = call.get("id", "")
