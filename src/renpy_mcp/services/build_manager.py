@@ -172,6 +172,7 @@ class LocalRenpyToolchain:
                     else:
                         output_path = web_dir
                 except Exception:
+                    logger.warning("Failed to build packaged web assets for %s, fallback to archive output", project_name, exc_info=True)
                     output_path = web_zip
             else:
                 web_dir = build_dest / f"{project_name}-web"

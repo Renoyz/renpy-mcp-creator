@@ -89,3 +89,43 @@ def test_tracking_clear_logs_warning_on_unlink_failure(caplog, monkeypatch, tmp_
     assert any("tracking" in r.message.lower() for r in caplog.records), (
         "Expected warning for tracking unlink failure"
     )
+
+
+def test_tracking_data_logs_warning_on_parse_failure(caplog, tmp_path):
+    """When saved tracking data cannot be parsed, warning is emitted and a response is returned."""
+    from renpy_mcp.web.server import _Handler
+
+    handler = _Handler.__new__(_Handler)
+    handler.config = type("C", (), {"project_path": tmp_path})()
+
+    mcp_dir = tmp_path / "game" / "_mcp"
+    mcp_dir.mkdir(parents=True)
+    status_file = mcp_dir / "status.json"
+    status_file.write_text("{}", encoding="utf-8")
+
+    # Force stale status so the handler uses the offline tracking file path.
+    import os
+    os.utime(status_file, (0, 0))
+
+    tracking_file = mcp_dir / "tracking_data.json"
+    tracking_file.write_text("{bad json", encoding="utf-8")
+
+    monkeypatched_payload = {}
+
+    def fake_json_response(data, status: int = 200):
+        monkeypatched_payload["data"] = data
+        monkeypatched_payload["status"] = status
+
+    import types
+    handler._json_response = types.MethodType(
+        lambda self, data, status=200: fake_json_response(data, status),
+        handler,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        handler._api_tracking_data()
+
+    assert "data" in monkeypatched_payload
+    assert any("Failed to read saved tracking data" in rec.message for rec in caplog.records), (
+        "Expected warning for invalid tracking data JSON"
+    )

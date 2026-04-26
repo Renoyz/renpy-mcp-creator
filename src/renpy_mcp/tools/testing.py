@@ -1,9 +1,12 @@
 """Automated testing tools."""
 
+import logging
 from pathlib import Path
 
 from ..config import RenPyConfig
 from ..renpy_runner import RenPyRunner
+
+logger = logging.getLogger(__name__)
 
 
 def register_testing_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
@@ -80,6 +83,7 @@ def register_testing_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read test file: %s", rpy_file, exc_info=True)
                 continue
 
             rel_path = rpy_file.relative_to(config.project_path)

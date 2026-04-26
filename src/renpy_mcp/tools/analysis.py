@@ -6,6 +6,9 @@ from pathlib import Path
 
 from ..config import RenPyConfig
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def register_analysis_tools(mcp, config: RenPyConfig):
     """Register story analysis MCP tools."""
@@ -25,6 +28,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
                 scripts[rel] = lines
             except Exception:
+                logger.warning("Failed to read script during analysis parse: %s", rpy_file, exc_info=True)
                 continue
         return scripts
 
@@ -529,6 +533,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read testcase file: %s", rpy_file, exc_info=True)
                 continue
             rel = str(rpy_file.relative_to(game_dir))
             for i, line in enumerate(lines):
@@ -563,6 +568,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
                     "output": (result.stdout + result.stderr)[:500] if not passed else "",
                 })
             except Exception as e:
+                logger.warning("Failed to run testcase '%s': %s", tc["name"], e, exc_info=True)
                 results.append({
                     "testcase": tc["name"],
                     "file": tc["file"],
@@ -659,6 +665,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to scan screen definitions from: %s", rpy_file, exc_info=True)
                 continue
             rel = str(rpy_file.relative_to(game_dir))
             for i, line in enumerate(lines):
@@ -680,6 +687,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to scan screen usage from: %s", rpy_file, exc_info=True)
                 continue
             rel = str(rpy_file.relative_to(game_dir))
             for i, line in enumerate(lines):
@@ -775,6 +783,7 @@ def register_analysis_tools(mcp, config: RenPyConfig):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read script for search: %s", rpy_file, exc_info=True)
                 continue
             rel = str(rpy_file.relative_to(game_dir))
             for i, line in enumerate(lines):

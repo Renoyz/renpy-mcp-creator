@@ -435,6 +435,7 @@ class _Handler(SimpleHTTPRequestHandler):
             text = filepath.read_text(encoding="utf-8-sig")
             lines = text.splitlines()
         except Exception as e:
+            logger.warning("Failed to read script for parse: %s", file_rel, exc_info=True)
             self._json_response({"error": str(e)}, 500)
             return
 
@@ -498,6 +499,7 @@ class _Handler(SimpleHTTPRequestHandler):
         try:
             lines = filepath.read_text(encoding="utf-8-sig").splitlines()
         except Exception as e:
+            logger.warning("Failed to read script for save: %s", file_rel, exc_info=True)
             self._json_response({"error": str(e)}, 500)
             return
 
@@ -685,6 +687,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     if wm: screen_w = int(wm.group(1))
                     if hm: screen_h = int(hm.group(1))
                 except Exception:
+                    logger.warning("Failed to read game resolution config from: %s", p, exc_info=True)
                     pass
 
         # Collect assets
@@ -746,6 +749,7 @@ class _Handler(SimpleHTTPRequestHandler):
                             if w > screen_w * 2 or h > screen_h * 2:
                                 entry["size_warning"] = "oversized"
                 except Exception:
+                    logger.warning("Failed to inspect image dimensions for: %s", f, exc_info=True)
                     pass
 
             assets.append(entry)

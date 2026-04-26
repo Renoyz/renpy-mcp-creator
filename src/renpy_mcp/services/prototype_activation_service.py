@@ -136,7 +136,7 @@ class PrototypeActivationService:
         try:
             script_path.write_text(content, encoding="utf-8")
         except OSError:
-            logger.warning("Failed to restore script.rpy for project %s", project_name)
+            logger.warning("Failed to restore script.rpy for project %s", project_name, exc_info=True)
 
     # ------------------------------------------------------------------
     # Staged replace: commit
@@ -202,7 +202,7 @@ class PrototypeActivationService:
                     try:
                         proto_file.unlink()
                     except OSError:
-                        logger.warning("Failed to remove old prototype file: %s", proto_file)
+                        logger.warning("Failed to remove old prototype file: %s", proto_file, exc_info=True)
             for leftover in game_dir.glob("prototype_*.__staging__.rpy"):
                 try:
                     leftover.unlink()
@@ -242,7 +242,7 @@ class PrototypeActivationService:
                 if staging_file.exists():
                     staging_file.unlink()
             except OSError:
-                logger.warning("Failed to remove staging file: %s", staging_file)
+                logger.warning("Failed to remove staging file: %s", staging_file, exc_info=True)
 
         # 3. Remove newly written index entries
         index = self.pm.read_project_index(project_name)
@@ -263,7 +263,7 @@ class PrototypeActivationService:
                 try:
                     shutil.rmtree(staging_dir)
                 except OSError:
-                    logger.warning("Failed to remove staging dir: %s", staging_dir)
+                    logger.warning("Failed to remove staging dir: %s", staging_dir, exc_info=True)
 
         # 5. Fallback: remove individual generated asset paths (legacy path)
         if generated_asset_paths:
@@ -276,7 +276,7 @@ class PrototypeActivationService:
                     if abs_path.exists() and abs_path.is_file():
                         abs_path.unlink()
                 except OSError:
-                    logger.warning("Failed to remove generated asset: %s", abs_path)
+                    logger.warning("Failed to remove generated asset: %s", abs_path, exc_info=True)
 
     # ------------------------------------------------------------------
     # Index writeback
@@ -538,6 +538,7 @@ class PrototypeActivationService:
             manifest.updated_at = datetime.utcnow().isoformat()
             self.pm.write_prototype_manifest(project_name, manifest)
         except Exception:
+            logger.warning("Failed to activate multi-chapter prototype for %s", project_name, exc_info=True)
             self.restore_main_script(project_name, old_script_content)
             if old_manifest is not None:
                 self.pm.write_prototype_manifest(project_name, old_manifest)

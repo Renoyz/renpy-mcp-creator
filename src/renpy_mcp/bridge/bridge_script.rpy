@@ -6,6 +6,7 @@ init -999 python:
     import os as _mcp_os
     import json as _mcp_json
     import time as _mcp_time
+    import traceback as _mcp_tb
 
     _mcp_dir = _mcp_os.path.join(renpy.config.gamedir, "_mcp")
     _mcp_cmd_file = _mcp_os.path.join(_mcp_dir, "cmd.json")
@@ -33,7 +34,6 @@ init -999 python:
             # Atomic replace (os.replace is atomic on all platforms)
             _mcp_os.replace(tmp, _mcp_status_file)
         except Exception:
-            import traceback as _mcp_tb
             renpy.log("MCP bridge: failed to write status: {}".format(
                 _mcp_tb.format_exc()))
 
@@ -47,7 +47,6 @@ init -999 python:
             _mcp_os.remove(_mcp_cmd_file)
             return cmd
         except Exception:
-            import traceback as _mcp_tb
             renpy.log("MCP bridge: failed to read command: {}".format(
                 _mcp_tb.format_exc()))
             return None
@@ -79,6 +78,7 @@ init -999 python:
                         try:
                             return {"_type": "dict", "items": {str(k): _mcp_serialize(v, depth+1) for k, v in list(val.items())[:50]}}
                         except Exception:
+                            renpy.log("MCP bridge: failed to serialize dict-like value: {}".format(_mcp_tb.format_exc()))
                             return repr(val)
                     # Duck-type for set-like
                     tn = type(val).__name__
@@ -86,6 +86,7 @@ init -999 python:
                         try:
                             return {"_type": "set", "items": [_mcp_serialize(v, depth+1) for v in list(val)[:50]]}
                         except Exception:
+                            renpy.log("MCP bridge: failed to serialize set-like value: {}".format(_mcp_tb.format_exc()))
                             return repr(val)
                     # Duck-type for list/tuple-like
                     if hasattr(val, "__iter__") and hasattr(val, "__len__") and not isinstance(val, (str, bytes)):
@@ -93,6 +94,7 @@ init -999 python:
                             t = "tuple" if tn == "tuple" else "list"
                             return {"_type": t, "items": [_mcp_serialize(v, depth+1) for v in list(val)[:50]]}
                         except Exception:
+                            renpy.log("MCP bridge: failed to serialize list-like value: {}".format(_mcp_tb.format_exc()))
                             return repr(val)
                     return repr(val)
 
@@ -121,8 +123,10 @@ init -999 python:
                     try:
                         result["variables"][name] = _mcp_serialize(val)
                     except Exception:
+                        renpy.log("MCP bridge: failed to serialize variable '{}': {}".format(name, _mcp_tb.format_exc()))
                         result["variables"][name] = repr(val)[:200]
             except Exception as e:
+                renpy.log("MCP bridge: failed to get_state: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "screenshot":
@@ -137,6 +141,7 @@ init -999 python:
                 else:
                     result["error"] = "Display not ready (no surftree)"
             except Exception as e:
+                renpy.log("MCP bridge: failed to take screenshot: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "eval":
@@ -151,6 +156,7 @@ init -999 python:
                     result["success"] = True
                     result["result"] = "OK"
             except Exception as e:
+                renpy.log("MCP bridge: failed to evaluate expression '{}': {}".format(expr, _mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "notify":
@@ -159,6 +165,7 @@ init -999 python:
                 renpy.notify(message)
                 result["success"] = True
             except Exception as e:
+                renpy.log("MCP bridge: failed to notify: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "jump":
@@ -177,6 +184,7 @@ init -999 python:
                     result["success"] = True
                     result["message"] = "Warp to '{}' ({}) queued".format(label, spec)
             except Exception as e:
+                renpy.log("MCP bridge: failed to warp to '{}': {}".format(label, _mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "set_variable":
@@ -195,6 +203,7 @@ init -999 python:
             except (ValueError, SyntaxError) as e:
                 result["error"] = "Invalid value (must be a Python literal): {}".format(e)
             except Exception as e:
+                renpy.log("MCP bridge: failed to set variable '{}': {}".format(name, _mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "get_styles":
@@ -210,6 +219,7 @@ init -999 python:
                             try:
                                 props[prop] = repr(getattr(s, prop))
                             except Exception:
+                                renpy.log("MCP bridge: failed to read style property '{}': {}".format(prop, _mcp_tb.format_exc()))
                                 pass
                         result["success"] = True
                         result["style"] = target
@@ -219,6 +229,7 @@ init -999 python:
                     result["success"] = True
                     result["styles"] = styles[:200]
             except Exception as e:
+                renpy.log("MCP bridge: failed to get_styles: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "list_saves":
@@ -237,6 +248,7 @@ init -999 python:
                 result["success"] = True
                 result["saves"] = saves
             except Exception as e:
+                renpy.log("MCP bridge: failed to list_saves: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "load_save_info":
@@ -257,6 +269,7 @@ init -999 python:
                 if screenshot_data:
                     result["screenshot_b64"] = screenshot_data
             except Exception as e:
+                renpy.log("MCP bridge: failed to load_save_info: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "screen_hierarchy":
@@ -296,6 +309,7 @@ init -999 python:
                     result["success"] = True
                     result["shown_screens"] = shown
             except Exception as e:
+                renpy.log("MCP bridge: failed to read screen hierarchy: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "start_tracking":
@@ -308,6 +322,7 @@ init -999 python:
                 result["success"] = True
                 result["message"] = "Tracking started"
             except Exception as e:
+                renpy.log("MCP bridge: failed to start_tracking: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "stop_tracking":
@@ -319,6 +334,7 @@ init -999 python:
                 result["success"] = True
                 result["message"] = "Tracking stopped"
             except Exception as e:
+                renpy.log("MCP bridge: failed to stop_tracking: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "get_tracking":
@@ -327,6 +343,7 @@ init -999 python:
                 result["active"] = _mcp_tracking["active"]
                 result["sessions"] = _mcp_tracking["sessions"]
             except Exception as e:
+                renpy.log("MCP bridge: failed to get_tracking: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         elif action == "clear_tracking":
@@ -336,6 +353,7 @@ init -999 python:
                 result["success"] = True
                 result["message"] = "Tracking data cleared"
             except Exception as e:
+                renpy.log("MCP bridge: failed to clear_tracking: {}".format(_mcp_tb.format_exc()))
                 result["error"] = str(e)
 
         else:
@@ -395,6 +413,7 @@ init -999 python:
                     "time": _mcp_time.time(),
                 })
         except Exception:
+            renpy.log("MCP bridge: failed to record tracking callback: {}".format(_mcp_tb.format_exc()))
             pass
 
     config.interact_callbacks.append(_mcp_tracking_callback)

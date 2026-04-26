@@ -1,11 +1,14 @@
 """Translation management tools."""
 
 import json
+import logging
 import re
 from pathlib import Path
 
 from ..config import RenPyConfig
 from ..renpy_runner import RenPyRunner
+
+logger = logging.getLogger(__name__)
 
 
 def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
@@ -25,6 +28,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
         try:
             lines = filepath.read_text(encoding="utf-8").splitlines()
         except Exception:
+            logger.warning("Failed to read translation file: %s", filepath, exc_info=True)
             return entries
 
         i = 0
@@ -151,6 +155,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
                     else:
                         languages[lang] = {"raw_output": output.strip()[:200]}
                 except Exception as e:
+                    logger.warning("Failed to count translations for language '%s': %s", lang, e, exc_info=True)
                     languages[lang] = {"error": str(e)[:200]}
         else:
             # Fast: parse translation files directly
@@ -254,6 +259,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read translation file for diff: %s", rpy_file, exc_info=True)
                 continue
 
             for i, line in enumerate(lines):
@@ -290,6 +296,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
                                     "current_in_source": current,
                                 })
                     except Exception:
+                        logger.warning("Failed to compare translation source file: %s", src_file, exc_info=True)
                         continue
 
         if not outdated:
@@ -328,6 +335,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             )
             output = result.stdout + result.stderr
         except Exception as e:
+            logger.warning("Failed to generate translations for '%s': %s", language, e, exc_info=True)
             output = str(e)
 
         if lang_dir.exists():
@@ -369,6 +377,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             )
             output = result.stdout + result.stderr
         except Exception as e:
+            logger.warning("Failed to extract strings for '%s': %s", language, e, exc_info=True)
             return f"Error extracting strings: {e}"
 
         if output_file.exists():
@@ -409,6 +418,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             )
             return result.stdout + result.stderr or "Merge completed successfully."
         except Exception as e:
+            logger.warning("Failed to merge translation strings for '%s': %s", language, e, exc_info=True)
             return f"Error merging strings: {e}"
 
     @mcp.tool()
@@ -449,6 +459,7 @@ def register_translation_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
             try:
                 tl_lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read translation file for auto-translate: %s", rpy_file, exc_info=True)
                 tl_lines = []
 
             for entry in parsed:

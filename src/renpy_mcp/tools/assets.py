@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,8 @@ from ..ai.background_remover import BackgroundRemover
 from ..ai.image_service import ImageService, _normalize_character_sizes
 from ..config import RenPyConfig, get_settings
 from ..services.project_manager import ProjectManager
+
+logger = logging.getLogger(__name__)
 
 # Asset file extensions
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
@@ -258,6 +261,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
             try:
                 text = rpy_file.read_text(encoding="utf-8")
             except Exception:
+                logger.warning("Failed to read script for asset extraction: %s", rpy_file, exc_info=True)
                 continue
             for line in text.splitlines():
                 stripped = line.strip()
@@ -394,6 +398,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
             try:
                 lines = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read script for audio scan: %s", rpy_file, exc_info=True)
                 continue
             rel = str(rpy_file.relative_to(game_dir))
             for i, line in enumerate(lines):
@@ -457,6 +462,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
                     if h_match:
                         screen_height = int(h_match.group(1))
                 except Exception:
+                    logger.warning("Failed to parse project options from: %s", cfg_path, exc_info=True)
                     pass
 
         import struct
@@ -517,6 +523,7 @@ def register_asset_tools(mcp, config: RenPyConfig):
                                 height = struct.unpack('<H', header[28:30])[0] & 0x3FFF
 
             except Exception:
+                logger.warning("Failed to inspect image metadata for %s", img_file, exc_info=True)
                 continue
 
             if width is None or height is None:
