@@ -10,23 +10,22 @@ This file is for AI coding agents working in this repository.
 
 ## Current Product State
 
-- This repository is currently in early **Phase 6** of the dashboard/backend refactor plan.
+- The core pipeline is **operational**: create project → AI intake → brief confirmation → outline confirmation → blueprint freeze → scene generation → asset generation → build → preview. Verified by full real-LLM E2E (14/14 stages, ~132s).
 - The active product loop is:
   - confirmed blueprint
-  - prototype scene generation
+  - prototype scene generation (multi-chapter, with position-aware chapter outline derivation)
   - background / sprite / font asset generation
   - script writeback
   - build / preview
-- The current Phase 6 focus is:
-  - multi-chapter generation
-  - generation-before-audit consistency constraints
-- Phase 7 owns:
-  - audit
-  - preview evidence capture / inspector
-  - audit UI
-  - Creator / Auditor handoff points
-- The primary plan source is:
-  - [`docs/plans/2026-04-17-dashboard-backend-refactor-plan.md`](docs/plans/2026-04-17-dashboard-backend-refactor-plan.md)
+- **Completed (Phase 6–7)**: multi-chapter generation, staged requirements refinement (brief/outline/freeze), narrative completeness improvements, E2E diagnostic harness (27/27 tests pass).
+- **In progress**: P1 issue fixes (silent exception swallows, sync I/O, duplicate code, Windows compatibility).
+- **Future (Phase 8+)**: dual-agent audit (Creator/Auditor quality gate), adaptive refinement interview, stepwise generation, dashboard UI redesign.
+- The authoritative status document is:
+  - [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- Key design specs:
+  - [`docs/dual-agent-design.md`](docs/dual-agent-design.md)
+  - [`docs/refinement-interview-redesign.md`](docs/refinement-interview-redesign.md)
+  - [`docs/stepwise-generation-design.md`](docs/stepwise-generation-design.md)
 
 ## Repo Map
 
@@ -34,7 +33,10 @@ This file is for AI coding agents working in this repository.
 - `dashboard/`: React frontend
 - `tests/`: unit, integration, and E2E coverage
 - `workspace/`: local generated projects and debug artifacts
-- `docs/`: plans and design notes
+- `docs/`: plans, design specs, ROADMAP.md (authoritative status)
+  - `docs/archive/`: completed or superseded plans
+  - `docs/prompts/`: Kimi execution prompts (TDD format)
+  - `docs/superpowers/specs/`: detailed design specifications
 
 ## Non-Negotiable Rules
 
@@ -83,13 +85,15 @@ When changing the prototype pipeline, always account for:
 At minimum, run the affected tests after each change:
 
 - Backend / integration:
-  - `uv run pytest tests/integration/...`
+  - `python -m pytest tests/integration/... -x -q`
 - Additional backend regression if relevant:
-  - `uv run pytest tests/unit/...`
+  - `python -m pytest tests/unit/... -x -q`
 - Frontend build when frontend code changes:
   - `cd dashboard && npm run build`
 - E2E when workflow, preview, or workspace behavior changes:
-  - `uv run pytest tests/e2e/...`
+  - `python -m pytest tests/e2e/... -v`
+- Full real-LLM E2E (manual trigger only):
+  - `python -m pytest tests/e2e/test_full_game_creation_real_llm_playwright.py::test_full_game_creation_with_real_llm -v --tb=short -s`
 
 For any test that touches generation paths:
 
@@ -99,10 +103,32 @@ For any test that touches generation paths:
 
 Do not claim a fix is complete without naming the tests run and their results.
 
+## Kimi Collaboration
+
+This project uses a design/execute split:
+
+- **Claude/DeepSeek** (this agent): design, planning, code review, E2E verification
+- **Kimi** (external agent): code execution following TDD prompts
+
+Kimi execution prompts live in `docs/prompts/kimi-*.md`. Each prompt is self-contained with:
+- Exact file paths and line numbers
+- Complete test code (RED phase)
+- Minimal implementation code (GREEN phase)
+- Verification commands per step
+- FAQ section for anticipated obstacles
+- Structured report template
+
+After Kimi executes a prompt, Claude/DeepSeek reviews the result:
+1. Read all modified files
+2. Verify `git diff` matches the intended changes
+3. Run the full test suite
+4. Run the real-LLM E2E test
+5. Provide a structured review (pass/fail/needs-fix)
+
 ## Preferred Workflow
 
 1. Identify whether the change affects pipeline, assets, API, or UI.
-2. Add or update tests first.
+2. Add or update tests first (TDD: RED → GREEN → REFACTOR).
 3. Make the smallest implementation change that satisfies the tests.
 4. Run targeted regression tests.
 5. Report:
