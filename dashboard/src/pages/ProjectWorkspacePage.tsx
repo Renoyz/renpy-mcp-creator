@@ -11,6 +11,7 @@ import { BriefWorkspaceView } from "../components/workspace/BriefWorkspaceView";
 import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutlineWorkspaceView";
 import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
 import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
+import { StepwiseGenerationView } from "../components/workspace/StepwiseGenerationView";
 import { runFreezeAutoGenerationChain } from "../lib/refinementAutomation";
 import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
 
@@ -46,8 +47,10 @@ export function ProjectWorkspacePage() {
     chapterOutlineError,
     refinementStatusError,
     refinementIntakeError,
+    generationState,
     selectProject,
     loadProjectData,
+    loadGenerationState,
     selectScene,
     startBlueprintCollection,
     saveBrief,
@@ -677,6 +680,13 @@ export function ProjectWorkspacePage() {
                 onSelectScene={(sceneId) => {
                   void handleSelectScene(sceneId);
                 }}
+              />
+            )}
+            {activeTab === "generation" && (
+              <StepwiseGenerationView
+                projectName={activeProjectName}
+                generationState={generationState}
+                loadGenerationState={loadGenerationState}
               />
             )}
             {activeTab === "scene" && (

@@ -204,6 +204,89 @@ export interface SceneScript {
   file_path: string;
 }
 
+export type GenerationStep =
+  | "idle"
+  | "scene_outline_draft"
+  | "scene_outline_confirmed"
+  | "character_assets_draft"
+  | "character_assets_confirmed"
+  | "background_assets_draft"
+  | "background_assets_confirmed"
+  | "script_preview"
+  | "committed"
+  | "failed";
+
+export interface AssetSlotValidation {
+  ok: boolean;
+  width: number;
+  height: number;
+  reason: string;
+}
+
+export interface AssetSlot {
+  asset_id: string;
+  kind: "character_sprite" | "background";
+  target: string;
+  variant: string;
+  source: "generated" | "uploaded" | null;
+  status: "empty" | "generating" | "generated" | "uploaded" | "accepted" | "failed";
+  path: string | null;
+  staging_path: string | null;
+  preview_url: string | null;
+  placeholder: boolean;
+  renderable: boolean;
+  validation?: AssetSlotValidation | null;
+}
+
+export interface GenerationScriptPreview {
+  staging_paths?: string[] | null;
+  staging_path?: string | null;
+  script_files?: string[] | null;
+  entry_label?: string | null;
+  scene_ids?: string[] | null;
+  chapter_ids?: string[] | null;
+}
+
+export interface GenerationState {
+  state: GenerationStep;
+  round_id: string | null;
+  character_assets: Record<string, AssetSlot>;
+  background_assets: Record<string, AssetSlot>;
+  script_preview: GenerationScriptPreview | null;
+}
+
+const generationStepSet = new Set<GenerationStep>([
+  "idle",
+  "scene_outline_draft",
+  "scene_outline_confirmed",
+  "character_assets_draft",
+  "character_assets_confirmed",
+  "background_assets_draft",
+  "background_assets_confirmed",
+  "script_preview",
+  "committed",
+  "failed",
+]);
+
+function isGenerationStep(value: unknown): value is GenerationStep {
+  return typeof value === "string" && generationStepSet.has(value as GenerationStep);
+}
+
+function normalizeGenerationStep(value: unknown): GenerationStep {
+  return isGenerationStep(value) ? value : "idle";
+}
+
+function normalizeGenerationState(raw: unknown): GenerationState {
+  const payload = (raw as Record<string, unknown>) ?? {};
+  return {
+    state: normalizeGenerationStep(payload.state),
+    round_id: typeof payload.round_id === "string" ? payload.round_id : null,
+    character_assets: (payload.character_assets as Record<string, AssetSlot>) ?? {},
+    background_assets: (payload.background_assets as Record<string, AssetSlot>) ?? {},
+    script_preview: (payload.script_preview as GenerationScriptPreview) ?? null,
+  };
+}
+
 export type BlueprintPhase = "idle" | "collecting" | "reviewing" | "generating" | "editing";
 
 export interface InterviewMessage {
@@ -247,9 +330,11 @@ interface ProjectContextValue {
   chapterOutlineError: string | null;
   refinementStatusError: string | null;
   refinementIntakeError: string | null;
+  generationState: GenerationState | null;
   refresh: () => Promise<void>;
   selectProject: (name: string) => Promise<CurrentProject | null>;
   loadProjectData: (name: string) => Promise<void>;
+  loadGenerationState: (name: string) => Promise<void>;
   selectScene: (sceneId: string, projectName?: string) => Promise<void>;
   setBlueprintPhase: (phase: BlueprintPhase) => void;
   startBlueprintCollection: (trigger?: BlueprintStartTrigger, projectName?: string | null) => void;
@@ -298,6 +383,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [chapterOutline, setChapterOutline] = useState<ChapterOutline | null>(null);
   const [refinementStatus, setRefinementStatus] = useState<RefinementStatus | null>(null);
   const [refinementIntake, setRefinementIntake] = useState<RefinementIntake | null>(null);
+  const [generationState, setGenerationState] = useState<GenerationState | null>(null);
   const [briefError, setBriefError] = useState<string | null>(null);
   const [chapterOutlineError, setChapterOutlineError] = useState<string | null>(null);
   const [refinementStatusError, setRefinementStatusError] = useState<string | null>(null);
@@ -384,7 +470,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp, intakeResp] = await Promise.all([
+      const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp, intakeResp, generationStateResp] = await Promise.all([
         fetch(`/api/projects/${encodeURIComponent(name)}/meta`),
         fetch(`/api/projects/${encodeURIComponent(name)}/blueprint`),
         fetch(`/api/projects/${encodeURIComponent(name)}/scenes`),
@@ -394,6 +480,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         fetch(`/api/projects/${encodeURIComponent(name)}/chapter-outline`),
         fetch(`/api/projects/${encodeURIComponent(name)}/refinement-status`),
         fetch(`/api/projects/${encodeURIComponent(name)}/refinement-intake`),
+        fetch(`/api/projects/${encodeURIComponent(name)}/generation-state`),
       ]);
 
       if (requestVersion !== requestVersionRef.current) return;
@@ -415,6 +502,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       setChapterOutline(null);
       setRefinementStatus(null);
       setRefinementIntake(null);
+      setGenerationState(null);
       setBriefError(null);
       setChapterOutlineError(null);
       setRefinementStatusError(null);
@@ -506,6 +594,29 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       } else {
         const err = await intakeResp.json().catch(() => ({}));
         setRefinementIntakeError(err.detail || `Failed to load refinement intake: ${intakeResp.status}`);
+      }
+
+      if (generationStateResp.ok) {
+        const generationStateJson = await generationStateResp.json();
+        setGenerationState(normalizeGenerationState(generationStateJson));
+      } else if (generationStateResp.status === 404) {
+        setGenerationState({
+          state: "idle",
+          round_id: null,
+          character_assets: {},
+          background_assets: {},
+          script_preview: null,
+        });
+      } else {
+        const err = await generationStateResp.json().catch(() => ({}));
+        setGenerationState({
+          state: "idle",
+          round_id: null,
+          character_assets: {},
+          background_assets: {},
+          script_preview: null,
+        });
+        throw new Error(err.detail || `Failed to load generation state: ${generationStateResp.status}`);
       }
 
       let sessionData: any = null;
@@ -739,6 +850,29 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loadGenerationState = useCallback(async (name: string) => {
+    try {
+      const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/generation-state`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setGenerationState(normalizeGenerationState(data));
+      } else if (resp.status === 404) {
+        setGenerationState({
+          state: "idle",
+          round_id: null,
+          character_assets: {},
+          background_assets: {},
+          script_preview: null,
+        });
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to load generation state: ${resp.status}`);
+      }
+    } catch (e) {
+      throw e instanceof Error ? e : new Error("Failed to load generation state");
+    }
+  }, []);
+
   const loadRefinementIntake = useCallback(async (name: string) => {
     try {
       const resp = await fetch(`/api/projects/${encodeURIComponent(name)}/refinement-intake`);
@@ -966,9 +1100,11 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         chapterOutlineError,
         refinementStatusError,
         refinementIntakeError,
+        generationState,
         refresh,
         selectProject,
         loadProjectData,
+        loadGenerationState,
         selectScene,
         setBlueprintPhase,
         startBlueprintCollection,

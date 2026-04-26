@@ -1,7 +1,14 @@
 import { FileText, Map, Code, ArrowLeft, BookOpen, ListOrdered, MessageSquarePlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type WorkspaceTab = "intake" | "brief" | "outline" | "blueprint" | "storymap" | "scene";
+export type WorkspaceTab =
+  | "intake"
+  | "brief"
+  | "outline"
+  | "blueprint"
+  | "storymap"
+  | "generation"
+  | "scene";
 
 interface Props {
   activeTab: WorkspaceTab;
@@ -19,7 +26,7 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
             active={activeTab === "scene"}
             onClick={() => onChange("scene")}
             icon={<Code className="w-4 h-4" />}
-            label="场景"
+            label="Scene"
           />
         </div>
         {onBackToOverview && (
@@ -28,7 +35,7 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
             className="flex items-center gap-1.5 mr-4 text-xs font-medium text-gray-600 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            返回概览
+            Back to overview
           </button>
         )}
       </div>
@@ -60,7 +67,13 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
           active={activeTab === "blueprint"}
           onClick={() => onChange("blueprint")}
           icon={<FileText className="w-4 h-4" />}
-          label="蓝图"
+          label="Blueprint"
+        />
+        <TabButton
+          active={activeTab === "generation"}
+          onClick={() => onChange("generation")}
+          icon={<Code className="w-4 h-4" />}
+          label="Generation"
         />
         <TabButton
           active={activeTab === "storymap"}
@@ -68,14 +81,6 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
           icon={<Map className="w-4 h-4" />}
           label="Story Map"
         />
-        {hasSceneSelected && (
-          <TabButton
-            active={activeTab === "scene"}
-            onClick={() => onChange("scene")}
-            icon={<Code className="w-4 h-4" />}
-            label="场景"
-          />
-        )}
       </div>
     </div>
   );

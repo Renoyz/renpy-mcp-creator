@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, HTTPException
+from fastapi import Body, UploadFile, File
 
 from ...blueprint.models import (
     BlueprintFreezeStatus,
@@ -17,6 +18,7 @@ from ...blueprint.models import (
 from ...config import get_settings, resolve_project_dir
 from ...services.project_manager import ProjectManager
 from ...services.prototype_generation_service import PrototypeGenerationService
+from ...services.stepwise_generation_service import StepwiseGenerationService
 from ...services.refinement_logic import (
     compute_blueprint_freeze_status,
     compute_refinement_state,
@@ -102,9 +104,230 @@ def _has_prototype(project_name: str) -> bool:
     return script_exists and wired
 
 
+def _make_stepwise_service(project_name: str) -> StepwiseGenerationService:
+    project_dir = resolve_project_dir(project_name)
+    if not project_dir:
+        raise HTTPException(status_code=404, detail="Project not found")
+    settings = get_settings()
+    return StepwiseGenerationService(ProjectManager(settings))
+
+
+def _is_upload_client_error(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return any(
+        token in detail
+        for token in (
+            "unsupported file extension",
+            "valid image",
+            "invalid image",
+            "uploaded image is empty",
+            "uploaded image exceeds",
+            "uploaded data must be bytes",
+            "invalid filename",
+        )
+    )
+
+
+def _parse_accept_payload(payload: dict[str, object] | None) -> bool:
+    if payload is None:
+        return False
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body for accept request")
+    allow_non_renderable = payload.get("allow_non_renderable", False)
+    if allow_non_renderable is None:
+        return False
+    if not isinstance(allow_non_renderable, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="allow_non_renderable must be a boolean",
+        )
+    return allow_non_renderable
+
+
+async def _read_upload_bytes(file: UploadFile | None) -> bytes:
+    if file is None:
+        raise HTTPException(status_code=400, detail="Missing image file")
+    return await file.read()
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/api/projects/{project_name}/generation-state")
+async def api_stepwise_generation_state(project_name: str):
+    service = _make_stepwise_service(project_name)
+    return service.get_state(project_name)
+
+
+@router.post("/api/projects/{project_name}/generation/scene-outline/start")
+async def api_stepwise_scene_outline_start(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.start_scene_outline(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/scene-outline/confirm")
+async def api_stepwise_scene_outline_confirm(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.confirm_scene_outline(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/characters/start")
+async def api_stepwise_characters_start(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.start_characters(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/characters/{character_id}/{variant}/upload")
+async def api_stepwise_character_upload(
+    project_name: str,
+    character_id: str,
+    variant: str,
+    file: UploadFile = File(...),
+):
+    service = _make_stepwise_service(project_name)
+    try:
+        file_bytes = await _read_upload_bytes(file)
+        return service.upload_character_asset(
+            project_name=project_name,
+            character_id=character_id,
+            variant=variant,
+            filename=file.filename or f"{character_id}.{variant}",
+            file_bytes=file_bytes,
+        )
+    except ValueError as exc:
+        status = 400 if _is_upload_client_error(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/characters/{character_id}/{variant}/generate")
+async def api_stepwise_character_generate(
+    project_name: str,
+    character_id: str,
+    variant: str,
+):
+    raise HTTPException(
+        status_code=501,
+        detail=f"Character asset generation for {character_id}/{variant} is not implemented in this task.",
+    )
+
+
+@router.post("/api/projects/{project_name}/generation/characters/{asset_id}/accept")
+async def api_stepwise_character_accept(
+    project_name: str,
+    asset_id: str,
+    payload: dict[str, object] | None = Body(default=None),
+):
+    service = _make_stepwise_service(project_name)
+    allow_non_renderable = _parse_accept_payload(payload)
+    try:
+        return service.accept_asset(project_name, asset_id, allow_non_renderable=allow_non_renderable)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/characters/confirm")
+async def api_stepwise_characters_confirm(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.confirm_characters(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/start")
+async def api_stepwise_backgrounds_start(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.start_backgrounds(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/{location_id}/{variant}/upload")
+async def api_stepwise_background_upload(
+    project_name: str,
+    location_id: str,
+    variant: str,
+    file: UploadFile = File(...),
+):
+    service = _make_stepwise_service(project_name)
+    try:
+        file_bytes = await _read_upload_bytes(file)
+        return service.upload_background_asset(
+            project_name=project_name,
+            location_id=location_id,
+            variant=variant,
+            filename=file.filename or f"{location_id}.{variant}",
+            file_bytes=file_bytes,
+        )
+    except ValueError as exc:
+        status = 400 if _is_upload_client_error(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/{location_id}/generate")
+async def api_stepwise_background_generate(
+    project_name: str,
+    location_id: str,
+):
+    raise HTTPException(
+        status_code=501,
+        detail=f"Background asset generation for {location_id} is not implemented in this task.",
+    )
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/{asset_id}/accept")
+async def api_stepwise_background_accept(
+    project_name: str,
+    asset_id: str,
+):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.accept_asset(project_name, asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/confirm")
+async def api_stepwise_backgrounds_confirm(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.confirm_backgrounds(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/script/preview")
+async def api_stepwise_script_preview(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.preview_script(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/script/commit")
+async def api_stepwise_script_commit(project_name: str):
+    service = _make_stepwise_service(project_name)
+    try:
+        return service.commit(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/api/projects/{project_name}/scene-packages/generate")
