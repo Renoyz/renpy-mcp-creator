@@ -470,6 +470,7 @@ class IntakeSlot(BaseModel):
 
     value: str | dict | None = None
     complete: bool = False
+    source: str | None = None
 
 
 class ChapterIntakeEntry(BaseModel):

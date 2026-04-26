@@ -9,6 +9,35 @@ from fastapi.testclient import TestClient
 from renpy_mcp.web.fastapi_app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _mock_interview_for_downstream_blueprint_flow(monkeypatch):
+    """Drive downstream blueprint tests without invoking the real adaptive interview.
+
+    These tests cover draft generation, refinement state, confirmation, outline,
+    prototype, and rollback behavior. They are not intended to validate the
+    interview model/prompt itself.
+    """
+    from renpy_mcp.services.refinement_logic import select_collecting_response
+
+    async def _mock(self, user_message):
+        if self.turn_count < 2:
+            content, message_kind = select_collecting_response(
+                self.turn_count, self.intake_mode, "zh"
+            )
+            return {
+                "content": content,
+                "message_kind": message_kind,
+                "is_conclusion": False,
+                "slot_updates": {},
+            }
+        return {"content": "Interview complete", "is_conclusion": True, "slot_updates": {}}
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws.BlueprintOrchestrator._conduct_interview_round",
+        _mock,
+    )
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from renpy_mcp.config import RenPyConfig, get_settings

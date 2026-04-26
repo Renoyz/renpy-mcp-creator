@@ -10,6 +10,34 @@ from fastapi.testclient import TestClient
 from renpy_mcp.web.fastapi_app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _mock_interview_for_downstream_blueprint_flow(monkeypatch):
+    """Drive downstream blueprint tests without invoking the real adaptive interview.
+
+    These tests cover draft generation, refinement state, confirmation, outline,
+    prototype, and rollback behavior. They are not intended to validate the
+    interview model/prompt itself.
+    """
+    from renpy_mcp.services.refinement_logic import select_collecting_response
+
+    async def _mock(self, user_message):
+        if self.turn_count < 2:
+            content, message_kind = select_collecting_response(
+                self.turn_count, self.intake_mode, "zh"
+            )
+            return {
+                "content": content,
+                "message_kind": message_kind,
+                "is_conclusion": False,
+                "slot_updates": {},
+            }
+        return {"content": "Interview complete", "is_conclusion": True, "slot_updates": {}}
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws.BlueprintOrchestrator._conduct_interview_round",
+        _mock,
+    )
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from renpy_mcp.config import RenPyConfig, get_settings
@@ -584,7 +612,7 @@ async def test_generate_scenes_prompt_includes_project_and_chapter_contract() ->
 
 
 @pytest.mark.asyncio
-async def test_background_prompt_uses_visual_contract() -> None:
+async def test_background_prompt_uses_visual_contract(monkeypatch) -> None:
     """Background generation prompt must consume visual contract when provided."""
     from renpy_mcp.blueprint.models import ProjectBlueprint, GenerationContract
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService, PrototypeScene
@@ -596,7 +624,7 @@ async def test_background_prompt_uses_visual_contract() -> None:
         tmp_path = Path(td)
         project_name = "bg_contract"
         pm = ProjectManager(get_settings())
-        pm.settings.workspace = tmp_path
+        monkeypatch.setattr(pm.settings, "workspace", tmp_path)
         pm.ensure_project_dir(project_name)
 
         service = PrototypeGenerationService(pm=pm, provider=None)
@@ -663,7 +691,7 @@ async def test_background_prompt_uses_visual_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_character_prompt_uses_identity_anchors_and_chapter_mood() -> None:
+async def test_character_prompt_uses_identity_anchors_and_chapter_mood(monkeypatch) -> None:
     """Character sprite prompt must include identity anchors (hard) and chapter mood/lighting (soft)."""
     from renpy_mcp.blueprint.models import ProjectBlueprint, GenerationContract
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService, PrototypeScene
@@ -675,7 +703,7 @@ async def test_character_prompt_uses_identity_anchors_and_chapter_mood() -> None
         tmp_path = Path(td)
         project_name = "char_contract"
         pm = ProjectManager(get_settings())
-        pm.settings.workspace = tmp_path
+        monkeypatch.setattr(pm.settings, "workspace", tmp_path)
         pm.ensure_project_dir(project_name)
 
         service = PrototypeGenerationService(pm=pm, provider=None)
@@ -748,7 +776,7 @@ async def test_character_prompt_uses_identity_anchors_and_chapter_mood() -> None
 
 
 @pytest.mark.asyncio
-async def test_generate_all_chapter_scenes_returns_packages_for_multiple_chapters() -> None:
+async def test_generate_all_chapter_scenes_returns_packages_for_multiple_chapters(monkeypatch) -> None:
     """generate_all_chapter_scenes must return scene packages for every chapter in the blueprint."""
     from renpy_mcp.blueprint.models import ProjectBlueprint
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
@@ -760,7 +788,7 @@ async def test_generate_all_chapter_scenes_returns_packages_for_multiple_chapter
         tmp_path = Path(td)
         project_name = "multi_chapter"
         pm = ProjectManager(get_settings())
-        pm.settings.workspace = tmp_path
+        monkeypatch.setattr(pm.settings, "workspace", tmp_path)
         pm.ensure_project_dir(project_name)
 
         blueprint = ProjectBlueprint(**_make_blueprint())
@@ -780,7 +808,7 @@ async def test_generate_all_chapter_scenes_returns_packages_for_multiple_chapter
 
 
 @pytest.mark.asyncio
-async def test_multi_chapter_generation_preserves_project_level_style_consistency() -> None:
+async def test_multi_chapter_generation_preserves_project_level_style_consistency(monkeypatch) -> None:
     """Across chapters, project-level style identity (art_direction, character anchors) must remain stable."""
     from renpy_mcp.blueprint.models import ProjectBlueprint, ProjectStyleBible, ChapterStyleProfile, ChapterStyleProfiles
     from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
@@ -792,7 +820,7 @@ async def test_multi_chapter_generation_preserves_project_level_style_consistenc
         tmp_path = Path(td)
         project_name = "style_consistency"
         pm = ProjectManager(get_settings())
-        pm.settings.workspace = tmp_path
+        monkeypatch.setattr(pm.settings, "workspace", tmp_path)
         pm.ensure_project_dir(project_name)
 
         blueprint = ProjectBlueprint(**_make_blueprint())

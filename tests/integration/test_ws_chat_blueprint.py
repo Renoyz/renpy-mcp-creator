@@ -12,6 +12,35 @@ from renpy_mcp.blueprint.models import IntakePhase
 from renpy_mcp.web.fastapi_app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _mock_interview_for_downstream_blueprint_flow(monkeypatch):
+    """Drive downstream blueprint tests without invoking the real adaptive interview.
+
+    These tests cover draft generation, refinement state, confirmation, outline,
+    prototype, and rollback behavior. They are not intended to validate the
+    interview model/prompt itself.
+    """
+    from renpy_mcp.services.refinement_logic import select_collecting_response
+
+    async def _mock(self, user_message):
+        if self.turn_count < 2:
+            content, message_kind = select_collecting_response(
+                self.turn_count, self.intake_mode, "zh"
+            )
+            return {
+                "content": content,
+                "message_kind": message_kind,
+                "is_conclusion": False,
+                "slot_updates": {},
+            }
+        return {"content": "Interview complete", "is_conclusion": True, "slot_updates": {}}
+
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws.BlueprintOrchestrator._conduct_interview_round",
+        _mock,
+    )
+
+
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     from renpy_mcp.config import RenPyConfig, get_settings
@@ -1735,14 +1764,13 @@ def test_outline_ready_transition_marks_outline_draft_ready_in_intake(
     assert intake["outline_draft_ready"] is True
     assert len(intake["chapter_draft"]) > 0
     assert intake["chapter_draft"][0]["chapter_id"] == "ch1"
-    assert f"Triggering draft generation for project {project_name}" in caplog.text
     assert f"Starting draft generation via LLM for project {project_name}" in caplog.text
     assert f"Draft generation succeeded for project {project_name}" in caplog.text
     assert f"Refinement intake advanced to outline_ready for project {project_name}" in caplog.text
     flow_log = tmp_path / project_name / "logs" / "refinement-flow.log"
     assert flow_log.exists()
     flow_text = flow_log.read_text(encoding="utf-8")
-    assert f"Triggering draft generation for project {project_name}" in flow_text
+    assert f"Starting draft generation via LLM for project {project_name}" in flow_text
     assert f"Draft generation succeeded for project {project_name}" in flow_text
 
 

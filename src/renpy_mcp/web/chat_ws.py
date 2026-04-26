@@ -281,6 +281,19 @@ def _get_provider():
                 self._turn_count += 1
                 lang = self._preferred_output_language(messages, system)
 
+                # Interview round mock: conclude immediately so tests don't loop forever
+                for m in messages:
+                    content = m.get("content", "")
+                    if isinstance(content, str) and "## Slot State" in content:
+                        conclusion_text = (
+                            "Interview complete. All required slots are filled.\n"
+                            "<CONCLUSION />"
+                        )
+                        return LLMResponse(
+                            content_blocks=[{"type": "text", "text": conclusion_text}],
+                            stop_reason="end_turn",
+                        )
+
                 # Blueprint generation mock
                 if self._is_blueprint_prompt(messages):
                     project_name = self._extract_project_name(messages)
@@ -479,6 +492,153 @@ def _bind_project_context(websocket: WebSocket, token_holder: list, project_name
 # Blueprint interview orchestrator
 # ---------------------------------------------------------------------------
 
+def _build_interview_system_prompt() -> str:
+    """Return the system prompt for the LLM-driven adaptive interview."""
+    return """\
+你是视觉小说项目的创意搭档（creative partner），不是调查问卷填写员。
+
+## 核心职责
+帮助作者把模糊的想法变成具体的、可执行的游戏企划。
+
+## 行为准则
+
+### 准则 1: 主动提案
+对任何空缺槽位，基于已确定的内容生成 2-4 个有区分度的备选方案。
+用 <OPTIONS id="..."> 标签包裹提案内容。每个方案要有独特的定位。
+
+### 准则 2: 降维选择
+如果作者说"不确定""没想好""随便"，主动给出该题材最成功的 2-3 种常规做法，
+标注推荐理由。把创作决策从"开放式自由创作"降维成"选择题"。
+
+### 准则 3: 交叉检查
+每次更新槽位后，检查与其他已填槽位的逻辑一致性。
+如果发现矛盾，主动指出并给出两种化解路径。
+
+### 准则 4: 节奏控制
+每次只提 1 个话题，给 2-4 个选项。
+不要在一条消息里同时讨论视觉风格和角色关系。
+
+### 准则 5: 溯源可溯
+每个槽位的值标注来源。
+如果用户直接给出了明确答案，不要强行再提案。
+
+## 输出格式
+- 提案用 <OPTIONS id="slot_name">...</OPTIONS> 包裹
+- 追问用 <QUESTION>...</QUESTION> 包裹
+- 槽位更新用 <META>{"slot_updates": {"slot_name": "value"}}</META>
+- 所有槽填满且用户确认后输出 <CONCLUSION>
+
+## 绝对不能
+- 在作者没参与的情况下替作者做决定
+- 只给一个选项
+- 跳过必填槽位
+"""
+
+
+def _build_interview_context(slots: dict, proposal_history: list, turn_count: int) -> str:
+    """Assemble slot state + proposal history for the LLM interview."""
+    lines = [f"Interview turn: {turn_count}/25"]
+
+    lines.append("\n## Current Slots")
+    for key, value in slots.items():
+        if value:
+            lines.append(f"  ✅ {key}: {value}")
+        else:
+            lines.append(f"  ❌ {key}: (empty)")
+
+    if proposal_history:
+        lines.append("\n## Proposal History")
+        for p in proposal_history:
+            status = p.get("user_choice") or "pending"
+            lines.append(
+                f"  - {p['proposal_id']} ({p['for_slot']}): "
+                f"{', '.join(p.get('options', []))} → {status}"
+            )
+
+    if turn_count >= 25:
+        lines.append("\n⚠️  Maximum turns reached. Summarize and output <CONCLUSION> now.")
+
+    return "\n".join(lines)
+
+
+def _parse_interview_response(response: str) -> dict:
+    """Extract structured data from LLM interview response."""
+    import re
+
+    result: dict = {
+        "options": None,
+        "options_id": None,
+        "question": None,
+        "slot_updates": {},
+        "is_conclusion": False,
+    }
+
+    # Extract <OPTIONS id="...">...</OPTIONS>
+    opt_match = re.search(
+        r'<OPTIONS\s+id="([^"]+)"\s*>(.*?)</OPTIONS>',
+        response, re.DOTALL
+    )
+    if opt_match:
+        result["options_id"] = opt_match.group(1)
+        result["options"] = opt_match.group(2).strip()
+
+    # Extract <QUESTION>...</QUESTION>
+    q_match = re.search(r'<QUESTION>(.*?)</QUESTION>', response, re.DOTALL)
+    if q_match:
+        result["question"] = q_match.group(1).strip()
+
+    # Extract <META>...</META>
+    meta_match = re.search(r'<META>(.*?)</META>', response, re.DOTALL)
+    if meta_match:
+        try:
+            meta = json.loads(meta_match.group(1))
+            result["slot_updates"] = meta.get("slot_updates", {})
+        except json.JSONDecodeError:
+            pass
+
+    # Check for <CONCLUSION>
+    if "<CONCLUSION" in response:
+        result["is_conclusion"] = True
+
+    return result
+
+
+def _track_proposal(
+    history: list,
+    *,
+    proposal_id: str,
+    for_slot: str,
+    options: list[str] | None = None,
+    user_choice: str | None = None,
+) -> None:
+    """Record or update a proposal in the tracking history."""
+    for entry in history:
+        if entry["proposal_id"] == proposal_id:
+            if user_choice is not None:
+                entry["user_choice"] = user_choice
+            if options is not None:
+                entry["options"] = options
+            return
+    # New proposal
+    history.append({
+        "proposal_id": proposal_id,
+        "for_slot": for_slot,
+        "options": options or [],
+        "user_choice": user_choice,
+    })
+
+
+def _record_user_choice_for_pending_proposal(history: list, user_message: str) -> None:
+    """Attach the latest user response to the oldest pending proposal."""
+    choice = (user_message or "").strip()
+    if not choice:
+        return
+    for entry in history:
+        if entry.get("user_choice") is None:
+            entry["user_choice"] = choice
+            return
+
+
 _orchestrators: dict[str, "BlueprintOrchestrator"] = {}
 _orchestrators_lock = asyncio.Lock()
 
@@ -503,6 +663,8 @@ class BlueprintOrchestrator:
         self.confirmation_id: str | None = None
         self.intake_mode = False
         self.messages: list[dict[str, Any]] = []
+        self._current_slots: dict[str, str] = {}
+        self._proposal_history: list[dict[str, Any]] = []
         self._try_restore_session()
 
     def _try_restore_session(self) -> None:
@@ -601,6 +763,22 @@ class BlueprintOrchestrator:
             brief_confirmed=brief_confirmed,
             latest_user_content=latest_user_content,
         )
+
+        if self.intake_mode and self._current_slots and intake.phase == IntakePhase.PROJECT:
+            from ..services.refinement_logic import INTAKE_SLOT_KEYS
+            for key in INTAKE_SLOT_KEYS:
+                if key not in self._current_slots:
+                    continue
+                raw = self._current_slots[key]
+                if isinstance(raw, dict):
+                    value = raw.get("value")
+                    source = raw.get("source")
+                    intake.slots[key] = IntakeSlot(
+                        value=value, complete=bool(value), source=source
+                    )
+                else:
+                    intake.slots[key] = IntakeSlot(value=raw, complete=bool(raw))
+
         self.pm.write_refinement_intake(self.project_name, intake)
         if intake.phase == IntakePhase.OUTLINE_READY:
             logger.info(
@@ -653,6 +831,107 @@ class BlueprintOrchestrator:
             intake_mode=self.intake_mode, turn_count=self.turn_count,
         )
 
+    async def _conduct_interview_round(self, user_message: str) -> dict:
+        """One round of the LLM-driven adaptive interview."""
+        # Build slot state from current intake
+        if not hasattr(self, '_current_slots'):
+            self._current_slots = {}
+        if not hasattr(self, '_proposal_history'):
+            self._proposal_history = []
+
+        _record_user_choice_for_pending_proposal(self._proposal_history, user_message)
+
+        # Update slots from user message (simple heuristic: if user seems to answer a proposal)
+        proposal_history = self._proposal_history
+
+        # Build context
+        context = _build_interview_context(self._current_slots, proposal_history, self.turn_count)
+        system_prompt = _build_interview_system_prompt()
+
+        # Get provider
+        provider = _get_provider()
+        if provider is None:
+            raise RuntimeError("No LLM provider available")
+
+        # Call LLM
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"## Slot State\n{context}\n\n## User Message\n{user_message}"},
+        ]
+
+        response = await asyncio.to_thread(provider.chat, messages=messages, max_tokens=2048)
+        text = response.text if hasattr(response, 'text') else str(response)
+
+        # Parse response
+        parsed = _parse_interview_response(text)
+
+        # Apply slot updates from META
+        for slot_name, value in parsed["slot_updates"].items():
+            self._current_slots[slot_name] = value
+
+        # Track any new proposals
+        if parsed["options"] and parsed["options_id"]:
+            # Extract option labels from the options text
+            option_labels = [
+                line.strip() for line in parsed["options"].split("\n")
+                if line.strip() and (line.strip()[0].isupper() or "─" in line)
+            ]
+            if option_labels:
+                _track_proposal(
+                    self._proposal_history,
+                    proposal_id=parsed["options_id"],
+                    for_slot=parsed["options_id"],
+                    options=option_labels[:4],
+                )
+
+        return {
+            "content": text,
+            "is_conclusion": parsed["is_conclusion"],
+            "slot_updates": parsed["slot_updates"],
+        }
+
+    async def _fallback_generate_draft(self, lang: str) -> list[dict[str, Any]]:
+        """Generate draft when interview round fails."""
+        try:
+            self.draft = await self._generate_draft_via_llm()
+        except Exception as exc:
+            self.phase = PipelineStage.COLLECTING
+            logger.exception("Draft generation failed for project %s", self.project_name)
+            error_msg = _localized_text(
+                lang,
+                f"蓝图生成失败：{exc}",
+                f"Blueprint generation failed: {exc}",
+            )
+            self.messages.append({"role": "assistant", "content": error_msg})
+            self._save_history()
+            self._save_session()
+            return [
+                {
+                    "type": "error",
+                    "message": error_msg,
+                    "pipeline_stage": self.phase.value,
+                }
+            ]
+
+        self.phase = PipelineStage.REVIEWING
+
+        from ..services.refinement_logic import build_post_draft_result
+
+        intake = self._write_refinement_intake()
+        brief_confirmed = self._is_brief_fully_confirmed()
+        intake_dump = intake.model_dump(mode="json") if self.intake_mode else None
+
+        post_result = build_post_draft_result(
+            self.draft, self.intake_mode, brief_confirmed, lang,
+            self.phase.value, intake_dump,
+        )
+        self.phase = post_result.next_phase
+        self.confirmation_id = post_result.confirmation_id
+        self.messages.extend(post_result.history_entries)
+        self._save_history()
+        self._save_session()
+        return post_result.ws_events
+
     async def handle_user_message(self, content: str) -> list[dict[str, Any]]:
         self._load_history()
         lang = _preferred_output_language_from_messages(self.messages)
@@ -700,29 +979,37 @@ class BlueprintOrchestrator:
         if self.phase in (PipelineStage.IDLE, PipelineStage.COLLECTING):
             self.phase = PipelineStage.COLLECTING
 
-            if self.turn_count < 2:
-                from ..services.refinement_logic import select_collecting_response
+            # Adaptive interview from the very first user message
+            try:
+                result = await self._conduct_interview_round(content)
+            except Exception as exc:
+                logger.warning("Interview round failed, falling back to draft generation: %s", exc)
+                return await self._fallback_generate_draft(lang)
 
-                assistant_content, message_kind = select_collecting_response(self.turn_count, self.intake_mode, lang)
-                self.messages.append({"role": "assistant", "message_kind": message_kind, "content": assistant_content})
+            if not result.get("is_conclusion"):
+                # Continue interview
+                assistant_entry = {"role": "assistant", "content": result["content"]}
+                if result.get("message_kind"):
+                    assistant_entry["message_kind"] = result["message_kind"]
+                self.messages.append(assistant_entry)
                 self._save_history()
-                intake = self._write_refinement_intake(latest_user_content=content)
                 self._save_session()
-                return [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "message_kind": message_kind,
-                        "content": assistant_content,
-                        "pipeline_stage": self.phase.value,
-                        "intake": intake.model_dump(mode="json") if self.intake_mode else None,
-                    }
-                ]
+                intake = self._write_refinement_intake(latest_user_content=content)
+                event = {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": result["content"],
+                    "pipeline_stage": self.phase.value,
+                    "intake": intake.model_dump(mode="json") if self.intake_mode else None,
+                }
+                if result.get("message_kind"):
+                    event["message_kind"] = result["message_kind"]
+                return [event]
 
-            # Second turn -> generate draft via LLM and transition to reviewing
+            # Interview conclusion → generate draft
             try:
                 logger.info(
-                    "Triggering draft generation for project %s after turn_count=%d (intake_mode=%s)",
+                    "Triggering draft generation for project %s after interview conclusion (turn_count=%d, intake_mode=%s)",
                     self.project_name,
                     self.turn_count,
                     self.intake_mode,
@@ -730,7 +1017,7 @@ class BlueprintOrchestrator:
                 _append_refinement_flow_log(
                     self.project_name,
                     "INFO",
-                    "Triggering draft generation for project %s after turn_count=%d (intake_mode=%s)",
+                    "Triggering draft generation for project %s after interview conclusion (turn_count=%d, intake_mode=%s)",
                     self.project_name,
                     self.turn_count,
                     self.intake_mode,
@@ -763,16 +1050,16 @@ class BlueprintOrchestrator:
             brief_confirmed = self._is_brief_fully_confirmed()
             intake_dump = intake.model_dump(mode="json") if self.intake_mode else None
 
-            result = build_post_draft_result(
+            post_result = build_post_draft_result(
                 self.draft, self.intake_mode, brief_confirmed, lang,
                 self.phase.value, intake_dump,
             )
-            self.phase = result.next_phase
-            self.confirmation_id = result.confirmation_id
-            self.messages.extend(result.history_entries)
+            self.phase = post_result.next_phase
+            self.confirmation_id = post_result.confirmation_id
+            self.messages.extend(post_result.history_entries)
             self._save_history()
             self._save_session()
-            return result.ws_events
+            return post_result.ws_events
 
         if self.phase == PipelineStage.REVIEWING:
             return [
