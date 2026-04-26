@@ -457,8 +457,8 @@ def select_collecting_response(
             return (
                 _localized_text(
                     lang,
-                    "太好了！我会先帮你整理 Project Brief 草稿。首先，请告诉我：故事大概有几章？题材、时代或世界观是什么？主要角色和整体基调是什么？",
-                    "Great. I'll first help you prepare a Project Brief draft. To start, roughly how many chapters do you want, what genre/setting/world rules should it use, and who are the main characters and tone?",
+                    "我会根据你的回答动态补齐 Project Brief。先说说你已有的故事想法即可；不用一次回答完整。",
+                    "I'll help fill in the Project Brief dynamically from your answers. Share any story idea you already have; you do not need to answer everything at once.",
                 ),
                 "intake_text",
             )

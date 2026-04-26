@@ -436,6 +436,23 @@ class TestIntakeSlotKeys:
         assert len(INTAKE_SLOT_KEYS) == 9
 
 
+class TestCollectingResponse:
+    def test_refinement_intake_opening_is_short_and_not_legacy_questionnaire(self):
+        from renpy_mcp.services.refinement_logic import select_collecting_response
+
+        content, message_kind = select_collecting_response(
+            turn_count=0,
+            intake_mode=True,
+            lang="en",
+        )
+
+        assert message_kind == "intake_text"
+        assert "Project Brief" in content
+        assert "dynamically" in content
+        assert "roughly how many chapters" not in content
+        assert "who are the main characters" not in content
+
+
 # ---------------------------------------------------------------------------
 # compute_refinement_intake
 # ---------------------------------------------------------------------------
