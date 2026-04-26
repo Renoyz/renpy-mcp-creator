@@ -1,10 +1,14 @@
 """RenPy documentation resource — searchable docs for AI context."""
 
+import asyncio
+import logging
 import re
 from html.parser import HTMLParser
 from pathlib import Path
 
 from ..config import RenPyConfig
+
+logger = logging.getLogger(__name__)
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -76,11 +80,14 @@ class _HTMLTextExtractor(HTMLParser):
         return "".join(self._text).strip()
 
 
-def _extract_doc_text(html_path: Path) -> str:
+async def _extract_doc_text(html_path: Path) -> str:
     """Extract clean text from a RenPy doc HTML file."""
     try:
-        html = html_path.read_text(encoding="utf-8")
+        html = await asyncio.to_thread(
+            lambda: html_path.read_text(encoding="utf-8")
+        )
     except Exception:
+        logger.warning("Failed to read doc text from %s", html_path, exc_info=True)
         return ""
 
     parser = _HTMLTextExtractor()
@@ -246,7 +253,7 @@ def register_doc_resources(mcp, config: RenPyConfig):
         if query_lower in TOPIC_MAP:
             html_file = doc_dir / f"{TOPIC_MAP[query_lower]}.html"
             if html_file.exists():
-                text = _extract_doc_text(html_file)
+                text = await _extract_doc_text(html_file)
                 if text:
                     # Truncate very long docs
                     if len(text) > 15000:
@@ -258,7 +265,7 @@ def register_doc_resources(mcp, config: RenPyConfig):
         for html_file in sorted(doc_dir.glob("*.html")):
             if html_file.name in ("genindex.html", "search.html", "py-function-class-index.html"):
                 continue
-            text = _extract_doc_text(html_file)
+            text = await _extract_doc_text(html_file)
             if not text:
                 continue
 

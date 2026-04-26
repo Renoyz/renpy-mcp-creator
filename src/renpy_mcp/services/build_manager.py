@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import platform
 import shutil
@@ -13,6 +14,8 @@ from typing import Optional
 
 from ..config import Settings
 from ..models import BuildRequest, BuildResult
+
+logger = logging.getLogger(__name__)
 
 
 class BuildManager:
@@ -143,7 +146,7 @@ class LocalRenpyToolchain:
                     with zipfile.ZipFile(web_zip, "r") as zip_ref:
                         zip_ref.extractall(web_dir)
 
-                    if self._create_web_player(web_dir, project_name):
+                    if await self._create_web_player(web_dir, project_name):
                         game_zip = web_dir / "game.zip"
                         with zipfile.ZipFile(game_zip, "w", zipfile.ZIP_DEFLATED) as zf:
                             exclude_files = {
@@ -191,14 +194,16 @@ class LocalRenpyToolchain:
         errors_txt = project_dir / "errors.txt"
         if errors_txt.exists():
             try:
-                error_lines = errors_txt.read_text(encoding="utf-8").strip().splitlines()
+                error_lines = await asyncio.to_thread(
+                    lambda: errors_txt.read_text(encoding="utf-8").strip().splitlines()
+                )
                 # Include the first 20 lines — enough to show the root cause
                 preview = "\n".join(error_lines[:20])
                 if len(error_lines) > 20:
                     preview += f"\n... ({len(error_lines) - 20} more lines)"
                 error_message += f"\nRen'Py errors.txt:\n{preview}"
             except Exception:
-                pass
+                logger.warning("Failed to read errors.txt for project %s", request.project_name, exc_info=True)
         return BuildResult(
             project_name=request.project_name,
             target=request.target,
@@ -244,7 +249,7 @@ class LocalRenpyToolchain:
         env["RENPY_NO_DISPLAY"] = "1"
         return env
 
-    def _create_web_player(self, web_dir: Path, project_name: str) -> bool:
+    async def _create_web_player(self, web_dir: Path, project_name: str) -> bool:
         """Copy web runtime files from SDK and create a proper web player."""
         web_runtime = self.sdk_path / "web"
         if not web_runtime.exists():
@@ -252,9 +257,13 @@ class LocalRenpyToolchain:
 
         for item in web_runtime.iterdir():
             if item.name == "index.html":
-                html_content = item.read_text(encoding="utf-8")
+                html_content = await asyncio.to_thread(
+                    lambda: item.read_text(encoding="utf-8")
+                )
                 html_content = html_content.replace("%%TITLE%%", project_name)
-                (web_dir / "index.html").write_text(html_content, encoding="utf-8")
+                await asyncio.to_thread(
+                    lambda: (web_dir / "index.html").write_text(html_content, encoding="utf-8")
+                )
             elif item.name not in {"hash.txt"}:
                 dest = web_dir / item.name
                 if item.is_file():

@@ -33,7 +33,9 @@ init -999 python:
             # Atomic replace (os.replace is atomic on all platforms)
             _mcp_os.replace(tmp, _mcp_status_file)
         except Exception:
-            pass
+            import traceback as _mcp_tb
+            renpy.log("MCP bridge: failed to write status: {}".format(
+                _mcp_tb.format_exc()))
 
     def _mcp_read_command():
         """Read and consume a command from MCP server."""
@@ -45,6 +47,9 @@ init -999 python:
             _mcp_os.remove(_mcp_cmd_file)
             return cmd
         except Exception:
+            import traceback as _mcp_tb
+            renpy.log("MCP bridge: failed to read command: {}".format(
+                _mcp_tb.format_exc()))
             return None
 
     def _mcp_handle_command(cmd):

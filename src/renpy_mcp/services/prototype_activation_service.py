@@ -207,7 +207,7 @@ class PrototypeActivationService:
                 try:
                     leftover.unlink()
                 except OSError:
-                    pass
+                    logger.warning("Failed to remove leftover staging file: %s", leftover, exc_info=True)
 
     # ------------------------------------------------------------------
     # Staged replace: rollback

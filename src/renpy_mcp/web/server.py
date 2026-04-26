@@ -3,6 +3,7 @@
 import ast
 import base64
 import json
+import logging
 import re
 import socket
 import threading
@@ -15,6 +16,7 @@ from ..bridge import BridgeClient
 from ..config import RenPyConfig
 
 STATIC_DIR = Path(__file__).parent / "static"
+logger = logging.getLogger(__name__)
 
 # Singleton server instance
 _server: HTTPServer | None = None
@@ -154,6 +156,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     continue
                 scripts[rel] = rpy_file.read_text(encoding="utf-8").splitlines()
             except Exception:
+                logger.warning("Failed to read script: %s", rpy_file, exc_info=True)
                 continue
 
         # Extract labels
@@ -269,7 +272,7 @@ class _Handler(SimpleHTTPRequestHandler):
                 self._json_response({"connected": age < 5, "age": age})
                 return
             except Exception:
-                pass
+                logger.warning("Failed to read bridge status", exc_info=True)
         self._json_response({"connected": False})
 
     def _api_jump(self):
@@ -375,6 +378,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     if m and not m.group(1).startswith("_"):
                         labels.append(m.group(1))
             except Exception:
+                logger.warning("Failed to parse labels from: %s", rpy_file, exc_info=True)
                 continue
         self._json_response({"labels": labels})
 
@@ -395,6 +399,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     continue
                 files.append(rel)
             except Exception:
+                logger.warning("Failed to list rpy file: %s", rpy_file, exc_info=True)
                 continue
         self._json_response({"files": files})
 
@@ -457,6 +462,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     if m:
                         characters.append({"id": m.group(1), "name": m.group(2)})
             except Exception:
+                logger.warning("Failed to extract characters from: %s", rpy_file, exc_info=True)
                 continue
         self._json_response({"characters": characters})
 
@@ -532,7 +538,7 @@ class _Handler(SimpleHTTPRequestHandler):
                         self._json_response(saved)
                         return
                     except Exception:
-                        pass
+                        logger.warning("Failed to read saved tracking data", exc_info=True)
                 self._json_response({"active": False, "sessions": [], "stats": {}})
                 return
         result = self._send_bridge_command({"action": "get_tracking"})
@@ -548,7 +554,7 @@ class _Handler(SimpleHTTPRequestHandler):
                         self._json_response(saved)
                         return
                     except Exception:
-                        pass
+                        logger.warning("Failed to read saved tracking data (fallback)", exc_info=True)
             self._json_response({"active": False, "sessions": [], "stats": {}})
             return
 
@@ -595,7 +601,7 @@ class _Handler(SimpleHTTPRequestHandler):
                 save_data = {"active": result.get("active", False), "sessions": sessions, "stats": stats}
                 data_file.write_text(json.dumps(save_data, ensure_ascii=False), encoding="utf-8")
             except Exception:
-                pass
+                logger.warning("Failed to save tracking data", exc_info=True)
 
         self._json_response({
             "active": result.get("active", False),
@@ -621,7 +627,7 @@ class _Handler(SimpleHTTPRequestHandler):
                 try:
                     data_file.unlink()
                 except Exception:
-                    pass
+                    logger.warning("Failed to remove tracking data file", exc_info=True)
         self._json_response(result)
 
     # ---- Asset Manager API ----
@@ -664,6 +670,7 @@ class _Handler(SimpleHTTPRequestHandler):
                             loc = f"{rel}:{i+1}"
                             ref_locations.setdefault(ref, []).append(loc)
             except Exception:
+                logger.warning("Failed to extract references from: %s", rpy_file, exc_info=True)
                 continue
 
         # Get screen resolution
@@ -779,6 +786,7 @@ class _Handler(SimpleHTTPRequestHandler):
                     if name in line.lower():
                         locations.append({"file": rel, "line": i + 1, "text": line.strip()[:120]})
             except Exception:
+                logger.warning("Failed to search name in: %s", rpy_file, exc_info=True)
                 continue
         self._json_response({"name": name, "locations": locations[:50]})
 

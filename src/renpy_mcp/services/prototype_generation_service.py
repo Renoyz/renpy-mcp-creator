@@ -92,11 +92,13 @@ logger = logging.getLogger(__name__)
 
 _CJK_FONT_DEST_NAME = "simhei.ttf"
 
-_WINDOWS_CJK_FALLBACKS = [
-    Path(r"C:\Windows\Fonts\simhei.ttf"),
-    Path(r"C:\Windows\Fonts\msyh.ttf"),
-    Path(r"C:\Windows\Fonts\msgothic.ttf"),
-]
+def _windows_cjk_fallbacks() -> list[Path]:
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return [
+        Path(root) / "Fonts" / "simhei.ttf",
+        Path(root) / "Fonts" / "msyh.ttf",
+        Path(root) / "Fonts" / "msgothic.ttf",
+    ]
 
 _LINUX_CJK_FALLBACKS = [
     Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
@@ -131,7 +133,7 @@ def resolve_cjk_font_path(config_path: Path | None = None) -> Path | None:
 
     fallbacks: list[Path]
     if os.name == "nt":
-        fallbacks = _WINDOWS_CJK_FALLBACKS
+        fallbacks = _windows_cjk_fallbacks()
     elif os.uname().sysname == "Darwin":
         fallbacks = _DARWIN_CJK_FALLBACKS
     else:

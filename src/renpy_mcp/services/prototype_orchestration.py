@@ -142,9 +142,9 @@ class PrototypeOrchestrationService:
         from ..models import BuildRequest, BuildResult
         from ..services.build_manager import BuildManager
         from ..config import get_settings
-        from ..web.chat_ws import _write_build_status_for_project
+        from ..web.fastapi_app import _write_build_status
 
-        _write_build_status_for_project(project_name, "building", "Building playable prototype...")
+        _write_build_status(project_name, "building", "Building playable prototype...", None)
 
         if os.environ.get("RENPY_MCP_MOCK_BUILD"):
             settings = get_settings()
@@ -167,10 +167,10 @@ class PrototypeOrchestrationService:
 
         if not build_result.success:
             error = build_result.error or "Build failed"
-            _write_build_status_for_project(project_name, "failed", error)
+            _write_build_status(project_name, "failed", error, None)
             raise RuntimeError(error)
 
-        _write_build_status_for_project(
+        _write_build_status(
             project_name, "success",
             f"Prototype built to {build_result.output_path}",
             build_result.output_path,

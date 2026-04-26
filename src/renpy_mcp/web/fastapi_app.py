@@ -159,6 +159,7 @@ def _read_build_status(project_name: str) -> dict | None:
     try:
         return json.loads(status_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        logger.warning("Failed to read build status for project %s", project_name, exc_info=True)
         return None
 
 

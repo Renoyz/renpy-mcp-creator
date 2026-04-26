@@ -22,6 +22,7 @@ from ..chat_engine import AnthropicProvider, ChatEngine, OpenAICompatibleProvide
 from ..config import get_settings, _current_project_path, resolve_project_dir
 from ..server import mcp
 from ..services.project_manager import ProjectManager
+from .fastapi_app import _write_build_status
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
@@ -120,28 +121,6 @@ def _write_chat_history(project_name: str, messages: list[dict[str, Any]]) -> No
     path = _chat_history_path(project_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"messages": messages}, indent=2), encoding="utf-8")
-
-
-def _write_build_status_for_project(
-    project_name: str,
-    status: str,
-    message: str,
-    output_path: Path | None = None,
-    target: str = "web",
-) -> None:
-    """Persist build status to the project's logs/build-status.json."""
-    settings = get_settings()
-    status_file = settings.workspace / project_name / "logs" / "build-status.json"
-    status_file.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "status": status,
-        "message": message,
-        "output_path": str(output_path) if output_path else None,
-        "previewable": output_path is not None and (Path(output_path) / "index.html").exists() if output_path else False,
-        "target": target,
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    status_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _append_refinement_flow_log(project_name: str, level: str, message: str, *args: Any) -> None:
@@ -538,15 +517,17 @@ class BlueprintOrchestrator:
         self.confirmation_id = session.get("confirmation_id")
         self.intake_mode = bool(session.get("intake_mode", False))
         if session.get("draft"):
+            old_draft = self.draft
             try:
                 self.draft = ProjectBlueprint(**session["draft"])
             except Exception:
                 logger.warning(
-                    "Failed to restore draft from session for project %s",
+                    "Failed to restore draft from session for project %s; keeping previous draft",
                     self.project_name,
                     exc_info=True,
                 )
-                self.draft = None
+                if old_draft is None:
+                    self.draft = None
 
     def _save_session(self) -> None:
         state: dict[str, Any] = {
