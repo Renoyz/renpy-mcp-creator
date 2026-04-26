@@ -83,6 +83,44 @@ def test_context_builder_limits_to_25_turns():
     assert "25" in ctx or "final" in ctx.lower() or "summarize" in ctx.lower() or "汇总" in ctx or "总结" in ctx
 
 
+@pytest.mark.asyncio
+async def test_interview_round_context_includes_all_required_slots_when_empty(tmp_path, monkeypatch):
+    """The first adaptive interview round must show every required intake slot as empty."""
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.services.refinement_logic import INTAKE_SLOT_KEYS
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator, PipelineStage
+    from renpy_mcp.chat_engine.providers import LLMResponse
+
+    captured: dict[str, str] = {}
+
+    class FakeProvider:
+        def chat(self, messages, **kwargs):
+            captured["prompt"] = messages[-1]["content"]
+            return LLMResponse(
+                content_blocks=[{"type": "text", "text": "<QUESTION>继续？</QUESTION><META>{\"slot_updates\": {}}</META>"}],
+                stop_reason="end_turn",
+            )
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._get_provider", lambda: FakeProvider())
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("slot_context")
+
+    orchestrator = BlueprintOrchestrator("slot_context", pm)
+    orchestrator.phase = PipelineStage.COLLECTING
+    orchestrator.intake_mode = True
+    orchestrator.turn_count = 1
+
+    await orchestrator._conduct_interview_round("我想做明朝悬疑")
+
+    prompt = captured["prompt"]
+    for key in INTAKE_SLOT_KEYS:
+        assert key in prompt
+    assert prompt.count("(empty)") >= len(INTAKE_SLOT_KEYS)
+
+
 # ---------------------------------------------------------------------------
 # 2a. Response parser extracts structured tags
 # ---------------------------------------------------------------------------
@@ -303,6 +341,29 @@ def test_write_refinement_intake_uses_interview_slot_updates(tmp_path, monkeypat
     assert intake.slots["visual_style"].source == "system_recommended"
 
 
+def test_empty_interview_slots_do_not_overwrite_latest_user_content(tmp_path, monkeypatch):
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.services.refinement_logic import INTAKE_SLOT_KEYS
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._save_runtime_session", lambda project_name, state: None)
+
+    settings = Settings().model_copy(update={"workspace": tmp_path / "workspace"})
+    pm = ProjectManager(settings)
+    pm.ensure_project_dir("empty_slots")
+
+    orchestrator = BlueprintOrchestrator("empty_slots", pm)
+    orchestrator.intake_mode = True
+    orchestrator._current_slots = {key: "" for key in INTAKE_SLOT_KEYS}
+
+    intake = orchestrator._write_refinement_intake(latest_user_content="明朝悬疑")
+
+    assert intake.slots["core_premise"].value == "明朝悬疑"
+    assert intake.slots["core_premise"].complete is True
+
+
 # ---------------------------------------------------------------------------
 # 6. Pending proposal user choice recording
 # ---------------------------------------------------------------------------
@@ -345,3 +406,48 @@ def test_parse_interview_response_preserves_slot_sources():
 
     assert parsed["slot_updates"]["visual_style"]["value"] == "水墨暗调"
     assert parsed["slot_updates"]["visual_style"]["source"] == "system_recommended"
+
+
+# ---------------------------------------------------------------------------
+# 8. Interview runtime session persistence
+# ---------------------------------------------------------------------------
+
+def test_interview_slots_and_proposal_history_roundtrip_runtime_session(monkeypatch):
+    from renpy_mcp.config import Settings
+    from renpy_mcp.services.project_manager import ProjectManager
+    from renpy_mcp.web.chat_ws import BlueprintOrchestrator
+
+    saved: dict = {}
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: None)
+    monkeypatch.setattr(
+        "renpy_mcp.web.chat_ws._save_runtime_session",
+        lambda project_name, state: saved.update(state),
+    )
+
+    settings = Settings()
+    pm = ProjectManager(settings)
+    orchestrator = BlueprintOrchestrator("persist_interview", pm)
+    orchestrator.intake_mode = True
+    orchestrator._current_slots = {
+        "core_premise": {"value": "明朝悬疑", "source": "user_specified"},
+    }
+    orchestrator._proposal_history = [
+        {
+            "proposal_id": "visual_style",
+            "for_slot": "visual_style",
+            "options": ["A. 水墨", "B. 工笔"],
+            "user_choice": "A",
+        }
+    ]
+
+    orchestrator._save_session()
+
+    assert saved["interview_slots"] == orchestrator._current_slots
+    assert saved["proposal_history"] == orchestrator._proposal_history
+
+    monkeypatch.setattr("renpy_mcp.web.chat_ws._load_runtime_session", lambda project_name: saved)
+    restored = BlueprintOrchestrator("persist_interview", pm)
+
+    assert restored._current_slots == orchestrator._current_slots
+    assert restored._proposal_history == orchestrator._proposal_history

@@ -541,8 +541,14 @@ def _build_interview_context(slots: dict, proposal_history: list, turn_count: in
 
     lines.append("\n## Current Slots")
     for key, value in slots.items():
-        if value:
-            lines.append(f"  ✅ {key}: {value}")
+        source = None
+        display_value = value
+        if isinstance(value, dict):
+            display_value = value.get("value")
+            source = value.get("source")
+        if display_value:
+            source_suffix = f" ({source})" if source else ""
+            lines.append(f"  ✅ {key}: {display_value}{source_suffix}")
         else:
             lines.append(f"  ❌ {key}: (empty)")
 
@@ -678,6 +684,10 @@ class BlueprintOrchestrator:
         self.turn_count = session.get("turn_count", 0)
         self.confirmation_id = session.get("confirmation_id")
         self.intake_mode = bool(session.get("intake_mode", False))
+        if isinstance(session.get("interview_slots"), dict):
+            self._current_slots = session["interview_slots"]
+        if isinstance(session.get("proposal_history"), list):
+            self._proposal_history = session["proposal_history"]
         if session.get("draft"):
             old_draft = self.draft
             try:
@@ -700,6 +710,10 @@ class BlueprintOrchestrator:
             "confirmation_id": self.confirmation_id,
             "intake_mode": self.intake_mode,
         }
+        if self._current_slots:
+            state["interview_slots"] = self._current_slots
+        if self._proposal_history:
+            state["proposal_history"] = self._proposal_history
         if self.draft:
             state["draft"] = self.draft.model_dump(mode="json")
         _save_runtime_session(self.project_name, state)
@@ -713,6 +727,10 @@ class BlueprintOrchestrator:
             "confirmation_id": None,
             "latest_progress": {"step": step, "percent": percent},
         }
+        if self._current_slots:
+            state["interview_slots"] = self._current_slots
+        if self._proposal_history:
+            state["proposal_history"] = self._proposal_history
         if self.draft:
             state["draft"] = self.draft.model_dump(mode="json")
         _save_runtime_session(self.project_name, state)
@@ -773,10 +791,14 @@ class BlueprintOrchestrator:
                 if isinstance(raw, dict):
                     value = raw.get("value")
                     source = raw.get("source")
+                    if not value:
+                        continue
                     intake.slots[key] = IntakeSlot(
                         value=value, complete=bool(value), source=source
                     )
                 else:
+                    if not raw:
+                        continue
                     intake.slots[key] = IntakeSlot(value=raw, complete=bool(raw))
 
         self.pm.write_refinement_intake(self.project_name, intake)
@@ -838,6 +860,12 @@ class BlueprintOrchestrator:
             self._current_slots = {}
         if not hasattr(self, '_proposal_history'):
             self._proposal_history = []
+
+        if self.intake_mode:
+            from ..services.refinement_logic import INTAKE_SLOT_KEYS
+
+            for key in INTAKE_SLOT_KEYS:
+                self._current_slots.setdefault(key, "")
 
         _record_user_choice_for_pending_proposal(self._proposal_history, user_message)
 
