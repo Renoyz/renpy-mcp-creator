@@ -33,19 +33,28 @@ def derive_chapter_outline_fields(
             if character and character not in character_focus:
                 character_focus.append(character)
 
-    chapter_goal = (
-        f"Advance {chapter.name} through {first_scene_name}"
-        if first_scene_name
-        else f"Advance {chapter.name}"
-    )
-    key_conflict = (
-        f"Pressure escalates around {last_scene_name}"
-        if last_scene_name
-        else f"Core conflict in {chapter.name}"
-    )
-    emotional_arc = (
-        "setup -> escalation" if len(scene_names) > 1 else "setup -> turn"
-    )
+    pos = chapter.order / max(total_chapters, 1)
+
+    if pos <= 0.33:
+        emotional_arc = "setup -> escalation"
+    elif pos <= 0.66:
+        emotional_arc = "escalation -> confrontation"
+    else:
+        emotional_arc = "climax -> resolution"
+
+    if pos <= 0.33:
+        chapter_goal = f"Introduce the world and characters through {first_scene_name}"
+    elif pos <= 0.66:
+        chapter_goal = f"Escalate stakes and deepen conflicts through {first_scene_name}"
+    else:
+        chapter_goal = f"Bring the story to its climax and resolution through {first_scene_name}"
+
+    if pos <= 0.33:
+        key_conflict = f"Initial friction emerges around {last_scene_name}"
+    elif pos <= 0.66:
+        key_conflict = f"Alliances shift and stakes intensify around {last_scene_name}"
+    else:
+        key_conflict = f"Final confrontation comes to a head around {last_scene_name}"
     reveals = last_scene_name or chapter.name
     end_state = last_scene_name or chapter.name
     mood_or_pacing_bias = "measured" if len(scene_names) <= 2 else "escalating"

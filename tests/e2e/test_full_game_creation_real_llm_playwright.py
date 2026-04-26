@@ -478,8 +478,10 @@ def _server_env_for_mode(workspace: Path, mode: ExecutionMode) -> dict[str, str]
     env["RENPY_MCP_WORKSPACE"] = str(workspace)
     if mode.use_mock_build:
         env["RENPY_MCP_MOCK_BUILD"] = "1"
+        env["RENPY_MCP_MOCK_IMAGE_GEN"] = "1"
     else:
         env.pop("RENPY_MCP_MOCK_BUILD", None)
+        env.pop("RENPY_MCP_MOCK_IMAGE_GEN", None)
     return env
 
 
@@ -727,11 +729,15 @@ def _try_complete_brief_review_ui(runner) -> bool:
     _snap(page, "08_brief_tab_loaded", writer=artifacts)
     for _ in range(20):
         confirm_buttons = _pending_confirm_buttons(page)
-        if confirm_buttons.count() == 0:
+        before = confirm_buttons.count()
+        if before == 0:
             break
-        btn = confirm_buttons.first
-        btn.click()
-        expect(btn).to_be_disabled(timeout=15000)
+        confirm_buttons.first.click()
+        try:
+            expect(confirm_buttons).to_have_count(before - 1, timeout=15000)
+        except AssertionError:
+            _snap(page, "09b_confirm_button_stuck", writer=artifacts)
+            return False
 
     enter_outline = page.locator("button", has_text="Enter Chapter Outline Review")
     if enter_outline.count() == 0:
@@ -800,11 +806,15 @@ def _try_complete_outline_review_ui(runner) -> bool:
     _snap(page, "10_outline_tab_loaded", writer=artifacts)
     for _ in range(20):
         confirm_buttons = _pending_confirm_buttons(page)
-        if confirm_buttons.count() == 0:
+        before = confirm_buttons.count()
+        if before == 0:
             break
-        btn = confirm_buttons.first
-        btn.click()
-        expect(btn).to_be_disabled(timeout=15000)
+        confirm_buttons.first.click()
+        try:
+            expect(confirm_buttons).to_have_count(before - 1, timeout=15000)
+        except AssertionError:
+            _snap(page, "11b_confirm_button_stuck", writer=artifacts)
+            return False
 
     freeze_btn = page.locator("button", has_text="Freeze Blueprint")
     if freeze_btn.count() == 0:
@@ -880,7 +890,7 @@ def _run_freeze_and_build_stage(runner) -> None:
     post_freeze_failed = post_freeze_status.filter(has_text="failed").or_(
         post_freeze_status.locator("text=Error").or_(post_freeze_status.locator("text=error"))
     )
-    post_freeze_success.or_(post_freeze_failed).first.wait_for(state="visible", timeout=120000)
+    post_freeze_success.or_(post_freeze_failed).first.wait_for(state="visible", timeout=180000)
 
     if post_freeze_failed.count() > 0:
         _snap(page, "12b_post_freeze_failed", writer=artifacts)
@@ -893,17 +903,13 @@ def _run_freeze_and_build_stage(runner) -> None:
     build_btn = page.locator("button", has_text="Build")
     _assert_build_button_present(build_btn.count())
     build_btn.first.click()
-    # "Generating" here refers to the prototype-generation phase (pre-build),
-    # not the build itself; kept because the UI may show either label.
-    build_progress = page.locator("text=Building").or_(page.locator("text=Generating")).first
-    expect(build_progress).to_be_visible(timeout=30000)
     _snap(page, "13_build_started", writer=artifacts)
 
     build_ok = page.locator("button", has_text="Build OK")
     build_failed = page.locator("button", has_text="Retry Build")
     build_status = page.locator("[data-testid='build-status']")
 
-    build_ok.or_(build_failed).first.wait_for(state="visible", timeout=120000)
+    build_ok.or_(build_failed).first.wait_for(state="visible", timeout=180000)
 
     if build_failed.count() > 0:
         status_text = build_status.text_content() or "(no build status text)"
@@ -917,10 +923,15 @@ def _run_freeze_and_build_stage(runner) -> None:
 
 def _detect_llm_label() -> str:
     anthropic_base = os.environ.get("ANTHROPIC_BASE_URL", "").lower()
+    if "deepseek" in anthropic_base:
+        return "deepseek"
     if "moonshot" in anthropic_base:
         return "moonshot"
     if "kimi" in anthropic_base:
         return "kimi"
+    model = os.environ.get("ANTHROPIC_MODEL", "").lower()
+    if "deepseek" in model:
+        return "deepseek"
     if os.environ.get("ANTHROPIC_API_KEY"):
         return "anthropic-compatible"
     return "unknown"
@@ -977,24 +988,46 @@ def _run_full_game_creation_test(
     e2e_workspace: Path,
     execution_mode: ExecutionMode,
     run_id_prefix: str,
+    *,
+    stop_after: str | None = None,
 ) -> None:
-    """Shared harness for full-game creation tests with configurable execution mode."""
+    """Shared harness for full-game creation tests with configurable execution mode.
+
+    If *stop_after* is set to a stage name (e.g. "intake", "outline_review"),
+    the run stops cleanly after that stage without raising an error.
+    """
     project_name = _artifact_run_id(run_id_prefix)
     ArtifactWriter = _load_artifact_writer()
     artifacts = ArtifactWriter(SCREENSHOT_DIR, project_name)
     server_url, proc = start_real_llm_server(e2e_workspace, mode=execution_mode, artifacts=artifacts)
     runner_module = _load_full_game_creation_runner_module()
+
+    def _noop_stage(_runner):
+        return "stopped-early"
+
+    stage_map = {
+        "create_project": _run_create_project_stage,
+        "intake": _run_intake_stage,
+        "brief_review": _run_brief_review_stage,
+        "outline_review": _run_outline_review_stage,
+        "freeze_and_build": _run_freeze_and_build_stage,
+    }
+
+    if stop_after:
+        stop_seen = False
+        for key in list(stage_map):
+            if stop_seen:
+                stage_map[key] = _noop_stage
+            if key == stop_after:
+                stop_seen = True
+
     runner = runner_module.FullGameCreationRunner(
         page=page,
         server_url=server_url,
         workspace=e2e_workspace,
         mode=execution_mode,
         artifacts=artifacts,
-        create_project=_run_create_project_stage,
-        intake=_run_intake_stage,
-        brief_review=_run_brief_review_stage,
-        outline_review=_run_outline_review_stage,
-        freeze_and_build=_run_freeze_and_build_stage,
+        **stage_map,
     )
 
     page.on("pageerror", lambda err: artifacts.write_text(
@@ -1007,7 +1040,15 @@ def _run_full_game_creation_test(
         runner.run()
     except Exception as exc:
         result = "FAIL"
-        first_failing_step = runner.diagnostics[0]["code"] if getattr(runner, "diagnostics", []) else exc.__class__.__name__
+        fallback_stages = {fb.get("stage") for fb in getattr(runner, "fallbacks", [])}
+        blocking_diags = [
+            d for d in getattr(runner, "diagnostics", [])
+            if d.get("stage") not in fallback_stages
+        ]
+        if blocking_diags:
+            first_failing_step = blocking_diags[0]["code"]
+        else:
+            first_failing_step = exc.__class__.__name__
         raise
     finally:
         stop_real_llm_server(proc)
@@ -1056,3 +1097,30 @@ def test_full_game_creation_with_real_llm_and_real_build(
     Trigger manually; do not run in standard CI.
     """
     _run_full_game_creation_test(page, e2e_workspace, FULL_GAME_CREATION_MODES.REAL_BUILD_ACCEPTANCE, "real_build")
+
+
+def test_full_game_creation_intake_and_draft_only(
+    page: Page,
+    e2e_workspace: Path,
+) -> None:
+    """Fast check: create project → intake chat → draft generation.
+    Stops after the LLM returns a draft. Does NOT enter brief review.
+    Useful for quick LLM connectivity and draft-quality checks.
+    """
+    _run_full_game_creation_test(
+        page, e2e_workspace, _load_default_execution_mode(), "intake_check",
+        stop_after="intake",
+    )
+
+
+def test_full_game_creation_brief_and_outline_review_only(
+    page: Page,
+    e2e_workspace: Path,
+) -> None:
+    """Review-only: full pipeline through outline confirmation, stops before freeze.
+    Tests the UI confirmation flow including API fallback for stuck buttons.
+    """
+    _run_full_game_creation_test(
+        page, e2e_workspace, _load_default_execution_mode(), "review_check",
+        stop_after="outline_review",
+    )

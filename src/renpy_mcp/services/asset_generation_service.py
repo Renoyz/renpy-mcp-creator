@@ -8,6 +8,7 @@ into a focused, testable unit.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -235,6 +236,59 @@ class AssetGenerationService:
     # Background asset generation
     # ------------------------------------------------------------------
 
+    def _mock_background_assets(
+        self,
+        project_name: str,
+        scenes: list,
+        round_id: str | None = None,
+    ) -> dict[str, dict]:
+        """Use PIL placeholders for all backgrounds (mock mode)."""
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for asset generation")
+        project_dir = self.pm._project_dir(project_name)
+        bg_dir = project_dir / "game" / "images" / "background"
+        bg_dir.mkdir(parents=True, exist_ok=True)
+        result: dict[str, dict] = {}
+        for scene in scenes:
+            file_name = f"bg_{scene.scene_id}.png"
+            final_path = bg_dir / file_name
+            self._generate_placeholder_background(final_path, scene)
+            result[scene.scene_id] = {
+                "final_path": str(final_path),
+                "staging_path": None,
+            }
+        return result
+
+    def _mock_character_assets(
+        self,
+        project_name: str,
+        blueprint: Any,
+        scenes: list,
+        round_id: str | None = None,
+    ) -> dict[str, dict]:
+        """Use PIL placeholders for all character sprites (mock mode)."""
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for asset generation")
+        project_dir = self.pm._project_dir(project_name)
+        sprite_dir = project_dir / "game" / "images" / "sprites"
+        sprite_dir.mkdir(parents=True, exist_ok=True)
+        result: dict[str, dict] = {}
+        seen: set[str] = set()
+        for scene in scenes:
+            for char_name in getattr(scene, "characters_present", []) or []:
+                safe_name = "".join(c if c.isalnum() else "_" for c in char_name)
+                if safe_name in seen:
+                    continue
+                seen.add(safe_name)
+                file_name = f"{safe_name}_sprite.png"
+                final_path = sprite_dir / file_name
+                self._generate_placeholder_character(final_path, char_name)
+                result[safe_name] = {
+                    "final_path": str(final_path),
+                    "staging_path": None,
+                }
+        return result
+
     async def generate_background_assets(
         self,
         project_name: str,
@@ -246,6 +300,9 @@ class AssetGenerationService:
 
         Tries ImageService first; falls back to PIL placeholder on failure.
         """
+        if os.environ.get("RENPY_MCP_MOCK_IMAGE_GEN"):
+            return self._mock_background_assets(project_name, scenes, round_id)
+
         if self.pm is None:
             raise RuntimeError("ProjectManager is required for asset generation")
 
@@ -432,6 +489,9 @@ class AssetGenerationService:
         Attempts background removal via BackgroundRemover when available.
         Post-processes sprites with normalize_sprite for consistent baseline.
         """
+        if os.environ.get("RENPY_MCP_MOCK_IMAGE_GEN"):
+            return self._mock_character_assets(project_name, blueprint, scenes, round_id)
+
         from renpy_mcp.services.prototype_generation_service import _safe_character_id
 
         if self.pm is None:

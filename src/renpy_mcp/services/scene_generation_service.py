@@ -234,6 +234,15 @@ class SceneGenerationService:
             if not scene.mood.strip():
                 scene.mood = "neutral"
 
+        # Beat count warning (soft check)
+        for scene in scenes:
+            beats = getattr(scene, "dialogue_beats", []) or []
+            if len(beats) < 4:
+                logger.warning(
+                    "Scene %s has only %d dialogue_beats (recommended >= 4). This may result in sparse narrative.",
+                    getattr(scene, "scene_id", "?"), len(beats)
+                )
+
     # ------------------------------------------------------------------
     # LLM scene generation
     # ------------------------------------------------------------------
@@ -243,6 +252,10 @@ class SceneGenerationService:
         chapter: ChapterSummary,
         blueprint: ProjectBlueprint,
         contract: GenerationContract | None = None,
+        outline_entry: dict | None = None,
+        previous_chapter_summaries: list[str] | None = None,
+        min_beats_per_scene: int = 2,
+        max_beats_per_scene: int = 8,
     ) -> list:
         """Generate 2-4 structured scenes for the prototype chapter via LLM.
 
@@ -304,6 +317,43 @@ class SceneGenerationService:
                     style_lines.append(f'- Forbidden tone drift: {forbidden}')
             style_block = "\n".join(style_lines) + "\n\n"
 
+        # Construct narrative block from chapter outline
+        narrative_lines = []
+        if outline_entry:
+            narrative_lines.append("Chapter Narrative Direction:")
+            if outline_entry.get("chapter_goal"):
+                narrative_lines.append(f"- Chapter Goal: {outline_entry['chapter_goal']}")
+            if outline_entry.get("emotional_arc"):
+                narrative_lines.append(f"- Emotional Arc: {outline_entry['emotional_arc']}")
+            if outline_entry.get("key_conflict"):
+                narrative_lines.append(f"- Key Conflict: {outline_entry['key_conflict']}")
+            if outline_entry.get("character_focus"):
+                chars = ", ".join(outline_entry["character_focus"])
+                narrative_lines.append(f"- Character Focus: {chars}")
+            if outline_entry.get("relationship_shift"):
+                narrative_lines.append(f"- Relationship Shift: {outline_entry['relationship_shift']}")
+            if outline_entry.get("reveals"):
+                narrative_lines.append(f"- Key Reveals: {outline_entry['reveals']}")
+            if outline_entry.get("end_state"):
+                narrative_lines.append(f"- Desired End State: {outline_entry['end_state']}")
+            if outline_entry.get("mood_or_pacing_bias"):
+                narrative_lines.append(f"- Mood / Pacing: {outline_entry['mood_or_pacing_bias']}")
+            narrative_lines.append("")
+        narrative_block = "\n".join(narrative_lines)
+
+        # Construct continuity block from previous chapters
+        continuity_lines = []
+        if previous_chapter_summaries:
+            continuity_lines.append("Previously Established (DO NOT REPEAT):")
+            for prev in previous_chapter_summaries:
+                continuity_lines.append(prev)
+            continuity_lines.append(
+                "Ensure this chapter starts from a different location and situation than "
+                "previous chapters. Do NOT repeat the same arrival/introduction pattern."
+            )
+            continuity_lines.append("")
+        continuity_block = "\n".join(continuity_lines)
+
         prompt = f"""Based on the following blueprint, generate 2-4 detailed scenes for the prototype chapter.
 
 Project: {blueprint.title}
@@ -316,7 +366,7 @@ Characters:
 
 Prototype Chapter: {chapter.name} (chapter_id: "{chapter.id}")
 
-{style_block}Generate a JSON array of scenes. Each scene must have these fields:
+{narrative_block}{continuity_block}{style_block}Generate a JSON array of scenes. Each scene must have these fields:
 - scene_id: unique identifier string (prefixed with the chapter_id, e.g., "{chapter.id}-s1")
 - title: scene title
 - summary: 1-2 sentence narration summary
@@ -345,6 +395,9 @@ Requirements:
 - 2 to 4 scenes total
 - Linear flow: each scene (except last) points to the next
 - Last scene has next_scene_id = null
+- Each scene MUST have between {min_beats_per_scene} and {max_beats_per_scene} dialogue_beats
+- Each dialogue beat should feel like a complete emotional exchange, not a single-line reply
+- Build mini-arcs within the scene's beats: setup -> tension -> release/follow-through
 - Output ONLY the JSON array, nothing else.
 """
 
@@ -428,13 +481,42 @@ Requirements:
         if self.provider is None:
             raise RuntimeError("No LLM provider configured for prototype generation.")
 
+        # Read chapter outline for narrative direction
+        outline_lookup: dict[str, dict] = {}
+        if self.pm is not None:
+            try:
+                outline = self.pm.read_chapter_outline(project_name)
+                if outline:
+                    for entry in outline.chapters:
+                        outline_lookup[entry.chapter_id] = entry.model_dump()
+            except Exception:
+                pass  # outline reading failure should not block generation
+
         packages: dict[str, list] = {}
         chapter_map: dict[str, ChapterSummary] = {}
+        previous_chapter_summaries: list[str] = []
+
         for chapter in blueprint.chapters:
             contract = self.build_generation_contract(project_name, blueprint, chapter)
-            scenes = await self.generate_scenes(chapter, blueprint, contract=contract)
+            outline_entry = outline_lookup.get(chapter.id)
+
+            scenes = await self.generate_scenes(
+                chapter,
+                blueprint,
+                contract=contract,
+                outline_entry=outline_entry,
+                previous_chapter_summaries=list(previous_chapter_summaries),
+                min_beats_per_scene=4,
+                max_beats_per_scene=8,
+            )
             packages[chapter.id] = scenes
             chapter_map[chapter.id] = chapter
+
+            # Accumulate chapter summary for continuity
+            ch_summary_parts = [f"Chapter {chapter.order}: {chapter.name}"]
+            for s in scenes:
+                ch_summary_parts.append(f"  - {s.scene_id}: {s.summary}")
+            previous_chapter_summaries.append("\n".join(ch_summary_parts))
 
         # Persist scene packages snapshot
         if self.pm is not None:
