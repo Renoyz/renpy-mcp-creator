@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from PIL import Image
+
 from renpy_mcp.services.imported_asset_service import ImportedAssetService
 from renpy_mcp.services.prototype_activation_service import PrototypeActivationService
 from renpy_mcp.services.script_render_service import ScriptRenderService, final_path_from_staging
+from renpy_mcp.models import ImageGenerationResult
 
 from renpy_mcp.blueprint.models import ChapterSummary, PrototypeManifest
 from renpy_mcp.services.prototype_generation_service import PrototypeScene
 
 if TYPE_CHECKING:
     from renpy_mcp.services.project_manager import ProjectManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class StepwiseGenerationService:
@@ -34,13 +42,23 @@ class StepwiseGenerationService:
         "failed",
     ]
 
-    def __init__(self, pm: "ProjectManager", imported_asset_service: ImportedAssetService | None = None) -> None:
+    def __init__(
+        self,
+        pm: "ProjectManager",
+        imported_asset_service: ImportedAssetService | None = None,
+        image_service: Any | None = None,
+    ) -> None:
         if pm is None:
             raise ValueError("ProjectManager is required")
         self.pm = pm
         self.imported_asset_service = imported_asset_service or ImportedAssetService(pm)
         self._script_renderer = ScriptRenderService(pm)
         self._prototype_activation = PrototypeActivationService(pm)
+        if image_service is None:
+            from renpy_mcp.ai.image_service import ImageService
+
+            image_service = ImageService(pm.settings)
+        self.image_service = image_service
 
     # ------------------------------------------------------------------
     # State persistence helpers
@@ -271,6 +289,222 @@ class StepwiseGenerationService:
             "renderable": False,
         }
 
+    @staticmethod
+    def _default_character_prompt(target: str, variant: str) -> str:
+        return (
+            f"Generate a visual novel character sprite for {target} in variant {variant}. "
+            "Style should match the project and be one character only, full body, transparent background."
+        )
+
+    @staticmethod
+    def _default_background_prompt(target: str, variant: str) -> str:
+        return (
+            f"Generate a visual novel background plate for {target}, variant {variant}. "
+            "Use 16:9 composition, no characters or text."
+        )
+
+    def _default_generation_prompt(self, *, kind: str, target: str, variant: str, prompt: str) -> str:
+        prompt = self._coerce_prompt_text(prompt)
+        if prompt:
+            return prompt
+        if kind == "character_sprite":
+            return self._default_character_prompt(target, variant)
+        if kind == "background":
+            return self._default_background_prompt(target, variant)
+        raise ValueError(f"Unsupported asset kind: {kind!r}")
+
+    @staticmethod
+    def _coerce_prompt_text(prompt: str | None) -> str:
+        return prompt.strip() if isinstance(prompt, str) else ""
+
+    def _cleanup_generated_intermediates(self, project_dir: Path, files: list[Path]) -> None:
+        image_root = (project_dir / "game" / "images").resolve()
+        for file_path in files:
+            try:
+                resolved = file_path.resolve()
+                if resolved.exists() and resolved.is_file() and resolved.is_relative_to(image_root):
+                    resolved.unlink()
+            except Exception:
+                logger.warning("Failed to clean generated intermediate image %s", file_path, exc_info=True)
+
+    def _mock_generate_image_file(
+        self,
+        *,
+        project_dir: Path,
+        image_type: str,
+        base_name: str,
+        prompt: str,
+    ) -> ImageGenerationResult:
+        output_dir = project_dir / "game" / "images" / image_type
+        output_dir.mkdir(parents=True, exist_ok=True)
+        primary = output_dir / f"{base_name}.png"
+        if image_type == "background":
+            image = Image.new("RGBA", (1280, 720), color=(28, 40, 64, 255))
+        else:
+            image = Image.new("RGBA", (640, 720), color=(80, 48, 96, 255))
+        image.save(primary, format="PNG")
+        return ImageGenerationResult(
+            success=True,
+            prompt=prompt,
+            image_type=image_type,
+            files=[primary],
+            primary_file=primary,
+        )
+
+    def _build_generated_slot(
+        self,
+        *,
+        project_name: str,
+        round_id: str,
+        kind: str,
+        target: str,
+        variant: str,
+        generation_prompt: str,
+        generated_file: Path,
+    ) -> dict[str, Any]:
+        width, height, has_alpha = self.imported_asset_service._decode(generated_file.read_bytes())
+        normalized_kind = self.imported_asset_service._normalize_kind(kind)
+        safe_target = self._normalize_target(target)
+        safe_variant = self._normalize_target(variant)
+        safe_extension = generated_file.suffix.lower() or ".png"
+        if safe_extension not in ImportedAssetService._ALLOWED_EXTENSIONS:
+            safe_extension = ".png"
+
+        validation = self.imported_asset_service._build_validation(
+            width,
+            height,
+            normalized_kind,
+            has_alpha,
+        )
+        renderable = (
+            normalized_kind == "background"
+            or (validation["ok"] and validation["reason"] == "ok")
+        )
+        asset_id = self._slot_asset_id(normalized_kind, safe_target, safe_variant)
+        staging_path = self.imported_asset_service._staging_relpath(
+            round_id=self.imported_asset_service._safe_round_id(round_id),
+            kind=normalized_kind,
+            asset_id=asset_id,
+            extension=safe_extension,
+        )
+        final_path = self.imported_asset_service._final_relpath(
+            kind=normalized_kind,
+            asset_id=asset_id,
+            extension=safe_extension,
+        )
+        return {
+            "asset_id": asset_id,
+            "kind": normalized_kind,
+            "target": safe_target,
+            "variant": safe_variant,
+            "source": "generated",
+            "status": "generated",
+            "path": final_path,
+            "staging_path": staging_path,
+            "preview_url": self.imported_asset_service._build_preview_url(
+                project_name=project_name,
+                staging_path=staging_path,
+            ),
+            "placeholder": False,
+            "renderable": renderable,
+            "validation": validation,
+            "generation_prompt": generation_prompt,
+        }
+
+    async def _generate_and_stage_image(
+        self,
+        project_name: str,
+        project_dir: Path,
+        kind: str,
+        target: str,
+        variant: str,
+        prompt: str,
+        round_id: str,
+    ) -> tuple[dict[str, Any], Path]:
+        generation_prompt = self._default_generation_prompt(
+            kind=kind,
+            target=target,
+            variant=variant,
+            prompt=prompt,
+        )
+        normalized_target = self._normalize_target(target)
+        normalized_variant = self._normalize_target(variant)
+        image_type = "background" if kind == "background" else "character"
+        base_name = f"{normalized_target}_{normalized_variant}"
+
+        if os.environ.get("RENPY_MCP_MOCK_IMAGE_GEN"):
+            result = self._mock_generate_image_file(
+                project_dir=project_dir,
+                prompt=generation_prompt,
+                image_type=image_type,
+                base_name=base_name,
+            )
+        else:
+            if not self.image_service.is_available():
+                raise RuntimeError("Image generation service is not available")
+            result = await self.image_service.generate_image(
+                project_dir=project_dir,
+                prompt=generation_prompt,
+                image_type=image_type,
+                base_name=base_name,
+            )
+        if not isinstance(result, ImageGenerationResult):
+            raise RuntimeError("Image service returned an unexpected result type")
+        if not result.success:
+            raise RuntimeError(f"Image generation failed: {result.error or 'unknown error'}")
+        if result.primary_file is None:
+            raise RuntimeError("Image generation did not return a primary file")
+
+        generated_file = Path(result.primary_file)
+        if not generated_file.exists():
+            raise RuntimeError("Generated image file is missing")
+
+        slot = self._build_generated_slot(
+            project_name=project_name,
+            round_id=round_id,
+            kind=kind,
+            target=normalized_target,
+            variant=normalized_variant,
+            generation_prompt=result.prompt or generation_prompt,
+            generated_file=generated_file,
+        )
+        destination = project_dir / cast(str, slot["staging_path"])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(generated_file.read_bytes())
+        cleanup_files = [Path(path) for path in result.files]
+        if generated_file not in cleanup_files:
+            cleanup_files.append(generated_file)
+        self._cleanup_generated_intermediates(project_dir, cleanup_files)
+        return slot, destination
+
+    def _persist_generated_slot(
+        self,
+        state: dict[str, Any],
+        collection: Literal["character_assets", "background_assets"],
+        slot_id: str,
+        new_slot: dict[str, Any],
+        replace: bool,
+    ) -> dict[str, Any]:
+        existing_slot = state[collection].get(slot_id)
+        if existing_slot is not None and existing_slot.get("status") == "accepted" and not replace:
+            raise ValueError(f"Asset {slot_id} is already accepted")
+
+        existing_slot = state[collection].get(slot_id)
+        if existing_slot is not None:
+            new_slot["asset_id"] = existing_slot.get("asset_id", slot_id)
+            new_slot["target"] = existing_slot.get("target", new_slot["target"])
+            new_slot["kind"] = existing_slot.get("kind", new_slot["kind"])
+            new_slot["variant"] = existing_slot.get("variant", new_slot["variant"])
+            new_slot["placeholder"] = False
+
+        state[collection][slot_id] = new_slot
+        return new_slot
+
+    def _ensure_round_id(self, state: dict[str, Any], project_name: str) -> str:
+        if state.get("round_id") is None or not isinstance(state["round_id"], str):
+            state["round_id"] = self._round_for_project(project_name, state)
+        return cast(str, state["round_id"])
+
     # ------------------------------------------------------------------
     # Flow transitions
     # ------------------------------------------------------------------
@@ -404,6 +638,68 @@ class StepwiseGenerationService:
         self.save_state(project_name, state)
         return slot
 
+    async def generate_character_asset(
+        self,
+        *,
+        project_name: str,
+        character_id: str,
+        variant: str,
+        prompt: str,
+        replace: bool = False,
+    ) -> dict[str, Any]:
+        state = self.get_state(project_name)
+        self._require_state(
+            state,
+            "character_assets_draft",
+            "character_assets_confirmed",
+            "background_assets_draft",
+            "background_assets_confirmed",
+            action="generate character asset",
+        )
+        round_id = self._ensure_round_id(state, project_name)
+
+        collection = "character_assets"
+        existing_slot_id = self._find_existing_slot_id(
+            state,
+            collection,
+            "character_sprite",
+            character_id,
+            variant,
+        )
+        slot_id = existing_slot_id or self._slot_asset_id(
+            kind="character_sprite",
+            target=self._normalize_target(character_id),
+            variant=self._normalize_target(variant),
+        )
+        existing_slot = state[collection].get(slot_id)
+        if existing_slot is not None and existing_slot.get("status") == "accepted" and not replace:
+            raise ValueError(f"Asset {slot_id} is already accepted")
+
+        project_dir = self.pm._project_dir(project_name)
+        slot, _ = await self._generate_and_stage_image(
+            project_name=project_name,
+            project_dir=project_dir,
+            kind="character_sprite",
+            target=character_id,
+            variant=variant,
+            prompt=self._coerce_prompt_text(prompt),
+            round_id=round_id,
+        )
+        _ = self._persist_generated_slot(
+            state=state,
+            collection=collection,
+            slot_id=slot_id,
+            new_slot=slot,
+            replace=replace,
+        )
+
+        self._ensure_required_character_slots(project_name, state)
+        state["round_id"] = round_id
+        if state["state"] == "character_assets_confirmed":
+            state["state"] = "character_assets_draft"
+        self.save_state(project_name, state)
+        return slot
+
     def upload_background_asset(
         self,
         *,
@@ -461,6 +757,67 @@ class StepwiseGenerationService:
         state["background_assets"][target_slot_id] = slot
         if original_slot_id != target_slot_id:
             state["background_assets"].pop(original_slot_id, None)
+
+        self._ensure_required_background_slots(project_name, state)
+        state["round_id"] = round_id
+        if state["state"] == "background_assets_confirmed":
+            state["state"] = "background_assets_draft"
+        self.save_state(project_name, state)
+        return slot
+
+    async def generate_background_asset(
+        self,
+        *,
+        project_name: str,
+        location_id: str,
+        variant: str,
+        prompt: str,
+        replace: bool = False,
+    ) -> dict[str, Any]:
+        state = self.get_state(project_name)
+        self._require_state(
+            state,
+            "background_assets_draft",
+            "background_assets_confirmed",
+            "character_assets_confirmed",
+            action="generate background asset",
+        )
+        round_id = self._ensure_round_id(state, project_name)
+
+        collection = "background_assets"
+        existing_slot_id = self._find_existing_slot_id(
+            state,
+            collection,
+            "background",
+            location_id,
+            variant,
+        )
+        slot_id = existing_slot_id or self._slot_asset_id(
+            kind="background",
+            target=self._normalize_target(location_id),
+            variant=self._normalize_target(variant),
+        )
+        existing_slot = state[collection].get(slot_id)
+        if existing_slot is not None and existing_slot.get("status") == "accepted" and not replace:
+            raise ValueError(f"Asset {slot_id} is already accepted")
+
+        project_dir = self.pm._project_dir(project_name)
+        slot, _ = await self._generate_and_stage_image(
+            project_name=project_name,
+            project_dir=project_dir,
+            kind="background",
+            target=location_id,
+            variant=variant,
+            prompt=self._coerce_prompt_text(prompt),
+            round_id=round_id,
+        )
+        _ = self._persist_generated_slot(
+            state=state,
+            collection=collection,
+            slot_id=slot_id,
+            new_slot=slot,
+            replace=replace,
+        )
 
         self._ensure_required_background_slots(project_name, state)
         state["round_id"] = round_id

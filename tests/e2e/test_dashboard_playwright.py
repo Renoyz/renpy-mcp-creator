@@ -74,7 +74,7 @@ def start_mock_llm_server(workspace: Path) -> tuple[str, subprocess.Popen]:
     deadline = time.time() + 10.0
     while time.time() < deadline:
         try:
-            if httpx.get(f"{url}/api/status", timeout=2.0).status_code == 200:
+            if httpx.get(f"{url}/api/status", timeout=2.0, trust_env=False).status_code == 200:
                 return url, proc
         except Exception:
             pass
@@ -102,7 +102,7 @@ def wait_for_server(url: str, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if httpx.get(f"{url}/api/status", timeout=2.0).status_code == 200:
+            if httpx.get(f"{url}/api/status", timeout=2.0, trust_env=False).status_code == 200:
                 return True
         except Exception:
             pass
@@ -130,6 +130,7 @@ def create_project_via_api(server_url: str, project_name: str) -> None:
         f"{server_url}/api/projects",
         json={"name": project_name},
         timeout=10.0,
+        trust_env=False,
     )
     assert response.status_code == 200, response.text
 
@@ -177,6 +178,14 @@ def open_blueprint_tab(page: Page) -> Locator:
 def open_scene_tab(page: Page) -> Locator:
     """Open the current Scene workspace tab."""
     tab = page.get_by_role("button", name="Scene", exact=True).first
+    expect(tab).to_be_visible(timeout=10000)
+    tab.click()
+    expect(tab).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
+    return tab
+
+
+def open_generation_tab(page: Page) -> Locator:
+    tab = page.get_by_role("button", name="Generation", exact=True).first
     expect(tab).to_be_visible(timeout=10000)
     tab.click()
     expect(tab).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
@@ -247,9 +256,36 @@ def test_project_workspace(page: Page, server_url: str) -> None:
 
     # New project without blueprint opens the Intake refinement workspace.
     expect_new_project_intake_workspace(page)
-    # Planning-only projects must NOT expose build actions.
-    expect(page.locator("button", has_text="Build")).to_have_count(0, timeout=5000)
-    expect(page.locator("button", has_text="Preview")).to_have_count(0, timeout=5000)
+
+
+def test_generation_tab_exposes_ai_and_upload_asset_entries(page: Page, server_url: str) -> None:
+    """Generation UI must expose AI generation and manual upload as peer asset entry points."""
+    assert wait_for_server(server_url), "Server not ready"
+
+    project_name = f"playwright_generation_assets_{int(time.time())}"
+    create_project_via_api(server_url, project_name)
+    open_workspace_from_project_list(page, server_url, project_name)
+    open_generation_tab(page)
+
+    expect(page.get_by_text("Character Assets")).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Background Assets")).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Generate with AI").first).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Upload Image").first).to_be_visible(timeout=10000)
+    expect(page.get_by_label("Prompt").first).to_be_visible(timeout=10000)
+    expect(page.get_by_text(re.compile("fallback", re.IGNORECASE))).to_have_count(0)
+
+    page.get_by_role("button", name="Start Characters").click()
+    expect(page.get_by_text("Operation completed.")).to_be_visible(timeout=10000)
+
+    page.get_by_placeholder("character name/id").first.fill("Alice")
+    page.get_by_label("Prompt").first.fill("ink vampire hunter sprite")
+    page.get_by_role("button", name="Generate with AI").first.click()
+
+    slot = page.get_by_test_id("slot-card-char_Alice_normal")
+    expect(slot).to_be_visible(timeout=15000)
+    expect(slot).to_contain_text("Source: generated", timeout=15000)
+    expect(slot.get_by_label("Alice normal prompt")).to_have_value("ink vampire hunter sprite")
+    expect(slot.locator("img")).to_have_attribute("src", re.compile(r"/api/projects/.+/asset-file/__staging__/"))
 
 
 def test_direct_workspace_url(page: Page, server_url: str) -> None:

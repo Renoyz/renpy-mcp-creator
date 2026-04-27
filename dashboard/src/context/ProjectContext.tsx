@@ -228,6 +228,8 @@ export interface AssetSlot {
   kind: "character_sprite" | "background";
   target: string;
   variant: string;
+  generation_prompt?: string | null;
+  prompt?: string | null;
   source: "generated" | "uploaded" | null;
   status: "empty" | "generating" | "generated" | "uploaded" | "accepted" | "failed";
   path: string | null;

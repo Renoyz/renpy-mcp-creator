@@ -46,6 +46,7 @@ def server_url(e2e_workspace: Path):
     env = os.environ.copy()
     env["RENPY_MCP_WORKSPACE"] = str(e2e_workspace)
     env["RENPY_MCP_MOCK_BUILD"] = "1"
+    env["RENPY_MCP_MOCK_IMAGE_GEN"] = "1"
 
     # Strip real provider credentials so the default backend is hermetic.
     # Only tests that explicitly opt-in to mock LLM (via start_mock_llm_server)
@@ -78,7 +79,7 @@ def server_url(e2e_workspace: Path):
     ready = False
     while time.time() < deadline:
         try:
-            resp = httpx.get(f"{url}/api/status", timeout=2.0)
+            resp = httpx.get(f"{url}/api/status", timeout=2.0, trust_env=False)
             if resp.status_code == 200:
                 ready = True
                 break

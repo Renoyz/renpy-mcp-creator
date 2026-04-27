@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import asyncio
 
 from pathlib import Path
 
@@ -101,6 +102,48 @@ def _seed_two_chapter_scene_packages(pm, project_name: str) -> None:
             ]
         ),
     )
+
+
+class FakeImageService:
+    def __init__(self, color=(21, 42, 84, 255), size=(640, 360)):
+        self.color = color
+        self.size = size
+        self.calls = []
+
+    def is_available(self) -> bool:
+        return True
+
+    async def generate_image(
+        self,
+        *,
+        project_dir: Path,
+        prompt: str,
+        image_type: str,
+        base_name: str | None = None,
+        generate_emotions: bool = False,
+    ):
+        from renpy_mcp.models import ImageGenerationResult
+
+        self.calls.append(
+            {
+                "project_dir": project_dir,
+                "prompt": prompt,
+                "image_type": image_type,
+                "base_name": base_name,
+                "generate_emotions": generate_emotions,
+            }
+        )
+        output_dir = project_dir / "game" / "images" / image_type
+        output_dir.mkdir(parents=True, exist_ok=True)
+        primary = output_dir / f"{base_name or 'generated'}.png"
+        primary.write_bytes(_rgba_png_bytes(color=self.color, size=self.size))
+        return ImageGenerationResult(
+            success=True,
+            prompt=prompt,
+            image_type=image_type,
+            files=[primary],
+            primary_file=primary,
+        )
 
 
 @pytest.fixture()
@@ -222,6 +265,131 @@ class TestStepwiseService:
             )
 
         assert slot_path.read_bytes() == original_staging_bytes
+
+    def test_generated_character_slot_can_be_accepted_and_keeps_prompt(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, project_dir = project
+        fake_image_service = FakeImageService()
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+
+        slot = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="ink vampire hunter sprite",
+            )
+        )
+
+        assert slot["asset_id"] == "char_alice_normal"
+        assert slot["source"] == "generated"
+        assert slot["status"] == "generated"
+        assert slot["generation_prompt"] == "ink vampire hunter sprite"
+        assert slot["preview_url"].startswith(f"/api/projects/{project_name}/asset-file/__staging__/")
+        assert not Path(slot["staging_path"]).is_absolute()
+        assert (project_dir / slot["staging_path"]).exists()
+        assert not fake_image_service.calls[0]["project_dir"].joinpath("game/images/character/alice_normal.png").exists()
+
+        accepted = service.accept_asset(project_name, slot["asset_id"])
+        assert accepted["status"] == "accepted"
+
+    def test_generate_replaces_draft_slot_with_new_prompt(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        fake_image_service = FakeImageService()
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+
+        first = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="first prompt",
+            )
+        )
+        second = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="second prompt",
+            )
+        )
+
+        assert second["asset_id"] == first["asset_id"]
+        assert second["generation_prompt"] == "second prompt"
+        state = service.get_state(project_name)
+        assert state["character_assets"][first["asset_id"]]["generation_prompt"] == "second prompt"
+
+    def test_generate_rejects_accepted_slot_without_replace_and_keeps_staging_file(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, project_dir = project
+        fake_image_service = FakeImageService()
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        first = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="first prompt",
+            )
+        )
+        service.accept_asset(project_name, first["asset_id"])
+        slot_path = project_dir / first["staging_path"]
+        original_staging_bytes = slot_path.read_bytes()
+
+        with pytest.raises(ValueError, match="already accepted"):
+            asyncio.run(
+                service.generate_character_asset(
+                    project_name=project_name,
+                    character_id="alice",
+                    variant="normal",
+                    prompt="second prompt",
+                )
+            )
+
+        assert slot_path.read_bytes() == original_staging_bytes
+        assert len(fake_image_service.calls) == 1
+
+    def test_generate_can_replace_accepted_slot_when_requested(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        fake_image_service = FakeImageService()
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        first = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="first prompt",
+            )
+        )
+        service.accept_asset(project_name, first["asset_id"])
+
+        second = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="replacement prompt",
+                replace=True,
+            )
+        )
+
+        assert second["asset_id"] == first["asset_id"]
+        assert second["status"] == "generated"
+        assert second["generation_prompt"] == "replacement prompt"
+        state = service.get_state(project_name)
+        assert state["character_assets"][first["asset_id"]]["status"] == "generated"
+        assert len(fake_image_service.calls) == 2
 
     def test_background_reupload_rejects_accepted_slot_without_replace_and_keeps_staging_file(self, service, project):
         project_name, project_dir = project

@@ -144,6 +144,24 @@ def _parse_accept_payload(payload: dict[str, object] | None) -> bool:
     return allow_non_renderable
 
 
+def _parse_generation_payload(payload: dict[str, object] | None) -> tuple[str, bool]:
+    if payload is None:
+        return "", False
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body for generation request")
+    prompt = payload.get("prompt", "")
+    if prompt is None:
+        prompt = ""
+    if not isinstance(prompt, str):
+        raise HTTPException(status_code=400, detail="prompt must be a string")
+    replace = payload.get("replace", False)
+    if replace is None:
+        replace = False
+    if not isinstance(replace, bool):
+        raise HTTPException(status_code=400, detail="replace must be a boolean")
+    return prompt, replace
+
+
 async def _read_upload_bytes(file: UploadFile | None) -> bytes:
     if file is None:
         raise HTTPException(status_code=400, detail="Missing image file")
@@ -215,11 +233,22 @@ async def api_stepwise_character_generate(
     project_name: str,
     character_id: str,
     variant: str,
+    payload: dict[str, object] | None = Body(default=None),
 ):
-    raise HTTPException(
-        status_code=501,
-        detail=f"Character asset generation for {character_id}/{variant} is not implemented in this task.",
-    )
+    service = _make_stepwise_service(project_name)
+    prompt, replace = _parse_generation_payload(payload)
+    try:
+        return await service.generate_character_asset(
+            project_name=project_name,
+            character_id=character_id,
+            variant=variant,
+            prompt=prompt,
+            replace=replace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @router.post("/api/projects/{project_name}/generation/characters/{asset_id}/accept")
@@ -276,15 +305,45 @@ async def api_stepwise_background_upload(
         raise HTTPException(status_code=status, detail=str(exc))
 
 
+async def _generate_background_slot(
+    project_name: str,
+    location_id: str,
+    variant: str,
+    payload: dict[str, object] | None = Body(default=None),
+) -> dict[str, object]:
+    service = _make_stepwise_service(project_name)
+    prompt, replace = _parse_generation_payload(payload)
+    try:
+        return await service.generate_background_asset(
+            project_name=project_name,
+            location_id=location_id,
+            variant=variant,
+            prompt=prompt,
+            replace=replace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/backgrounds/{location_id}/{variant}/generate")
+async def api_stepwise_background_generate_variant(
+    project_name: str,
+    location_id: str,
+    variant: str,
+    payload: dict[str, object] | None = Body(default=None),
+):
+    return await _generate_background_slot(project_name, location_id, variant, payload)
+
+
 @router.post("/api/projects/{project_name}/generation/backgrounds/{location_id}/generate")
 async def api_stepwise_background_generate(
     project_name: str,
     location_id: str,
+    payload: dict[str, object] | None = Body(default=None),
 ):
-    raise HTTPException(
-        status_code=501,
-        detail=f"Background asset generation for {location_id} is not implemented in this task.",
-    )
+    return await _generate_background_slot(project_name, location_id, "main", payload)
 
 
 @router.post("/api/projects/{project_name}/generation/backgrounds/{asset_id}/accept")

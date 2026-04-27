@@ -48,6 +48,44 @@ def _rgba_png_bytes(size=(640, 360)) -> bytes:
         return stream.getvalue()
 
 
+class FakeImageService:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def is_available(self) -> bool:
+        return True
+
+    async def generate_image(
+        self,
+        *,
+        project_dir: Path,
+        prompt: str,
+        image_type: str,
+        base_name: str | None = None,
+        generate_emotions: bool = False,
+    ):
+        from renpy_mcp.models import ImageGenerationResult
+
+        output_dir = project_dir / "game" / "images" / image_type
+        output_dir.mkdir(parents=True, exist_ok=True)
+        primary = output_dir / f"{base_name or 'generated'}.png"
+        size = (1280, 720) if image_type == "background" else (640, 720)
+        primary.write_bytes(_rgba_png_bytes(size=size))
+        return ImageGenerationResult(
+            success=True,
+            prompt=prompt,
+            image_type=image_type,
+            files=[primary],
+            primary_file=primary,
+        )
+
+
+def _install_fake_image_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    import renpy_mcp.ai.image_service as image_service_module
+
+    monkeypatch.setattr(image_service_module, "ImageService", FakeImageService)
+
+
 def test_generation_state_returns_idle_default_for_existing_project(client: TestClient, tmp_path: Path):
     project_name = "stepwise_state_idle"
     _make_project(client, project_name)
@@ -161,21 +199,51 @@ def test_scene_outline_start_and_confirm_routes_set_state(client: TestClient):
     assert confirm.json()["state"] == "scene_outline_confirmed"
 
 
-def test_character_generate_endpoint_is_not_implemented(client: TestClient):
-    project_name = "stepwise_character_generate_not_impl"
+def test_character_generate_endpoint_returns_generated_slot(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _install_fake_image_service(monkeypatch)
+    project_name = "stepwise_character_generate"
     _make_project(client, project_name)
+    start = client.post(f"/api/projects/{project_name}/generation/characters/start")
+    assert start.status_code == 200, start.text
 
     r = client.post(
-        f"/api/projects/{project_name}/generation/characters/Alice/normal/generate"
+        f"/api/projects/{project_name}/generation/characters/Alice/normal/generate",
+        json={"prompt": "ink vampire hunter sprite"},
     )
-    assert r.status_code == 501, r.text
-    assert "not implemented" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
+    slot = r.json()
+    assert slot["asset_id"] == "char_Alice_normal"
+    assert slot["source"] == "generated"
+    assert slot["status"] == "generated"
+    assert slot["generation_prompt"] == "ink vampire hunter sprite"
+    assert slot["preview_url"].startswith(f"/api/projects/{project_name}/asset-file/__staging__/")
+    assert not Path(slot["staging_path"]).is_absolute()
 
 
-def test_background_generate_endpoint_is_not_implemented(client: TestClient):
-    project_name = "stepwise_background_generate_not_impl"
+def test_background_generate_endpoint_returns_generated_slot(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _install_fake_image_service(monkeypatch)
+    project_name = "stepwise_background_generate"
     _make_project(client, project_name)
+    start_characters = client.post(f"/api/projects/{project_name}/generation/characters/start")
+    assert start_characters.status_code == 200, start_characters.text
+    start_backgrounds = client.post(f"/api/projects/{project_name}/generation/backgrounds/start")
+    assert start_backgrounds.status_code == 200, start_backgrounds.text
 
-    r = client.post(f"/api/projects/{project_name}/generation/backgrounds/rooftop/generate")
-    assert r.status_code == 501, r.text
-    assert "not implemented" in r.json()["detail"].lower()
+    r = client.post(
+        f"/api/projects/{project_name}/generation/backgrounds/rooftop/night/generate",
+        json={"prompt": "moonlit rooftop background"},
+    )
+    assert r.status_code == 200, r.text
+    slot = r.json()
+    assert slot["asset_id"] == "bg_rooftop_night"
+    assert slot["source"] == "generated"
+    assert slot["status"] == "generated"
+    assert slot["generation_prompt"] == "moonlit rooftop background"
+    assert slot["preview_url"].startswith(f"/api/projects/{project_name}/asset-file/__staging__/")
+    assert not Path(slot["staging_path"]).is_absolute()

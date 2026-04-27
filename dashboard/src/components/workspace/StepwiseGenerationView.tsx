@@ -15,6 +15,18 @@ function statusChipClass(status: AssetSlot["status"]) {
   return "bg-gray-100 text-gray-700";
 }
 
+function buildDefaultPrompt(kind: AssetSlot["kind"], target: string, variant: string) {
+  const safeTarget = target || "target";
+  const safeVariant = variant || "main";
+  return kind === "character_sprite"
+    ? `Generate a ${safeVariant} character sprite for ${safeTarget}`
+    : `Generate a background for ${safeTarget} (${safeVariant})`;
+}
+
+function promptPlaceholder(kind: AssetSlot["kind"], target: string, variant: string) {
+  return `${buildDefaultPrompt(kind, target, variant)}. Leave blank to use the backend default prompt.`;
+}
+
 function prettyValidation(slot: AssetSlot): string | null {
   if (!slot.validation) return null;
   const base = `${slot.validation.width}x${slot.validation.height} (${slot.validation.reason})`;
@@ -30,26 +42,26 @@ function prettyValidation(slot: AssetSlot): string | null {
   return null;
 }
 
+type SlotPromptMap = Record<string, string>;
+
 export function StepwiseGenerationView({ projectName, generationState, loadGenerationState }: Props) {
   const [actionMessage, setActionMessage] = useState<string>("");
   const [actionError, setActionError] = useState<string>("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [previewScript, setPreviewScript] = useState<string>("");
   const [previewScriptFiles, setPreviewScriptFiles] = useState<string[]>([]);
+
   const [manualCharacterTarget, setManualCharacterTarget] = useState("");
   const [manualCharacterVariant, setManualCharacterVariant] = useState("normal");
+  const [manualCharacterPrompt, setManualCharacterPrompt] = useState("");
   const [manualBackgroundTarget, setManualBackgroundTarget] = useState("");
   const [manualBackgroundVariant, setManualBackgroundVariant] = useState("main");
+  const [manualBackgroundPrompt, setManualBackgroundPrompt] = useState("");
 
-  const characters = useMemo(() => {
-    if (!generationState) return [];
-    return Object.values(generationState.character_assets);
-  }, [generationState]);
+  const [slotPrompts, setSlotPrompts] = useState<SlotPromptMap>({});
 
-  const backgrounds = useMemo(() => {
-    if (!generationState) return [];
-    return Object.values(generationState.background_assets);
-  }, [generationState]);
+  const characters = useMemo(() => (generationState ? Object.values(generationState.character_assets) : []), [generationState]);
+  const backgrounds = useMemo(() => (generationState ? Object.values(generationState.background_assets) : []), [generationState]);
 
   const activeState = generationState?.state ?? "idle";
 
@@ -97,6 +109,38 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
         await parseError(response);
       }
     });
+
+  const generateCharacterSlot = async (characterId: string, variant: string, prompt: string, replace = false) => {
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(projectName)}/generation/characters/${encodeURIComponent(characterId)}/${encodeURIComponent(
+        variant
+      )}/generate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, replace }),
+      }
+    );
+    if (!response.ok) {
+      await parseError(response);
+    }
+  };
+
+  const generateBackgroundSlot = async (locationId: string, variant: string, prompt: string, replace = false) => {
+    const response = await fetch(
+      `/api/projects/${encodeURIComponent(projectName)}/generation/backgrounds/${encodeURIComponent(locationId)}/${encodeURIComponent(
+        variant
+      )}/generate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, replace }),
+      }
+    );
+    if (!response.ok) {
+      await parseError(response);
+    }
+  };
 
   const uploadForSlot = async (kind: "character_sprite" | "background", target: string, variant: string, file: File) => {
     const formData = new FormData();
@@ -196,6 +240,272 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     activeState === "background_assets_confirmed";
   const canPreview = activeState === "character_assets_confirmed" || activeState === "background_assets_confirmed" || activeState === "script_preview";
 
+  const currentCharacterPrompt = (slot: AssetSlot) =>
+    slotPrompts[slot.asset_id] ?? slot.generation_prompt ?? slot.prompt ?? "";
+
+  const manualCharacterPromptValue = manualCharacterPrompt;
+  const manualBackgroundPromptValue = manualBackgroundPrompt;
+
+  const updateSlotPrompt = (slot: AssetSlot, prompt: string) => {
+    setSlotPrompts((previous) => ({ ...previous, [slot.asset_id]: prompt }));
+  };
+
+  const clearManualCharacterInputs = () => {
+    setManualCharacterTarget("");
+    setManualCharacterVariant("normal");
+    setManualCharacterPrompt("");
+  };
+
+  const clearManualBackgroundInputs = () => {
+    setManualBackgroundTarget("");
+    setManualBackgroundVariant("main");
+    setManualBackgroundPrompt("");
+  };
+
+  const manualAiCard = (
+    kind: "character" | "background",
+    sectionTitle: string,
+    target: string,
+    variant: string,
+    prompt: string,
+    busyId: string,
+    submit: (payload: { target: string; variant: string; prompt: string }) => Promise<void>,
+  ) => {
+    const isCharacter = kind === "character";
+    const targetLabel = isCharacter ? "character name/id" : "scene id";
+    const isReady = target.length > 0 && (isCharacter ? canUploadManualCharacter : canUploadManualBackground);
+    return (
+      <div className="rounded-md border border-gray-200 p-3">
+        <div className="text-sm font-medium text-gray-900">{sectionTitle}</div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm">
+            Target
+            <input
+              type="text"
+              value={target}
+              onChange={(event) => {
+                const newTarget = event.target.value;
+                if (kind === "character") {
+                  setManualCharacterTarget(newTarget);
+                  setManualCharacterPrompt("");
+                } else {
+                  setManualBackgroundTarget(newTarget);
+                  setManualBackgroundPrompt("");
+                }
+              }}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
+              placeholder={targetLabel}
+            />
+          </label>
+          <label className="text-sm">
+            Variant
+            <input
+              type="text"
+              value={variant}
+              onChange={(event) => {
+                const newVariant = event.target.value;
+                if (kind === "character") {
+                  setManualCharacterVariant(newVariant);
+                  setManualCharacterPrompt("");
+                } else {
+                  setManualBackgroundVariant(newVariant);
+                  setManualBackgroundPrompt("");
+                }
+              }}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
+              placeholder={kind === "character" ? "normal" : "main"}
+            />
+          </label>
+        </div>
+        <label className="mt-3 block text-sm">
+          Prompt
+          <textarea
+            className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
+            rows={3}
+            value={prompt}
+            placeholder={promptPlaceholder(
+              kind === "character" ? "character_sprite" : "background",
+              target,
+              variant
+            )}
+            onChange={(event) => {
+              if (kind === "character") {
+                setManualCharacterPrompt(event.target.value);
+              } else {
+                setManualBackgroundPrompt(event.target.value);
+              }
+            }}
+          />
+        </label>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() =>
+              void withBusy(busyId, async () => {
+                await submit({
+                  target,
+                  variant,
+                  prompt,
+                });
+                if (kind === "character") {
+                  clearManualCharacterInputs();
+                } else {
+                  clearManualBackgroundInputs();
+                }
+              })
+            }
+            disabled={busyAction !== null || !isReady || !target}
+            className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Generate with AI
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const manualUploadCard = (
+    kind: "character" | "background",
+    target: string,
+    variant: string,
+    onFile: (file: File) => void,
+  ) => {
+    const isCharacter = kind === "character";
+    const disabled =
+      busyAction !== null || (isCharacter ? !canUploadManualCharacter : !canUploadManualBackground) || !target;
+    return (
+      <div className="rounded-md border border-gray-200 p-3">
+        <div className="text-sm font-medium text-gray-900">Upload Image</div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-sm">
+            Target
+            <input
+              type="text"
+              value={target}
+              onChange={(event) => {
+                const newTarget = event.target.value;
+                if (isCharacter) {
+                  setManualCharacterTarget(newTarget);
+                  setManualCharacterPrompt("");
+                } else {
+                  setManualBackgroundTarget(newTarget);
+                  setManualBackgroundPrompt("");
+                }
+              }}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
+              placeholder={isCharacter ? "character name/id" : "scene id"}
+            />
+          </label>
+          <label className="text-sm">
+            Variant
+            <input
+              type="text"
+              value={variant}
+              onChange={(event) => {
+                const newVariant = event.target.value;
+                if (isCharacter) {
+                  setManualCharacterVariant(newVariant);
+                  setManualCharacterPrompt("");
+                } else {
+                  setManualBackgroundVariant(newVariant);
+                  setManualBackgroundPrompt("");
+                }
+              }}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
+              placeholder={isCharacter ? "normal" : "main"}
+            />
+          </label>
+        </div>
+        <div className="mt-3">
+          <label className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-blue-700">
+            <Upload className="h-4 w-4" />
+            Manual Upload
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={disabled}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                onFile(file);
+                event.target.value = "";
+              }}
+              className="sr-only"
+            />
+          </label>
+        </div>
+      </div>
+    );
+  };
+
+  const slotActionPanel = (slot: AssetSlot) => {
+    const currentPrompt = currentCharacterPrompt(slot);
+    const isAccepted = slot.status === "accepted";
+    const canGenerateSlot = busyAction === null && (slot.kind === "character_sprite" ? canUploadManualCharacter : canUploadManualBackground);
+    return (
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-md border border-gray-200 p-3">
+          <div className="text-sm font-medium text-gray-900">Generate with AI</div>
+          <label className="mt-3 block text-sm">
+            Prompt
+            <textarea
+              className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
+              rows={3}
+              aria-label={`${slot.target} ${slot.variant} prompt`}
+              value={currentPrompt}
+              placeholder={promptPlaceholder(slot.kind, slot.target, slot.variant)}
+              onChange={(event) => {
+                updateSlotPrompt(slot, event.target.value);
+              }}
+            />
+          </label>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() =>
+                void withBusy(`generate-${slot.asset_id}`, async () => {
+                  if (slot.kind === "character_sprite") {
+                    await generateCharacterSlot(slot.target, slot.variant, currentPrompt, isAccepted);
+                  } else {
+                    await generateBackgroundSlot(slot.target, slot.variant, currentPrompt, isAccepted);
+                  }
+                })
+              }
+              disabled={!canGenerateSlot || busyAction === `generate-${slot.asset_id}`}
+              className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isAccepted ? "Regenerate accepted" : "Regenerate"}
+            </button>
+          </div>
+          {isAccepted ? (
+            <p className="mt-2 text-xs text-amber-700">Regenerating will replace the accepted draft and require accepting the new image again.</p>
+          ) : null}
+        </div>
+        <div className="rounded-md border border-gray-200 p-3">
+          <div className="text-sm font-medium text-gray-900">Upload Image</div>
+          <label className="inline-flex mt-3 items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium">
+            <Upload className="h-4 w-4" />
+            Manual Upload
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={busyAction !== null || slot.status === "accepted"}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                void withBusy(`upload-${slot.asset_id}`, async () => {
+                  await uploadForSlot(slot.kind, slot.target, slot.variant, file);
+                });
+                event.target.value = "";
+              }}
+              className="sr-only"
+            />
+          </label>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-full overflow-auto p-6">
       <div className="mx-auto max-w-5xl space-y-6">
@@ -244,68 +554,46 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
           {characters.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm text-gray-700">No generated character slots yet.</p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="text-sm">
-                  Target
-                  <input
-                    type="text"
-                    value={manualCharacterTarget}
-                    onChange={(event) => setManualCharacterTarget(event.target.value)}
-                    className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-                    placeholder="character name/id"
-                  />
-                </label>
-                <label className="text-sm">
-                  Variant
-                  <input
-                    type="text"
-                    value={manualCharacterVariant}
-                    onChange={(event) => setManualCharacterVariant(event.target.value)}
-                    className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-                    placeholder="normal"
-                  />
-                </label>
-              </div>
-              <div className="mt-3">
-                <label className="inline-flex items-center gap-2 text-sm font-medium text-blue-700">
-                  <Upload className="h-4 w-4" />
-                  <span>Upload character image (fallback)</span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    disabled={!canUploadManualCharacter || busyAction !== null || !manualCharacterTarget}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      void withBusy("upload-manual-character", async () => {
-                        await uploadForSlot(
-                          "character_sprite",
-                          manualCharacterTarget,
-                          manualCharacterVariant || "normal",
-                          file
-                        );
-                        setManualCharacterTarget("");
-                        setManualCharacterVariant("normal");
-                      });
-                      event.target.value = "";
-                    }}
-                    className="sr-only"
-                  />
-                </label>
+              <p className="text-sm text-gray-700">No character slots yet.</p>
+              <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                {manualAiCard(
+                  "character",
+                  "Generate with AI",
+                  manualCharacterTarget,
+                  manualCharacterVariant,
+                  manualCharacterPromptValue,
+                  "generate-manual-character",
+                  async ({ target, variant, prompt }) => {
+                    await generateCharacterSlot(target, variant || "normal", prompt);
+                  }
+                )}
+                {manualUploadCard(
+                  "character",
+                  manualCharacterTarget,
+                  manualCharacterVariant,
+                  (file) =>
+                    withBusy("upload-manual-character", async () => {
+                      await uploadForSlot("character_sprite", manualCharacterTarget, manualCharacterVariant || "normal", file);
+                      clearManualCharacterInputs();
+                    }),
+                )}
               </div>
             </div>
           ) : (
             <div className="mt-3 grid gap-3">
               {characters.map((slot) => (
-                <div key={slot.asset_id} className="rounded-md border border-gray-200 p-4">
+                <div
+                  key={slot.asset_id}
+                  data-testid={`slot-card-${slot.asset_id}`}
+                  className="rounded-md border border-gray-200 p-4"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-gray-900">
                         {slot.target} <span className="text-xs text-gray-500">({slot.variant})</span>
                       </div>
                       <div className="text-xs text-gray-500">
-                        {slot.source ? `Source: ${slot.source}` : "Source: none"}
+                        Source: {slot.source ?? "none"}
                       </div>
                     </div>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusChipClass(slot.status)}`}>
@@ -325,33 +613,15 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                         <div className="mb-1 flex items-start gap-2">
                           <AlertCircle className="mt-0.5 h-4 w-4" />
                           <span>
-                            This sprite has no transparent background. Choose background removal, re-upload, or keep it as a non-renderable
-                            draft.
+                            This sprite has no transparent background. Choose background removal, re-upload, or keep it as a non-renderable draft.
                           </span>
                         </div>
                       )}
                       <p>{prettyValidation(slot)}</p>
                     </div>
                   )}
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm">
-                      <Upload className="h-4 w-4" />
-                      Upload
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        disabled={busyAction !== null || !canUploadManualCharacter}
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          if (!file) return;
-                          void withBusy(`upload-${slot.asset_id}`, async () => {
-                            await uploadForSlot("character_sprite", slot.target, slot.variant, file);
-                          });
-                          event.target.value = "";
-                        }}
-                        className="sr-only"
-                      />
-                    </label>
+                  {slotActionPanel(slot)}
+                  <div className="mt-3 flex items-center gap-2">
                     {slot.status === "accepted" ? (
                       <span className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-700">
                         <CheckCircle2 className="h-4 w-4" />
@@ -362,11 +632,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                         type="button"
                         onClick={() =>
                           void withBusy(`accept-${slot.asset_id}`, async () =>
-                            acceptSlot(
-                              "character_sprite",
-                              slot,
-                              slot.status !== "accepted" && !slot.renderable
-                            )
+                            acceptSlot("character_sprite", slot, !slot.renderable)
                           )
                         }
                         disabled={
@@ -377,17 +643,11 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                         }
                         className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {busyAction === `accept-${slot.asset_id}`
-                          ? "Accepting..."
-                          : slot.renderable === false
-                          ? "Accept as non-renderable"
-                          : "Accept"}
+                        {busyAction === `accept-${slot.asset_id}` ? "Accepting..." : slot.renderable === false ? "Accept as non-renderable" : "Accept"}
                       </button>
                     )}
                   </div>
-                  {slot.placeholder && (
-                    <div className="mt-2 text-xs text-gray-500">Placeholder slot</div>
-                  )}
+                  {slot.placeholder && <div className="mt-2 text-xs text-gray-500">Placeholder slot</div>}
                 </div>
               ))}
             </div>
@@ -420,68 +680,51 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
           {backgrounds.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm text-gray-700">No generated background slots yet.</p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="text-sm">
-                  Target
-                  <input
-                    type="text"
-                    value={manualBackgroundTarget}
-                    onChange={(event) => setManualBackgroundTarget(event.target.value)}
-                    className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-                    placeholder="scene id"
-                  />
-                </label>
-                <label className="text-sm">
-                  Variant
-                  <input
-                    type="text"
-                    value={manualBackgroundVariant}
-                    onChange={(event) => setManualBackgroundVariant(event.target.value)}
-                    className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-                    placeholder="main"
-                  />
-                </label>
-              </div>
-              <div className="mt-3">
-                <label className="inline-flex items-center gap-2 text-sm font-medium text-blue-700">
-                  <Upload className="h-4 w-4" />
-                  <span>Upload background image (fallback)</span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    disabled={!canUploadManualBackground || busyAction !== null || !manualBackgroundTarget}
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (!file) return;
-                      void withBusy("upload-manual-background", async () => {
-                        await uploadForSlot(
-                          "background",
-                          manualBackgroundTarget,
-                          manualBackgroundVariant || "main",
-                          file
-                        );
-                        setManualBackgroundTarget("");
-                        setManualBackgroundVariant("main");
-                      });
-                      event.target.value = "";
-                    }}
-                    className="sr-only"
-                  />
-                </label>
+              <p className="text-sm text-gray-700">No background slots yet.</p>
+              <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                {manualAiCard(
+                  "background",
+                  "Generate with AI",
+                  manualBackgroundTarget,
+                  manualBackgroundVariant,
+                  manualBackgroundPromptValue,
+                  "generate-manual-background",
+                  async ({ target, variant, prompt }) => {
+                    await generateBackgroundSlot(target, variant || "main", prompt);
+                  }
+                )}
+                {manualUploadCard(
+                  "background",
+                  manualBackgroundTarget,
+                  manualBackgroundVariant,
+                  (file) =>
+                    withBusy("upload-manual-background", async () => {
+                      await uploadForSlot(
+                        "background",
+                        manualBackgroundTarget,
+                        manualBackgroundVariant || "main",
+                        file
+                      );
+                      clearManualBackgroundInputs();
+                    }),
+                )}
               </div>
             </div>
           ) : (
             <div className="mt-3 grid gap-3">
               {backgrounds.map((slot) => (
-                <div key={slot.asset_id} className="rounded-md border border-gray-200 p-4">
+                <div
+                  key={slot.asset_id}
+                  data-testid={`slot-card-${slot.asset_id}`}
+                  className="rounded-md border border-gray-200 p-4"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-gray-900">
                         {slot.target} <span className="text-xs text-gray-500">({slot.variant})</span>
                       </div>
                       <div className="text-xs text-gray-500">
-                        {slot.source ? `Source: ${slot.source}` : "Source: none"}
+                        Source: {slot.source ?? "none"}
                       </div>
                     </div>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusChipClass(slot.status)}`}>
@@ -500,25 +743,8 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                       <p>{prettyValidation(slot)}</p>
                     </div>
                   )}
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm">
-                      <Upload className="h-4 w-4" />
-                      Upload
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        disabled={busyAction !== null || !canUploadManualBackground}
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          if (!file) return;
-                          void withBusy(`upload-${slot.asset_id}`, async () => {
-                            await uploadForSlot("background", slot.target, slot.variant, file);
-                          });
-                          event.target.value = "";
-                        }}
-                        className="sr-only"
-                      />
-                    </label>
+                  {slotActionPanel(slot)}
+                  <div className="mt-3 flex items-center gap-2">
                     {slot.status === "accepted" ? (
                       <span className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-700">
                         <CheckCircle2 className="h-4 w-4" />
@@ -527,14 +753,8 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                     ) : (
                       <button
                         type="button"
-                        onClick={() =>
-                          void withBusy(`accept-${slot.asset_id}`, async () => acceptSlot("background", slot))
-                        }
-                        disabled={
-                          busyAction !== null ||
-                          !(slot.status === "uploaded" || slot.status === "generated") ||
-                          !canAcceptBackground
-                        }
+                        onClick={() => void withBusy(`accept-${slot.asset_id}`, async () => acceptSlot("background", slot))}
+                        disabled={busyAction !== null || !(slot.status === "uploaded" || slot.status === "generated") || !canAcceptBackground}
                         className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {busyAction === `accept-${slot.asset_id}` ? "Accepting..." : "Accept"}
