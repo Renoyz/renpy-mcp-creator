@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import type { ChapterOutline, ChapterOutlineEntry } from "@/context/ProjectContext";
-import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -113,6 +113,10 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
   }, []);
 
   const working = editing && draft ? draft : outline;
+  const confirmedCount = working?.chapters.filter((chapter) => chapter.confirmed).length ?? 0;
+  const totalCount = working?.chapters.length ?? 0;
+  const remainingCount = Math.max(totalCount - confirmedCount, 0);
+  const progressPercent = totalCount > 0 ? (confirmedCount / totalCount) * 100 : 0;
 
   if (error) {
     return (
@@ -180,7 +184,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
                   className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
                 >
                   {saving ? (
-                    <span className="animate-spin">⏳</span>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Save className="w-3.5 h-3.5" />
                   )}
@@ -201,13 +205,37 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
         {editing && (
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-            <span>Saving will reset all chapter confirmation flags — you will need to re-confirm each chapter.</span>
+            <span>Saving will reset all chapter confirmation flags. You will need to re-confirm each chapter.</span>
           </div>
         )}
+        <div
+          data-testid="outline-review-header"
+          className="mt-4 grid gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_220px_160px]"
+        >
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Review progress</p>
+            <p className="mt-1 text-sm text-gray-700">
+              Confirm every chapter before freezing the blueprint for generation.
+            </p>
+          </div>
+          <div>
+            <p className="text-lg font-semibold text-gray-900">
+              {confirmedCount} / {totalCount} chapters confirmed
+            </p>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+          <div className="flex items-center justify-start lg:justify-end">
+            <span className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700">
+              {remainingCount} remaining
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Chapters */}
-      <div className="px-6 py-6 space-y-6 max-w-3xl">
+      <div className="px-6 py-6 space-y-5 max-w-5xl">
         {working.chapters.map((chapter, idx) => (
           <ChapterCard
             key={chapter.chapter_id}

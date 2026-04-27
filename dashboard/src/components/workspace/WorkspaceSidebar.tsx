@@ -18,7 +18,9 @@ const statusIcons: Record<string, React.ReactNode> = {
 };
 
 export function WorkspaceSidebar({ chapters, selectedSceneId, onSelectScene }: Props) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(chapters.map((chapter) => [chapter.id, true]))
+  );
 
   // Re-sync expansion state when chapters change (e.g., project switch)
   useEffect(() => {

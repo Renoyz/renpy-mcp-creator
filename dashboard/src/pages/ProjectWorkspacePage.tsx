@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { CurrentProject, useProject } from "../context/ProjectContext";
-import { WorkspaceSidebar } from "../components/workspace/WorkspaceSidebar";
 import { WorkspaceTabs, type WorkspaceTab } from "../components/workspace/WorkspaceTabs";
 import { BlueprintWorkspaceView } from "../components/workspace/BlueprintWorkspaceView";
 import { StoryMapWorkspaceView } from "../components/workspace/StoryMapWorkspaceView";
@@ -13,6 +12,9 @@ import { RefinementStatusPanel } from "../components/workspace/RefinementStatusP
 import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
 import { StepwiseGenerationView } from "../components/workspace/StepwiseGenerationView";
 import { GameShellWorkspaceView } from "../components/workspace/GameShellWorkspaceView";
+import { WorkflowRail } from "../components/workspace/WorkflowRail";
+import { WorkflowStatusHeader } from "../components/workspace/WorkflowStatusHeader";
+import { deriveWorkflowDashboardState, type WorkflowAction } from "../components/workspace/workflowState";
 import { runFreezeAutoGenerationChain } from "../lib/refinementAutomation";
 import { Loader2, Play, Package, AlertCircle } from "lucide-react";
 
@@ -392,6 +394,52 @@ export function ProjectWorkspacePage() {
     }
   };
 
+  const workflow = deriveWorkflowDashboardState({
+    hasBrief: !!brief,
+    hasBlueprint: !!blueprint,
+    refinementStatus,
+    refinementIntake,
+    generationState,
+    buildStatus,
+    previewAvailable,
+    previewUrl,
+    postFreezeRunning: postFreezeFlow.status === "running",
+  });
+
+  const handleWorkflowAction = (action: WorkflowAction) => {
+    if (action === "open_intake") {
+      setActiveTab("intake");
+      if (!refinementIntake) {
+        startBlueprintCollection("start_refinement_intake", activeProjectName);
+        window.dispatchEvent(new CustomEvent("open-chat-drawer"));
+      }
+      return;
+    }
+    if (action === "promote_brief") {
+      void handlePromoteBriefDraft();
+      return;
+    }
+    if (action === "promote_outline") {
+      void handlePromoteOutlineDraft();
+      return;
+    }
+    if (action === "freeze") {
+      void handleFreezeBlueprint();
+      return;
+    }
+    if (action === "open_generation") {
+      setActiveTab("generation");
+      return;
+    }
+    if (action === "build_web") {
+      void handleBuild("web");
+      return;
+    }
+    if (action === "preview") {
+      void handlePreview();
+    }
+  };
+
   if (!name) {
     return null;
   }
@@ -419,7 +467,7 @@ export function ProjectWorkspacePage() {
   return (
     <div className="h-full flex flex-col">
       {/* Top header */}
-      <div className="shrink-0 border-b bg-white px-4 py-3">
+      <div className="shrink-0 border-b bg-white px-4 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 data-testid="workspace-project-title" className="text-xl font-bold tracking-tight text-gray-900">{activeProjectName}</h1>
@@ -435,46 +483,64 @@ export function ProjectWorkspacePage() {
               </div>
             )}
           </div>
-          {canRunBuildPreview && (
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => void handleBuild("web")}
-                disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
-                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-gray-900 text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {buildStatus === "running" || postFreezeFlow.status === "running" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Package className="h-3.5 w-3.5" />
+        </div>
+
+        <div className="mt-4">
+          <WorkflowStatusHeader
+            workflow={workflow}
+            projectName={activeProjectName}
+            onAction={handleWorkflowAction}
+            metaLine={meta ? (
+              <span>
+                {meta.status} · {meta.pipeline_stage}
+                {meta.description ? ` · ${meta.description}` : ""}
+              </span>
+            ) : null}
+            secondaryActions={canRunBuildPreview ? (
+              <div className="flex items-center gap-2">
+                {workflow.primaryAction.action !== "build_web" && (
+                  <button
+                    onClick={() => void handleBuild("web")}
+                    disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white/80 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {buildStatus === "running" || postFreezeFlow.status === "running" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Package className="h-3.5 w-3.5" />
+                    )}
+                    {buildButtonLabel("web")}
+                  </button>
                 )}
-                {buildButtonLabel("web")}
-              </button>
-              <button
-                onClick={() => void handleBuild("windows")}
-                disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
-                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-gray-900 text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {buildStatus === "running" || postFreezeFlow.status === "running" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Package className="h-3.5 w-3.5" />
+                <button
+                  onClick={() => void handleBuild("windows")}
+                  disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white/80 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {buildStatus === "running" || postFreezeFlow.status === "running" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Package className="h-3.5 w-3.5" />
+                  )}
+                  {buildButtonLabel("windows")}
+                </button>
+                {workflow.primaryAction.action !== "preview" && (
+                  <button
+                    onClick={handlePreview}
+                    disabled={previewLoading || postFreezeFlow.status === "running" || (!previewAvailable && !previewUrl)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white/80 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {previewLoading || postFreezeFlow.status === "running" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                    {postFreezeFlow.status === "running" ? "Preparing..." : previewLoading ? "Starting..." : "Preview"}
+                  </button>
                 )}
-                {buildButtonLabel("windows")}
-              </button>
-              <button
-                onClick={handlePreview}
-                disabled={previewLoading || postFreezeFlow.status === "running" || (!previewAvailable && !previewUrl)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {previewLoading || postFreezeFlow.status === "running" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-                {postFreezeFlow.status === "running" ? "Preparing..." : previewLoading ? "Starting..." : "Preview"}
-              </button>
-            </div>
-          )}
+              </div>
+            ) : null}
+          />
         </div>
 
         <div className="mt-3">
@@ -555,7 +621,8 @@ export function ProjectWorkspacePage() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left: Chapter/Scene navigation */}
         <div data-testid="workspace-sidebar" className="w-60 flex-shrink-0 bg-gray-50/50 border-r border-gray-200">
-          <WorkspaceSidebar
+          <WorkflowRail
+            stages={workflow.stages}
             chapters={chapters}
             selectedSceneId={selectedSceneId}
             onSelectScene={handleSelectScene}

@@ -76,11 +76,10 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    const characterSection = screen.getByText("Character Assets").closest("div")?.parentElement;
-    expect(characterSection).not.toBeNull();
+    const characterSection = screen.getByTestId("character-assets-section");
 
-    expect(within(characterSection as HTMLElement).getByRole("button", { name: "Confirm Characters" })).toBeEnabled();
-    expect(within(characterSection as HTMLElement).getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(within(characterSection).getByRole("button", { name: "Confirm Characters" })).toBeEnabled();
+    expect(within(characterSection).getByRole("button", { name: "Accept" })).toBeEnabled();
   });
 
   it("shows derived character design metadata as a reviewable slot list", () => {
@@ -157,9 +156,28 @@ describe("StepwiseGenerationView", () => {
     );
 
     expect(screen.getByText(/Manual progression:/)).toBeInTheDocument();
-    expect(screen.getByText("Character Assets")).toBeInTheDocument();
-    expect(screen.getByText("Scene Backgrounds")).toBeInTheDocument();
+    expect(screen.getByTestId("character-assets-section")).toHaveTextContent("Character Assets");
+    expect(screen.getByTestId("scene-backgrounds-section")).toHaveTextContent("Scene Backgrounds");
     expect(screen.getByText("Script Preview & Commit")).toBeInTheDocument();
+  });
+
+  it("renders a visible generation flow panel before asset tables", () => {
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={backgroundState("background_assets_draft")}
+        loadGenerationState={vi.fn()}
+      />
+    );
+
+    const flow = screen.getByTestId("generation-flow-panel");
+
+    expect(flow).toHaveTextContent("Scene Packages");
+    expect(flow).toHaveTextContent("Character Assets");
+    expect(flow).toHaveTextContent("Scene Backgrounds");
+    expect(flow).toHaveTextContent("Script Preview");
+    expect(flow).toHaveTextContent("Build");
+    expect(flow).toHaveTextContent("Preview");
   });
 
   it("shows per-chapter scene package progress and generates all remaining chapters in one action", async () => {
@@ -218,7 +236,7 @@ describe("StepwiseGenerationView", () => {
     );
 
     expect(screen.getByText("Scene Package Progress")).toBeInTheDocument();
-    expect(screen.getByText(/1\s*\/\s*2 chapters complete/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("scene-package-progress-panel")).getByText(/1\s*\/\s*2 chapters complete/)).toBeInTheDocument();
     expect(screen.getByText("Opening")).toBeInTheDocument();
     expect(screen.getByText("Aftermath")).toBeInTheDocument();
     expect(screen.getByText("complete")).toBeInTheDocument();

@@ -21,6 +21,26 @@ function createBrief(allConfirmed: boolean) {
 }
 
 describe('BriefWorkspaceView next-step CTA', () => {
+  it('should summarize brief confirmation progress in the review header', () => {
+    const brief = createBrief(true)
+    brief.cards.core_premise.confirmed = false
+
+    render(
+      <BriefWorkspaceView
+        brief={brief}
+        projectName="test"
+        onSave={vi.fn()}
+        onConfirmCard={vi.fn()}
+      />
+    )
+
+    const header = screen.getByTestId('brief-review-header')
+
+    expect(header).toHaveTextContent('Review progress')
+    expect(header).toHaveTextContent('8 / 9 confirmed')
+    expect(header).toHaveTextContent('1 remaining')
+  })
+
   it('should show the outline review CTA when all cards are confirmed and outline draft is ready', () => {
     render(
       <BriefWorkspaceView

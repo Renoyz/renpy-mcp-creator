@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { ProjectWorkspacePage } from "./ProjectWorkspacePage"
@@ -98,7 +98,7 @@ describe("ProjectWorkspacePage build controls", () => {
       </MemoryRouter>
     )
 
-    const webButton = await screen.findByRole("button", { name: /build web preview/i })
+    const webButton = await screen.findByRole("button", { name: "Primary action: Build Web Preview" })
     await user.click(webButton)
 
     expect(fetchMock.mock.calls[2][0]).toBe("/api/projects/demo/prototype/status")
@@ -215,6 +215,166 @@ describe("ProjectWorkspacePage build controls", () => {
       })
     )
     expect(screen.getByText("Preview available")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /^preview$/i })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Primary action: Open Preview" })).toBeEnabled()
+  })
+
+  it("shows a workflow header with brief review as the primary action when intake is ready", async () => {
+    const user = userEvent.setup()
+    const promoteBriefDraft = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      blueprint: null,
+      brief: null,
+      refinementIntake: {
+        phase: "project",
+        current_summary: "The detective premise is ready for review.",
+        missing_slots: [],
+        slots: {},
+        brief_draft_ready: true,
+        chapter_draft: [],
+        outline_draft_ready: false,
+        updated_at: "2026-04-27T00:00:00",
+      },
+      refinementStatus: {
+        refinement_state: "intake_ready",
+        brief_fully_confirmed: false,
+        outline_fully_confirmed: false,
+        blueprint_ready: false,
+        freeze_allowed: false,
+        blueprint_freeze_status: null,
+        generation_allowed: false,
+      },
+      promoteBriefDraft,
+    } as never)
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByTestId("workflow-status-header")
+    expect(header).toHaveTextContent("Step")
+    expect(header).toHaveTextContent("Brief review is ready")
+
+    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+
+    expect(promoteBriefDraft).toHaveBeenCalledWith("demo")
+  })
+
+  it("shows freeze blueprint as the primary action when the outline is confirmed", async () => {
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      brief: { cards: {}, updated_at: "2026-04-27T00:00:00" },
+      chapterOutline: { chapters: [], updated_at: "2026-04-27T00:00:00" },
+      refinementStatus: {
+        refinement_state: "outline_confirmed",
+        brief_fully_confirmed: true,
+        outline_fully_confirmed: true,
+        blueprint_ready: true,
+        freeze_allowed: true,
+        blueprint_freeze_status: "draft",
+        generation_allowed: false,
+      },
+    } as never)
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByTestId("workflow-status-header")
+    expect(header).toHaveTextContent("Blueprint freeze")
+    expect(within(header).getByRole("button", { name: "Primary action: Freeze Blueprint" })).toBeInTheDocument()
+  })
+
+  it("renders a workflow rail with production stages and scene navigation", async () => {
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      chapters: [
+        {
+          id: "ch1",
+          name: "Opening",
+          order: 1,
+          scenes: [
+            { id: "s1", name: "First clue", order: 1, status: "generated" },
+          ],
+        },
+      ],
+      selectedSceneId: "s1",
+      refinementStatus: {
+        refinement_state: "blueprint_ready",
+        brief_fully_confirmed: true,
+        outline_fully_confirmed: true,
+        blueprint_ready: true,
+        freeze_allowed: false,
+        blueprint_freeze_status: "frozen",
+        generation_allowed: true,
+      },
+    } as never)
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const rail = await screen.findByTestId("workflow-rail")
+    expect(rail).toHaveTextContent("Intake")
+    expect(rail).toHaveTextContent("Brief")
+    expect(rail).toHaveTextContent("Outline")
+    expect(rail).toHaveTextContent("Scene Packages")
+    expect(rail).toHaveTextContent("Build")
+    expect(rail).toHaveTextContent("Preview")
+    expect(rail).toHaveTextContent("First clue")
   })
 })

@@ -42,6 +42,26 @@ function createOutline(allConfirmed: boolean) {
 }
 
 describe('ChapterOutlineWorkspaceView next-step CTA', () => {
+  it('should summarize chapter confirmation progress in the review header', () => {
+    const outline = createOutline(true)
+    outline.chapters[0].confirmed = false
+
+    render(
+      <ChapterOutlineWorkspaceView
+        outline={outline}
+        projectName="test"
+        onSave={vi.fn()}
+        onConfirmChapter={vi.fn()}
+      />
+    )
+
+    const header = screen.getByTestId('outline-review-header')
+
+    expect(header).toHaveTextContent('Review progress')
+    expect(header).toHaveTextContent('1 / 2 chapters confirmed')
+    expect(header).toHaveTextContent('1 remaining')
+  })
+
   it('should show freeze blueprint button when all chapters are confirmed', () => {
     render(
       <ChapterOutlineWorkspaceView

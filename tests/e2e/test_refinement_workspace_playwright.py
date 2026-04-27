@@ -827,8 +827,8 @@ def test_workspace_blueprint_project_shows_build_and_preview_actions(
     open_workspace_from_project_list(page, server_url, project_name)
 
     expect(page.locator("h1")).to_have_text(project_name, timeout=10000)
-    expect(page.get_by_role("button", name="Build")).to_be_visible(timeout=10000)
-    expect(page.get_by_role("button", name="Preview")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Primary action: Build Web Preview", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=10000)
 
 
 def test_workspace_shows_freeze_action_when_refinement_ready(
@@ -842,7 +842,7 @@ def test_workspace_shows_freeze_action_when_refinement_ready(
     _confirm_refinement_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    expect(page.get_by_role("button", name="Freeze Blueprint")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Freeze Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("text=Freeze the blueprint to unlock generation")).to_be_visible(timeout=10000)
 
 

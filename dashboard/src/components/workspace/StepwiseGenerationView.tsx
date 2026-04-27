@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Play, RefreshCw, Upload } from "lucide-react";
 import type { AssetSlot, GenerationState } from "@/context/ProjectContext";
+import { GenerationFlowPanel } from "./GenerationFlowPanel";
 
 interface Props {
   projectName: string;
@@ -533,8 +534,10 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           {actionError && <div className="mt-3 text-sm text-red-700">{actionError}</div>}
         </div>
 
+        <GenerationFlowPanel generationState={generationState} busyAction={busyAction} />
+
         {sceneGeneration && (
-          <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <div data-testid="scene-package-progress-panel" className="rounded-lg border border-gray-200 bg-white p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-gray-900">Scene Package Progress</h3>
@@ -588,7 +591,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           </div>
         )}
 
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
+        <div data-testid="character-assets-section" className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-gray-900">Character Assets</h3>
             <div className="flex gap-2">
@@ -632,7 +635,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           )}
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
+        <div data-testid="scene-backgrounds-section" className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-gray-900">Scene Backgrounds</h3>
             <div className="flex gap-2">

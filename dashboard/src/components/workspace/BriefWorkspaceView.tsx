@@ -5,7 +5,7 @@ import type {
   CharacterIdentityContent,
   RelationshipBaseline,
 } from "@/context/ProjectContext";
-import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2, ArrowRight } from "lucide-react";
+import { CheckCircle2, Circle, Edit3, Save, AlertTriangle, Plus, Trash2, ArrowRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -27,6 +27,12 @@ const TEXT_CARD_KEYS = [
   "world_rules",
   "core_cast",
   "constraints",
+];
+
+const ALL_CARD_KEYS = [
+  ...TEXT_CARD_KEYS,
+  "character_identity",
+  "relationship_baselines",
 ];
 
 const CARD_LABELS: Record<string, string> = {
@@ -60,12 +66,7 @@ function isRelationshipBaselineContent(
 
 function isAllCardsConfirmed(brief: ProjectBrief | null): boolean {
   if (!brief || !brief.cards) return false;
-  const allKeys = [
-    ...TEXT_CARD_KEYS,
-    "character_identity",
-    "relationship_baselines",
-  ];
-  return allKeys.every((key) => brief.cards[key]?.confirmed);
+  return ALL_CARD_KEYS.every((key) => brief.cards[key]?.confirmed);
 }
 
 export function BriefWorkspaceView({
@@ -163,6 +164,10 @@ export function BriefWorkspaceView({
   }, []);
 
   const working = editing && draft ? draft : brief;
+  const confirmedCount = working ? ALL_CARD_KEYS.filter((key) => working.cards[key]?.confirmed).length : 0;
+  const totalCount = ALL_CARD_KEYS.length;
+  const remainingCount = Math.max(totalCount - confirmedCount, 0);
+  const progressPercent = totalCount > 0 ? (confirmedCount / totalCount) * 100 : 0;
 
   if (error) {
     return (
@@ -230,7 +235,7 @@ export function BriefWorkspaceView({
                   className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800 disabled:opacity-50"
                 >
                   {saving ? (
-                    <span className="animate-spin">⏳</span>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Save className="w-3.5 h-3.5" />
                   )}
@@ -251,13 +256,37 @@ export function BriefWorkspaceView({
         {editing && (
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-            <span>Saving will reset all confirmation flags — you will need to re-confirm each card.</span>
+            <span>Saving will reset all confirmation flags. You will need to re-confirm each card.</span>
           </div>
         )}
+        <div
+          data-testid="brief-review-header"
+          className="mt-4 grid gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_180px_160px]"
+        >
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Review progress</p>
+            <p className="mt-1 text-sm text-gray-700">
+              Confirm the stable requirements before chapter outline review.
+            </p>
+          </div>
+          <div>
+            <p className="text-lg font-semibold text-gray-900">
+              {confirmedCount} / {totalCount} confirmed
+            </p>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+          <div className="flex items-center justify-start lg:justify-end">
+            <span className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700">
+              {remainingCount} remaining
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Cards */}
-      <div className="px-6 py-6 space-y-6 max-w-3xl">
+      <div className="px-6 py-6 space-y-5 max-w-5xl">
         {/* Text cards */}
         {TEXT_CARD_KEYS.map((key) => {
           const card = working.cards[key];
@@ -310,7 +339,7 @@ export function BriefWorkspaceView({
         {/* Next-step CTA when all cards are confirmed */}
         {isAllCardsConfirmed(working) && onProceedToOutline && !editing && (
           outlineDraftReady ? (
-          <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center">
+          <div className="rounded-lg border border-green-200 bg-green-50 p-5 text-center">
             <div className="flex items-center justify-center gap-2 mb-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" />
               <h3 className="text-sm font-semibold text-green-800">
@@ -329,7 +358,7 @@ export function BriefWorkspaceView({
             </button>
           </div>
           ) : (
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-5 text-center">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-5 text-center">
               <div className="flex items-center justify-center gap-2 mb-2">
                 <CheckCircle2 className="h-5 w-5 text-blue-600" />
                 <h3 className="text-sm font-semibold text-blue-800">Chapter Intake in progress</h3>
@@ -703,7 +732,7 @@ function Field({
           className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
         />
       ) : (
-        <p className="text-sm text-gray-900">{value || <span className="text-gray-400">—</span>}</p>
+        <p className="text-sm text-gray-900">{value || <span className="text-gray-400">Not set</span>}</p>
       )}
     </div>
   );
