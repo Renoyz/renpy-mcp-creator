@@ -718,7 +718,7 @@ def test_workspace_new_project_shows_brief_tab_and_create_entry(
     expect(brief_tab).to_be_visible(timeout=10000)
     outline_tab = page.locator("button", has_text="Outline").first
     expect(outline_tab).to_be_visible(timeout=10000)
-    blueprint_tab = page.locator("button", has_text="蓝图").first
+    blueprint_tab = page.get_by_role("button", name="Blueprint", exact=True).first
     expect(blueprint_tab).to_be_visible(timeout=10000)
 
     intake_tab = page.get_by_role("button", name="Intake", exact=True)
@@ -794,8 +794,8 @@ def test_workspace_blueprint_tab_can_still_show_onboarding_for_new_project(
     create_project_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    # Switch to Blueprint tab (label is "蓝图" in Chinese)
-    blueprint_tab = page.locator("button", has_text="蓝图").first
+    # Switch to Blueprint tab.
+    blueprint_tab = page.get_by_role("button", name="Blueprint", exact=True).first
     expect(blueprint_tab).to_be_visible(timeout=10000)
     blueprint_tab.click()
 

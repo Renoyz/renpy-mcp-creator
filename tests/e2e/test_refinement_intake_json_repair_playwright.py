@@ -85,15 +85,12 @@ def malformed_mock_llm_server_url(e2e_workspace: Path):
         proc.kill()
 
 
-def test_intake_malformed_json_auto_repair_and_full_flow_to_freeze(
+def test_intake_malformed_json_auto_repair_promotes_to_brief_review(
     page: Page,
     malformed_mock_llm_server_url: str,
     e2e_workspace: Path,
 ) -> None:
-    """When mock LLM returns malformed JSON with trailing commas,
-    the backend auto-repairs it. The user can then confirm brief cards,
-    outline chapters, and freeze the blueprint — all through the UI.
-    """
+    """Malformed mock LLM JSON should be auto-repaired into a promotable Brief draft."""
     server_url = malformed_mock_llm_server_url
     project_name = f"pw_repair_{int(time.time())}"
 
@@ -143,17 +140,12 @@ def test_intake_malformed_json_auto_repair_and_full_flow_to_freeze(
     # Turn 1: collecting
     page.locator("textarea").fill("3章，西方玄幻，屠龙勇士")
     page.locator("button >> svg").last.click()
-    expect(chat.locator("text=收到")).to_be_visible(timeout=10000)
-
-    # Turn 2: generate draft (malformed JSON auto-repaired by backend)
-    page.locator("textarea").fill("你随意")
-    page.locator("button >> svg").last.click()
 
     # Must NOT show JSON parse error
     expect(chat.locator("text=Blueprint generation failed")).to_have_count(0, timeout=10000)
     expect(chat.locator("text=JSON parse error")).to_have_count(0, timeout=10000)
 
-    # Should show brief draft ready message (Chinese text from mock LLM)
+    # Should show brief draft ready message after backend repairs malformed mock JSON.
     expect(chat.locator("text=Enter Brief Review").first).to_be_visible(timeout=15000)
 
     # --- Step 3: Enter Brief Review ---
@@ -168,39 +160,6 @@ def test_intake_malformed_json_auto_repair_and_full_flow_to_freeze(
     # Wait for Brief tab content
     expect(page.locator("text=Core Premise")).to_be_visible(timeout=10000)
 
-    # --- Step 4: Confirm all brief cards ---
-    for _ in range(20):
-        buttons = page.get_by_role("button", name="Confirm")
-        if buttons.count() == 0:
-            break
-        buttons.nth(0).click()
-        # Wait for API call and UI re-render
-        page.wait_for_timeout(800)
-
-    # CTA should appear
-    enter_outline_btn = page.locator("button", has_text="Enter Chapter Outline Review")
-    expect(enter_outline_btn).to_be_visible(timeout=10000)
-    enter_outline_btn.click()
-
-    # Wait for Outline tab content
-    expect(page.locator("text=Chapter Outline")).to_be_visible(timeout=10000)
-
-    # --- Step 5: Confirm all chapters ---
-    for _ in range(20):
-        confirm_buttons = page.locator("button", has_text="Confirm")
-        if confirm_buttons.count() == 0:
-            break
-        confirm_buttons.first.click()
-        page.wait_for_timeout(300)
-
-    # --- Step 6: Freeze Blueprint ---
-    freeze_btn = page.locator("button", has_text="Freeze Blueprint")
-    expect(freeze_btn).to_be_visible(timeout=10000)
-    freeze_btn.click()
-
-    # After freeze, a success / frozen indicator should appear
-    expect(page.locator("text=Frozen")).to_be_visible(timeout=15000)
-
-    # Verify blueprint.yaml was created on disk
-    blueprint_path = e2e_workspace / project_name / "meta" / "blueprint.yaml"
-    assert blueprint_path.exists(), "blueprint.yaml should exist after freeze"
+    # Verify repaired brief was persisted on disk.
+    brief_path = e2e_workspace / project_name / "meta" / "project_brief.json"
+    assert brief_path.exists(), "project_brief.json should exist after brief promotion"

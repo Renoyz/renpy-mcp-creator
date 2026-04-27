@@ -15,6 +15,12 @@ from playwright.sync_api import Locator, Page, expect
 
 
 REPO_ROOT = Path(__file__).parent.parent.parent
+LEGACY_BLUEPRINT_ONBOARDING_SKIP = pytest.mark.skip(
+    reason=(
+        "Legacy blueprint onboarding was replaced by adaptive Project Brief intake; "
+        "current coverage lives in test_refinement_workspace_playwright.py."
+    )
+)
 
 
 def _find_free_port() -> int:
@@ -136,6 +142,47 @@ def open_workspace_from_project_list(page: Page, server_url: str, project_name: 
     expect(page.locator("h1")).to_have_text(project_name, timeout=10000)
 
 
+def expect_new_project_intake_workspace(page: Page) -> None:
+    """Current workspace default for projects without a blueprint is Intake, not old onboarding."""
+    intake_tab = page.get_by_role("button", name="Intake", exact=True)
+    expect(intake_tab).to_be_visible(timeout=10000)
+    expect(intake_tab).to_have_class(re.compile(r"border-blue-500"), timeout=10000)
+    expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
+
+
+def start_project_intake(page: Page) -> None:
+    """Start the current Project Brief intake flow."""
+    start_btn = page.get_by_role("button", name="Start Intake with AI", exact=True)
+    expect(start_btn).to_be_visible(timeout=10000)
+    start_btn.click()
+
+
+def expect_project_intake_started(page: Page, chat_scope: Locator | None = None) -> None:
+    """Current intake startup state after the user clicks Start Intake with AI."""
+    scope = chat_scope or page.locator("body")
+    expect(scope).to_contain_text("Project Brief", timeout=15000)
+    expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Start Project Intake")).to_have_count(0, timeout=10000)
+
+
+def open_blueprint_tab(page: Page) -> Locator:
+    """Open the current Blueprint workspace tab."""
+    tab = page.get_by_role("button", name="Blueprint", exact=True).first
+    expect(tab).to_be_visible(timeout=10000)
+    tab.click()
+    expect(tab).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
+    return tab
+
+
+def open_scene_tab(page: Page) -> Locator:
+    """Open the current Scene workspace tab."""
+    tab = page.get_by_role("button", name="Scene", exact=True).first
+    expect(tab).to_be_visible(timeout=10000)
+    tab.click()
+    expect(tab).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
+    return tab
+
+
 def open_chat_drawer(page: Page) -> None:
     ai_button = page.locator("header button", has_text=re.compile("AI 助手"))
     if ai_button.count() > 0:
@@ -198,12 +245,11 @@ def test_project_workspace(page: Page, server_url: str) -> None:
     create_project_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    # New project without blueprint shows onboarding view
-    expect(page.locator("text=项目已创建，开始构建蓝图吧")).to_be_visible(timeout=10000)
-    # Onboarding must NOT show editing shell elements
+    # New project without blueprint opens the Intake refinement workspace.
+    expect_new_project_intake_workspace(page)
+    # Planning-only projects must NOT expose build actions.
     expect(page.locator("button", has_text="Build")).to_have_count(0, timeout=5000)
     expect(page.locator("button", has_text="Preview")).to_have_count(0, timeout=5000)
-    expect(page.locator("[data-testid='workspace-sidebar']")).to_have_count(0, timeout=5000)
 
 
 def test_direct_workspace_url(page: Page, server_url: str) -> None:
@@ -1087,6 +1133,7 @@ def test_workspace_shows_blueprint_chapters_and_scenes(
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     # Project name in header
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+    open_blueprint_tab(page)
     # Blueprint title
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
     # Chapter list in sidebar
@@ -1111,8 +1158,8 @@ def test_workspace_selects_default_scene_and_shows_script(
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Default tab is Blueprint; switch to Scene tab to view script
-    page.locator("button", has_text="场景").click()
+    # Scene view is opened from the sidebar in the current workspace.
+    page.locator("button", has_text="初见").click()
     expect(page.locator("text=Hello scene 1")).to_be_visible(timeout=10000)
     # File path should be visible
     expect(page.locator("text=game/scene1.rpy")).to_be_visible(timeout=10000)
@@ -1135,7 +1182,7 @@ def test_workspace_click_scene_switches_script(
     page.locator("button", has_text="借书").click()
 
     # Scene tab should become active
-    expect(page.locator("button", has_text="场景")).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
+    expect(page.get_by_role("button", name="Scene", exact=True)).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
 
     # Script should switch to scene 2 content
     expect(page.locator("text=Hello scene 2")).to_be_visible(timeout=10000)
@@ -1155,8 +1202,8 @@ def test_workspace_scene_view_renders_readable_scene_content_not_only_raw_script
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Switch to Scene tab
-    page.locator("button", has_text="场景").click()
+    # Scene view is opened from the sidebar in the current workspace.
+    page.locator("button", has_text="初次相遇").click()
 
     # Readable scene view should be visible
     expect(page.locator("text=场景概览")).to_be_visible(timeout=10000)
@@ -1181,7 +1228,7 @@ def test_workspace_scene_view_renders_readable_scene_content_not_only_raw_script
 def test_workspace_shows_error_when_blueprint_missing(
     page: Page, server_url: str
 ) -> None:
-    """Workspace should show onboarding when blueprint is missing, not a white screen."""
+    """Workspace should show the Intake workspace when blueprint is missing, not a white screen."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_ws_nobp_{int(time.time())}"
@@ -1191,8 +1238,7 @@ def test_workspace_shows_error_when_blueprint_missing(
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Onboarding view should be visible for projects without blueprint
-    expect(page.locator("text=项目已创建，开始构建蓝图吧")).to_be_visible(timeout=10000)
+    expect_new_project_intake_workspace(page)
 
 
 def test_workspace_no_longer_shows_old_entry_cards(
@@ -1346,8 +1392,8 @@ def test_workspace_build_status_does_not_leak_across_project_switch(
     _client_navigate_to_project(page, project_b)
     expect(page.locator("h1")).to_have_text(project_b, timeout=30000)
 
-    # Wait for B's onboarding view to finish rendering (loading must end naturally)
-    expect(page.locator("text=项目已创建，开始构建蓝图吧")).to_be_visible(timeout=10000)
+    # Wait for B's Intake workspace to finish rendering (loading must end naturally)
+    expect_new_project_intake_workspace(page)
 
     # --- Assert A's build artifacts are gone ---
     assert page.locator("[data-testid='build-status']").count() == 0
@@ -1441,6 +1487,7 @@ def test_workspace_old_load_does_not_prematurely_end_loading(
 
     # 6. B should fully load with its own data
     expect(page.locator("h1")).to_have_text(project_b, timeout=30000)
+    open_blueprint_tab(page)
     expect(page.locator("text=Beta Title")).to_be_visible(timeout=10000)
 
 
@@ -1463,7 +1510,7 @@ def test_workspace_structure_migrated(page: Page, server_url: str, e2e_workspace
     expect(page.locator("button", has_text="图书馆相遇")).to_be_visible(timeout=10000)
 
     # Content tabs: Blueprint, Story Map, Scene
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("button", has_text="Story Map")).to_be_visible(timeout=10000)
 
     # Old card stacks must not exist
@@ -1472,8 +1519,8 @@ def test_workspace_structure_migrated(page: Page, server_url: str, e2e_workspace
     expect(page.locator("h4:has-text('资源管理')")).to_have_count(0)
 
 
-def test_workspace_default_blueprint_view(page: Page, server_url: str, e2e_workspace: Path) -> None:
-    """Default tab should be Blueprint with rich content, not a tiny summary card."""
+def test_workspace_blueprint_tab_view(page: Page, server_url: str, e2e_workspace: Path) -> None:
+    """Blueprint tab should show rich content, not a tiny summary card."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_bp_{int(time.time())}"
@@ -1483,9 +1530,7 @@ def test_workspace_default_blueprint_view(page: Page, server_url: str, e2e_works
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Blueprint tab is active by default
-    blueprint_tab = page.locator("button", has_text="蓝图")
-    expect(blueprint_tab).to_have_attribute("class", re.compile(r"border-blue-500"), timeout=10000)
+    open_blueprint_tab(page)
 
     # Rich blueprint content visible
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
@@ -1606,6 +1651,7 @@ def test_workspace_project_switch_keeps_new_ui(
     # Open project A
     page.goto(f"{server_url}/dashboard/projects/{project_a}")
     expect(page.locator("h1")).to_have_text(project_a, timeout=30000)
+    open_blueprint_tab(page)
     expect(page.locator("text=Alpha Project")).to_be_visible(timeout=10000)
 
     # Switch to Story Map tab on A
@@ -1624,10 +1670,8 @@ def test_workspace_project_switch_keeps_new_ui(
     
     expect(page.locator("h1")).to_have_text(project_b, timeout=30000)
 
-    # B should render with Blueprint tab active (reset on project change)
-    expect(page.locator("button", has_text="蓝图")).to_have_attribute(
-        "class", re.compile(r"border-blue-500"), timeout=10000
-    )
+    # B should render with the current workspace tabs intact.
+    open_blueprint_tab(page)
     try:
         expect(page.locator("text=Beta Project")).to_be_visible(timeout=10000)
     except AssertionError:
@@ -1671,9 +1715,9 @@ def test_story_map_shows_branch_for_middle_scene(
     choice_node = board.locator("[data-testid='story-map-scene-node']", has_text="选择")
     expect(choice_node).to_be_visible(timeout=10000)
 
-    # Branch labels should be visible near the middle scene (not just the last scene)
-    expect(board.locator("text=去图书馆")).to_be_visible(timeout=10000)
-    expect(board.locator("text=去社团")).to_be_visible(timeout=10000)
+    # Current Story Map renders branch target scene names near the branch point.
+    expect(board.locator("text=图书馆线")).to_be_visible(timeout=10000)
+    expect(board.locator("text=社团线")).to_be_visible(timeout=10000)
 
 
 def test_story_map_scene_node_opens_scene_view(
@@ -1756,8 +1800,8 @@ def test_workspace_hides_legacy_outer_shell(page: Page, server_url: str) -> None
     expect(page.locator("a", has_text="Story Map")).not_to_be_visible(timeout=5000)
 
 
-def test_onboarding_hides_workspace_editing_shell(page: Page, server_url: str) -> None:
-    """Onboarding phase must NOT display editing workspace shell (Build/Preview/sidebar)."""
+def test_planning_workspace_hides_build_and_preview(page: Page, server_url: str) -> None:
+    """Planning/Intake phase must NOT display Build/Preview actions."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_onb_shell_{int(time.time())}"
@@ -1768,15 +1812,11 @@ def test_onboarding_hides_workspace_editing_shell(page: Page, server_url: str) -
         project_name, timeout=30000
     )
 
-    # Onboarding view is visible
-    expect(page.locator("[data-testid='workspace-onboarding-view']")).to_be_visible(timeout=10000)
+    expect_new_project_intake_workspace(page)
 
-    # Build / Preview must NOT be visible during onboarding
+    # Build / Preview must NOT be visible during planning.
     expect(page.locator("button", has_text="Build")).to_have_count(0, timeout=5000)
     expect(page.locator("button", has_text="Preview")).to_have_count(0, timeout=5000)
-
-    # Sidebar must NOT be visible during onboarding
-    expect(page.locator("[data-testid='workspace-sidebar']")).to_have_count(0, timeout=5000)
 
 
 def test_editing_workspace_still_shows_full_shell(
@@ -1802,7 +1842,7 @@ def test_editing_workspace_still_shows_full_shell(
     expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
 
     # Tabs visible
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("button", has_text="Story Map")).to_be_visible(timeout=10000)
 
 
@@ -1889,8 +1929,7 @@ def test_create_project_from_new_homepage_enters_workspace(page: Page, server_ur
 
     # Should navigate to workspace
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
-    # Onboarding view should appear for new project without blueprint
-    expect(page.locator("[data-testid='workspace-onboarding-view']")).to_be_visible(timeout=10000)
+    expect_new_project_intake_workspace(page)
 
 
 def test_homepage_and_workspace_use_consistent_shell(page: Page, server_url: str, e2e_workspace: Path) -> None:
@@ -1912,6 +1951,7 @@ def test_homepage_and_workspace_use_consistent_shell(page: Page, server_url: str
     # Navigate to workspace
     page.locator("[data-testid='project-card']", has_text=project_name).click()
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+    open_blueprint_tab(page)
 
     # Workspace: also no legacy sidebar
     expect(page.locator("a", has_text="项目")).not_to_be_visible(timeout=5000)
@@ -1968,7 +2008,7 @@ def test_workspace_shows_persistent_ai_panel(
 
     # Main workspace content visible
     expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
 
     # Right AI panel visible simultaneously
     ai_panel = page.locator("[data-testid='chat-panel-docked']")
@@ -1977,8 +2017,8 @@ def test_workspace_shows_persistent_ai_panel(
     expect(ai_panel.locator("text=AI 助手")).to_be_visible(timeout=5000)
 
 
-def test_onboarding_uses_existing_right_ai_panel(page: Page, server_url: str) -> None:
-    """Clicking '让 AI 生成蓝图' should use the already-visible right panel, not open an overlay."""
+def test_intake_uses_existing_right_ai_panel(page: Page, server_url: str) -> None:
+    """Starting Project Brief intake should use the already-visible right panel, not open an overlay."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_ai_onb_{int(time.time())}"
@@ -1994,19 +2034,17 @@ def test_onboarding_uses_existing_right_ai_panel(page: Page, server_url: str) ->
     expect(ai_panel).to_be_visible(timeout=10000)
 
     # Click start AI
-    page.locator("button", has_text="让 AI 生成蓝图").click()
+    start_project_intake(page)
 
-    # Collecting conversation should appear directly in the existing panel
-    # First assistant message now comes from backend via WS
-    expect(ai_panel.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
-    expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
+    # Intake conversation should appear directly in the existing panel.
+    expect_project_intake_started(page, ai_panel)
 
 
 # ---- Phase 3 round 3: onboarding / blueprint collection flow ----
 
 
 def test_new_project_shows_onboarding_view(page: Page, server_url: str) -> None:
-    """A newly created project without blueprint should show onboarding instead of empty workspace."""
+    """A newly created project without blueprint should show Intake instead of empty workspace."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_onb_{int(time.time())}"
@@ -2015,16 +2053,13 @@ def test_new_project_shows_onboarding_view(page: Page, server_url: str) -> None:
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Onboarding view should be visible
-    expect(page.locator("text=让 AI 生成蓝图")).to_be_visible(timeout=10000)
-    expect(page.locator("text=手动准备 YAML（即将支持）")).to_be_visible(timeout=10000)
-    expect(page.locator("text=项目已创建，开始构建蓝图吧")).to_be_visible(timeout=10000)
+    expect_new_project_intake_workspace(page)
 
 
 def test_click_ai_generate_opens_chat_and_starts_collecting(
     page: Page, server_url: str
 ) -> None:
-    """Clicking '让 AI 生成蓝图' should open chat drawer and enter collecting state."""
+    """Starting intake should open the Project Brief conversation and enter Agent Intake."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_col_{int(time.time())}"
@@ -2033,18 +2068,15 @@ def test_click_ai_generate_opens_chat_and_starts_collecting(
     page.goto(f"{server_url}/dashboard/projects/{project_name}")
     expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # Click the AI generate button
-    page.locator("button", has_text="让 AI 生成蓝图").click()
+    # Click the AI intake button
+    start_project_intake(page)
 
-    # Chat drawer should open with first interview question from backend
-    expect(page.locator("text=太棒了！让我来帮你把这个想法变成完整的蓝图")).to_be_visible(timeout=15000)
-
-    # Workspace should show collecting state
-    expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
+    # The first Project Brief intake question should appear from backend via WS.
+    expect_project_intake_started(page)
 
 
-def test_mobile_overlay_starts_collection_reliably(page: Page, server_url: str) -> None:
-    """On narrow viewport, clicking '让 AI 生成蓝图' must still receive the first backend assistant message."""
+def test_mobile_overlay_starts_intake_reliably(page: Page, server_url: str) -> None:
+    """On narrow viewport, starting intake must still receive the first backend assistant message."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_mobile_{int(time.time())}"
@@ -2061,19 +2093,17 @@ def test_mobile_overlay_starts_collection_reliably(page: Page, server_url: str) 
     expect(ai_button).to_be_visible(timeout=5000)
 
     # Click start AI
-    page.locator("button", has_text="让 AI 生成蓝图").click()
+    start_project_intake(page)
 
     # Chat drawer should open as overlay
     chat_drawer = page.locator("[data-testid='chat-drawer']")
     expect(chat_drawer).to_be_visible(timeout=10000)
 
-    # First assistant message from backend must appear even though drawer/WS were just opened
-    expect(chat_drawer.locator("text=太棒了！让我来帮你")).to_be_visible(timeout=15000)
-
-    # Workspace should show collecting state
-    expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
+    # First assistant message from backend must appear even though drawer/WS were just opened.
+    expect_project_intake_started(page, chat_drawer)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_interview_progresses_to_reviewing_and_confirms(
     page: Page, mock_llm_server_url: str
 ) -> None:
@@ -2128,6 +2158,7 @@ def test_interview_progresses_to_reviewing_and_confirms(
     expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_manual_yaml_placeholder_shows_correctly(
     page: Page, server_url: str
 ) -> None:
@@ -2155,6 +2186,7 @@ def test_manual_yaml_placeholder_shows_correctly(
     expect(page.locator("text=让 AI 生成蓝图")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_reviewing_shows_confirmation_in_chat_drawer(
     page: Page, mock_llm_server_url: str
 ) -> None:
@@ -2198,6 +2230,7 @@ def test_reviewing_shows_confirmation_in_chat_drawer(
     expect(page.locator("text=正在与 AI 细化需求")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_reviewing_refresh_restores_structured_messages(page: Page, mock_llm_server_url: str) -> None:
     """After reaching reviewing and refreshing, ChatDrawer should still show blueprint draft and confirmation request messages."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2237,6 +2270,7 @@ def test_reviewing_refresh_restores_structured_messages(page: Page, mock_llm_ser
     expect(chat_drawer.locator("text=请确认以下蓝图草案")).to_be_visible(timeout=15000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_reviewing_refresh_restores_confirmable_state(page: Page, mock_llm_server_url: str) -> None:
     """After reaching reviewing and refreshing, both main content and ChatDrawer should show confirmable state."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2281,6 +2315,7 @@ def test_reviewing_refresh_restores_confirmable_state(page: Page, mock_llm_serve
     expect(page.locator("h2", has_text="蓝图草案已生成")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_generating_refresh_restores_progress_state(page: Page, mock_llm_server_url: str) -> None:
     """After approving and entering generating, refreshing should restore generating state."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2326,6 +2361,7 @@ def test_generating_refresh_restores_progress_state(page: Page, mock_llm_server_
     expect(chat_drawer.locator("text=正在分析创作意图")).to_be_visible(timeout=15000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_main_content_blueprint_confirm_from_draft_card(page: Page, mock_llm_server_url: str) -> None:
     """Clicking '确认并生成' from main content BlueprintDraftCard should drive generating -> editing."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2364,6 +2400,7 @@ def test_main_content_blueprint_confirm_from_draft_card(page: Page, mock_llm_ser
     expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_main_content_blueprint_reject_from_draft_card(page: Page, mock_llm_server_url: str) -> None:
     """Clicking '继续调整' from main content BlueprintDraftCard should return to collecting."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2402,6 +2439,7 @@ def test_main_content_blueprint_reject_from_draft_card(page: Page, mock_llm_serv
     expect(page.locator("text=好的，我们继续调整蓝图")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_mobile_main_content_confirm_works_when_chat_closed(page: Page, mock_llm_server_url: str) -> None:
     """On mobile with overlay drawer closed, clicking '确认并生成' from main content must still work."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2447,6 +2485,7 @@ def test_mobile_main_content_confirm_works_when_chat_closed(page: Page, mock_llm
     expect(page.locator("text=项目信息")).to_be_visible(timeout=20000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_mobile_main_content_reject_works_when_chat_closed(page: Page, mock_llm_server_url: str) -> None:
     """On mobile with overlay drawer closed, clicking '继续调整' from main content must still work."""
     assert wait_for_server(mock_llm_server_url), "Server not ready"
@@ -2492,6 +2531,7 @@ def test_mobile_main_content_reject_works_when_chat_closed(page: Page, mock_llm_
     expect(page.locator("text=好的，我们继续调整蓝图")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_return_to_collecting_allows_real_followup_refinement(
     page: Page, mock_llm_server_url: str
 ) -> None:
@@ -2541,6 +2581,7 @@ def test_return_to_collecting_allows_real_followup_refinement(
     expect(confirmation_panel.locator("button", has_text="确认并生成")).to_be_visible(timeout=15000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_manual_yaml_placeholder_resets_on_project_switch(
     page: Page, server_url: str
 ) -> None:
@@ -2585,7 +2626,8 @@ def test_existing_blueprint_skips_onboarding(
     expect(page.locator("text=让 AI 生成蓝图")).to_have_count(0, timeout=5000)
     expect(page.locator("text=项目已创建，开始构建蓝图吧")).to_have_count(0, timeout=5000)
 
-    # Should see normal blueprint workspace
+    # Should see normal blueprint workspace after opening the Blueprint tab.
+    open_blueprint_tab(page)
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
     expect(page.locator("text=项目信息")).to_be_visible(timeout=10000)
 
@@ -2648,6 +2690,7 @@ def test_workspace_existing_blueprint_does_not_fall_back_to_onboarding(
     expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(
         0, timeout=5000
     )
+    open_blueprint_tab(page)
     expect(page.locator("text=Campus Romance")).to_be_visible(timeout=10000)
     expect(page.locator("text=项目信息")).to_be_visible(timeout=10000)
 
@@ -2851,14 +2894,14 @@ def test_tool_confirmation_refresh_restores_panel(
         click_send_button(page)
 
         # Wait for real awaiting_confirmation from backend (generate_background confirmation message)
-        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+        expect(chat_drawer.locator("text=Generated a background image. Save it?")).to_be_visible(timeout=10000)
 
         # Refresh page
         page.reload()
         expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
         # Confirmation panel must still be visible after refresh (recovered from runtime session)
-        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+        expect(chat_drawer.locator("text=Generated a background image. Save it?")).to_be_visible(timeout=10000)
     finally:
         proc.terminate()
         try:
@@ -2939,7 +2982,7 @@ def test_editing_project_with_tool_confirmation_stays_in_editing_mode_after_refr
 
         # Must start in editing workspace (not onboarding)
         expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
         expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
 
         chat_drawer = page.locator("[data-testid='chat-panel-docked']")
@@ -2950,11 +2993,11 @@ def test_editing_project_with_tool_confirmation_stays_in_editing_mode_after_refr
         click_send_button(page)
 
         # Wait for confirmation panel
-        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+        expect(chat_drawer.locator("text=Generated a background image. Save it?")).to_be_visible(timeout=10000)
 
         # Must STAY in editing workspace while confirmation is active
         expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
         expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
 
         # Refresh page
@@ -2963,11 +3006,11 @@ def test_editing_project_with_tool_confirmation_stays_in_editing_mode_after_refr
 
         # After refresh, must STILL be in editing workspace
         expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-        expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+        expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
         expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
 
         # Confirmation panel must still be recovered
-        expect(chat_drawer.locator("text=已生成背景图，请确认是否保存。")).to_be_visible(timeout=10000)
+        expect(chat_drawer.locator("text=Generated a background image. Save it?")).to_be_visible(timeout=10000)
     finally:
         proc.terminate()
         try:
@@ -3009,7 +3052,7 @@ def test_editing_project_with_tool_running_stays_in_editing_mode_after_refresh(
 
     # Must stay in editing workspace (not onboarding)
     expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
 
     # Chat drawer should show the recovered progress step
@@ -3022,13 +3065,14 @@ def test_editing_project_with_tool_running_stays_in_editing_mode_after_refresh(
 
     # After refresh, must still stay in editing workspace
     expect(page.locator("[data-testid='workspace-sidebar']")).to_be_visible(timeout=10000)
-    expect(page.locator("button", has_text="蓝图")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("[data-testid='workspace-onboarding-view']")).to_have_count(0, timeout=5000)
 
     # Progress must still be visible
     expect(chat_drawer.locator("text=正在调用 generate_background...")).to_be_visible(timeout=10000)
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_blueprint_draft_from_mock_provider_in_reviewing(page: Page, e2e_workspace: Path) -> None:
     """Mock-provider backend path: collecting -> LLM generates draft -> reviewing shows provider draft content.
 
@@ -3079,6 +3123,7 @@ def test_blueprint_draft_from_mock_provider_in_reviewing(page: Page, e2e_workspa
 # ---- Phase 5 Round 3: blueprint confirmation -> auto-build -> preview-ready E2E ----
 
 
+@LEGACY_BLUEPRINT_ONBOARDING_SKIP
 def test_blueprint_confirmation_auto_builds_and_reaches_preview_ready(
     page: Page, mock_llm_server_url: str
 ) -> None:

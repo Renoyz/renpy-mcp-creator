@@ -687,18 +687,39 @@ def _run_create_project_stage(runner) -> str:
     return project_name
 
 
+def _assistant_message_count(chat) -> int:
+    return chat.get_by_text("assistant", exact=True).count()
+
+
+def _send_chat_message_and_wait_for_assistant(page: Page, chat, text: str, timeout: int = 120000) -> None:
+    before = _assistant_message_count(chat)
+    input_box = chat.locator("textarea")
+    input_box.fill(text)
+    input_box.press("Enter")
+
+    deadline = time.time() + (timeout / 1000)
+    while time.time() < deadline:
+        if _assistant_message_count(chat) > before:
+            return
+        page.wait_for_timeout(500)
+    raise AssertionError(f"Timed out waiting for assistant response after user message: {text!r}")
+
+
 def _run_intake_stage(runner) -> None:
     page = runner.page
     artifacts = runner.artifacts
 
     chat = _start_intake_via_button(page, writer=artifacts, step_name="05_intake_started")
-    page.locator("textarea").fill("3 chapters, Western fantasy, dragon-slaying warrior")
-    page.locator("button >> svg").last.click()
-    expect(chat.locator("text=Got it").first).to_be_visible(timeout=60000)
+    _send_chat_message_and_wait_for_assistant(
+        page,
+        chat,
+        "3 chapters, Western fantasy, dragon-slaying warrior",
+    )
     _snap(page, "06_intake_turn1", writer=artifacts)
 
-    page.locator("textarea").fill("You decide. Make it epic.")
-    page.locator("button >> svg").last.click()
+    if chat.locator("text=Brief Review").count() == 0:
+        _send_chat_message_and_wait_for_assistant(page, chat, "You decide. Make it epic.")
+
     chat.locator("text=Brief Review").or_(chat.locator("text=Blueprint generation failed")).first.wait_for(
         state="visible",
         timeout=120000,
