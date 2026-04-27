@@ -625,6 +625,23 @@ class TestStepwiseService:
         assert set(state["background_assets"]) == {"bg_scene_01_main"}
         assert state["background_assets"]["bg_scene_01_main"]["status"] == "empty"
 
+    def test_prepare_asset_slots_materializes_character_and_scene_lists_without_start_click(self, service, project):
+        project_name, _ = project
+        _seed_scene_packages(service.pm, project_name)
+
+        state = service.prepare_asset_slots(project_name)
+
+        assert state["state"] == "character_assets_draft"
+        assert state["round_id"] == "r0001"
+        assert set(state["character_assets"]) == {"char_Alice_normal", "char_Bob_normal"}
+        assert state["character_assets"]["char_Alice_normal"]["status"] == "empty"
+        assert state["character_assets"]["char_Bob_normal"]["status"] == "empty"
+        assert set(state["background_assets"]) == {"bg_scene_01_main"}
+        assert state["background_assets"]["bg_scene_01_main"]["status"] == "empty"
+        assert state["background_assets"]["bg_scene_01_main"]["description"] == "wide street and cafe"
+        assert state["background_assets"]["bg_scene_01_main"]["description_source"] == "scene_package"
+        assert service.get_state(project_name)["character_assets"] == state["character_assets"]
+
     def test_upload_character_asset_updates_required_slot_metadata(self, service, project):
         project_name, _ = project
         _seed_scene_packages(service.pm, project_name)

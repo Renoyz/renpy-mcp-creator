@@ -166,6 +166,26 @@ def test_generation_state_returns_idle_default_for_existing_project(client: Test
     assert second == first
 
 
+def test_generation_state_prepares_character_and_scene_asset_lists_for_frozen_blueprint(
+    client: TestClient, tmp_path: Path
+):
+    project_name = "stepwise_state_prepares_slots"
+    _make_project(client, project_name)
+    _allow_stepwise_generation(tmp_path, project_name)
+    _seed_scene_packages(project_name)
+
+    r = client.get(f"/api/projects/{project_name}/generation-state")
+    assert r.status_code == 200, r.text
+    state = r.json()
+
+    assert state["state"] == "character_assets_draft"
+    assert set(state["character_assets"]) == {"char_Alice_normal", "char_Bob_normal"}
+    assert state["character_assets"]["char_Alice_normal"]["target"] == "Alice"
+    assert state["character_assets"]["char_Alice_normal"]["status"] == "empty"
+    assert set(state["background_assets"]) == {"bg_scene_01_main"}
+    assert state["background_assets"]["bg_scene_01_main"]["description"] == "wide street and cafe"
+
+
 def test_full_stepwise_happy_path_upload_char_and_background(client: TestClient, tmp_path: Path):
     project_name = "stepwise_full_happy"
     _make_project(client, project_name)

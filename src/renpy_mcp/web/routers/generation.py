@@ -199,7 +199,15 @@ async def _read_upload_bytes(file: UploadFile | None) -> bytes:
 @router.get("/api/projects/{project_name}/generation-state")
 async def api_stepwise_generation_state(project_name: str):
     service = _make_stepwise_service(project_name)
-    return service.get_state(project_name)
+    state = service.get_state(project_name)
+    try:
+        _check_stepwise_generation_gate(project_name)
+    except HTTPException:
+        return state
+    try:
+        return service.prepare_asset_slots(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/api/projects/{project_name}/generation/scene-outline/start")

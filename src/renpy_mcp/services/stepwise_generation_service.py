@@ -529,6 +529,42 @@ class StepwiseGenerationService:
         self._ensure_required_character_slots(project_name, state)
         self._ensure_required_background_slots(project_name, state)
 
+    def prepare_asset_slots(self, project_name: str) -> dict[str, Any]:
+        """Materialize required asset review slots without starting generation jobs.
+
+        The generation dashboard should show the derived character/background lists as
+        soon as the frozen blueprint is ready. This method creates empty review slots
+        and moves the stepwise workflow to the first manual asset stage, but it does
+        not call image generation or import any user-visible files.
+        """
+        state = self.get_state(project_name)
+        if state["state"] in {"script_preview", "committed"}:
+            return state
+        self._require_state(
+            state,
+            "idle",
+            "scene_outline_draft",
+            "scene_outline_confirmed",
+            "character_assets_draft",
+            "character_assets_confirmed",
+            "background_assets_draft",
+            "background_assets_confirmed",
+            action="prepare asset slots",
+        )
+        before = json.dumps(self._safe_state(state), ensure_ascii=False, sort_keys=True)
+
+        self.ensure_required_slots(project_name, state)
+        has_required_slots = bool(state["character_assets"] or state["background_assets"])
+        if has_required_slots and state.get("round_id") is None:
+            state["round_id"] = self._round_for_project(project_name, state)
+        if has_required_slots and state["state"] in {"idle", "scene_outline_draft", "scene_outline_confirmed"}:
+            state["state"] = "character_assets_draft"
+
+        after = json.dumps(self._safe_state(state), ensure_ascii=False, sort_keys=True)
+        if after != before:
+            self.save_state(project_name, state)
+        return state
+
     @staticmethod
     def _background_description_from_scene(scene: Any) -> str:
         location_visual_brief = getattr(scene, "location_visual_brief", "")

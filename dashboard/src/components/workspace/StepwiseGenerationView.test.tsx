@@ -101,9 +101,11 @@ describe("StepwiseGenerationView", () => {
     expect(within(slotCard).getByLabelText("Alice normal prompt")).toHaveValue(
       "existing generated prompt"
     );
+    expect(within(slotCard).getByText("Generate with AI")).toBeInTheDocument();
+    expect(within(slotCard).getByLabelText("Manual Upload")).toBeInTheDocument();
   });
 
-  it("shows AI generation and manual upload as peer entry points without fallback wording", () => {
+  it("does not show manual target forms as the default empty-state workflow", () => {
     render(
       <StepwiseGenerationView
         projectName="demo"
@@ -116,9 +118,10 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    expect(screen.getAllByText("Generate with AI").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("Upload Image").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByLabelText("Prompt").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("No derived character slots available.")).toBeInTheDocument();
+    expect(screen.getByText("No derived scene background slots available.")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("character name/id")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("scene id")).not.toBeInTheDocument();
     expect(screen.queryByText(/fallback/i)).not.toBeInTheDocument();
   });
 
@@ -236,49 +239,6 @@ describe("StepwiseGenerationView", () => {
     const [, init] = fetchMock.mock.calls[0];
     const formData = init.body as FormData;
     expect(formData.get("description")).toBe("Rainy moonlit alley");
-    expect(formData.get("file")).toBe(file);
-    expect(loadGenerationState).toHaveBeenCalledWith("demo");
-  });
-
-  it("lets the empty-state background upload card use its own target and description", async () => {
-    const user = userEvent.setup();
-    const loadGenerationState = vi.fn().mockResolvedValue(undefined);
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({}),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(
-      <StepwiseGenerationView
-        projectName="demo"
-        generationState={{
-          ...baseState("background_assets_draft"),
-          character_assets: {},
-          background_assets: {},
-        }}
-        loadGenerationState={loadGenerationState}
-      />
-    );
-
-    await user.type(screen.getByLabelText("Background upload target"), "upload_scene");
-    await user.clear(screen.getByLabelText("Background upload variant"));
-    await user.type(screen.getByLabelText("Background upload variant"), "dusk");
-    await user.type(screen.getByLabelText("Background upload description"), "Uploaded rainy pier at dusk");
-
-    const file = new File(["fake"], "pier.png", { type: "image/png" });
-    await user.upload(screen.getAllByLabelText("Manual Upload")[1], file);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/demo/generation/backgrounds/upload_scene/dusk/upload",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.any(FormData),
-      })
-    );
-    const [, init] = fetchMock.mock.calls[0];
-    const formData = init.body as FormData;
-    expect(formData.get("description")).toBe("Uploaded rainy pier at dusk");
     expect(formData.get("file")).toBe(file);
     expect(loadGenerationState).toHaveBeenCalledWith("demo");
   });

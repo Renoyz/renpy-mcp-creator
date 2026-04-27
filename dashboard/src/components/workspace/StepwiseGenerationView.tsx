@@ -62,19 +62,6 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
   const [previewScript, setPreviewScript] = useState<string>("");
   const [previewScriptFiles, setPreviewScriptFiles] = useState<string[]>([]);
 
-  const [manualCharacterTarget, setManualCharacterTarget] = useState("");
-  const [manualCharacterVariant, setManualCharacterVariant] = useState("normal");
-  const [manualCharacterPrompt, setManualCharacterPrompt] = useState("");
-  const [manualCharacterUploadTarget, setManualCharacterUploadTarget] = useState("");
-  const [manualCharacterUploadVariant, setManualCharacterUploadVariant] = useState("normal");
-  const [manualBackgroundTarget, setManualBackgroundTarget] = useState("");
-  const [manualBackgroundVariant, setManualBackgroundVariant] = useState("main");
-  const [manualBackgroundPrompt, setManualBackgroundPrompt] = useState("");
-  const [manualBackgroundDescription, setManualBackgroundDescription] = useState("");
-  const [manualBackgroundUploadTarget, setManualBackgroundUploadTarget] = useState("");
-  const [manualBackgroundUploadVariant, setManualBackgroundUploadVariant] = useState("main");
-  const [manualBackgroundUploadDescription, setManualBackgroundUploadDescription] = useState("");
-
   const [slotPrompts, setSlotPrompts] = useState<SlotPromptMap>({});
   const [slotDescriptions, setSlotDescriptions] = useState<SlotDescriptionMap>({});
 
@@ -268,7 +255,8 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     });
 
   const canUploadManualCharacter = activeState !== "script_preview" && activeState !== "committed";
-  const canUploadManualBackground = activeState !== "script_preview" && activeState !== "committed";
+  const canUploadManualBackground =
+    activeState === "background_assets_draft" || activeState === "background_assets_confirmed";
   const canAcceptCharacter =
     activeState === "character_assets_draft" ||
     activeState === "character_assets_confirmed" ||
@@ -302,229 +290,12 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     return slot.description ?? undefined;
   };
 
-  const manualCharacterPromptValue = manualCharacterPrompt;
-  const manualBackgroundPromptValue = manualBackgroundPrompt;
-  const manualBackgroundDescriptionValue = manualBackgroundDescription;
-
   const updateSlotPrompt = (slot: AssetSlot, prompt: string) => {
     setSlotPrompts((previous) => ({ ...previous, [slot.asset_id]: prompt }));
   };
 
   const updateSlotDescription = (slot: AssetSlot, description: string) => {
     setSlotDescriptions((previous) => ({ ...previous, [slot.asset_id]: description }));
-  };
-
-  const clearManualCharacterInputs = () => {
-    setManualCharacterTarget("");
-    setManualCharacterVariant("normal");
-    setManualCharacterPrompt("");
-  };
-
-  const clearManualCharacterUploadInputs = () => {
-    setManualCharacterUploadTarget("");
-    setManualCharacterUploadVariant("normal");
-  };
-
-  const clearManualBackgroundInputs = () => {
-    setManualBackgroundTarget("");
-    setManualBackgroundVariant("main");
-    setManualBackgroundPrompt("");
-    setManualBackgroundDescription("");
-  };
-
-  const clearManualBackgroundUploadInputs = () => {
-    setManualBackgroundUploadTarget("");
-    setManualBackgroundUploadVariant("main");
-    setManualBackgroundUploadDescription("");
-  };
-
-  const manualAiCard = (
-    kind: "character" | "background",
-    sectionTitle: string,
-    target: string,
-    variant: string,
-    prompt: string,
-    description: string,
-    busyId: string,
-    submit: (payload: { target: string; variant: string; prompt: string; description?: string }) => Promise<void>,
-  ) => {
-    const isCharacter = kind === "character";
-    const targetLabel = isCharacter ? "character name/id" : "scene id";
-    const isReady = target.length > 0 && (isCharacter ? canUploadManualCharacter : canUploadManualBackground);
-    return (
-      <div className="rounded-md border border-gray-200 p-3">
-        <div className="text-sm font-medium text-gray-900">{sectionTitle}</div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="text-sm">
-            Target
-            <input
-              type="text"
-              value={target}
-              onChange={(event) => {
-                const newTarget = event.target.value;
-                if (kind === "character") {
-                  setManualCharacterTarget(newTarget);
-                  setManualCharacterPrompt("");
-                } else {
-                  setManualBackgroundTarget(newTarget);
-                  setManualBackgroundPrompt("");
-                  setManualBackgroundDescription("");
-                }
-              }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-              placeholder={targetLabel}
-            />
-          </label>
-          <label className="text-sm">
-            Variant
-            <input
-              type="text"
-              value={variant}
-              onChange={(event) => {
-                const newVariant = event.target.value;
-                if (kind === "character") {
-                  setManualCharacterVariant(newVariant);
-                  setManualCharacterPrompt("");
-                } else {
-                  setManualBackgroundVariant(newVariant);
-                  setManualBackgroundPrompt("");
-                  setManualBackgroundDescription("");
-                }
-              }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-              placeholder={isCharacter ? "normal" : "main"}
-            />
-          </label>
-        </div>
-        {kind === "background" ? (
-          <label className="mt-3 block text-sm">
-            Description
-            <textarea
-              className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
-              rows={3}
-              value={description}
-              placeholder="Describe this background."
-              onChange={(event) => {
-                setManualBackgroundDescription(event.target.value);
-              }}
-            />
-          </label>
-        ) : null}
-        <label className="mt-3 block text-sm">
-          Prompt
-          <textarea
-            className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
-            rows={3}
-            value={prompt}
-            placeholder={isCharacter ? promptPlaceholder("character_sprite", target, variant) : promptPlaceholder("background", target, variant)}
-            onChange={(event) => {
-              if (kind === "character") {
-                setManualCharacterPrompt(event.target.value);
-              } else {
-                setManualBackgroundPrompt(event.target.value);
-              }
-            }}
-          />
-        </label>
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() =>
-              void withBusy(busyId, async () => {
-                await submit({
-                  target,
-                  variant,
-                  prompt,
-                  description,
-                });
-                if (kind === "character") {
-                  clearManualCharacterInputs();
-                } else {
-                  clearManualBackgroundInputs();
-                }
-              })
-            }
-            disabled={busyAction !== null || !isReady || !target}
-            className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Generate with AI
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const manualUploadCard = (
-    kind: "character" | "background",
-    target: string,
-    variant: string,
-    description: string,
-    setTarget: (value: string) => void,
-    setVariant: (value: string) => void,
-    setDescription: (value: string) => void,
-    onFile: (file: File) => void,
-  ) => {
-    const isCharacter = kind === "character";
-    const disabled =
-      busyAction !== null || (isCharacter ? !canUploadManualCharacter : !canUploadManualBackground) || !target;
-    return (
-      <div className="rounded-md border border-gray-200 p-3">
-        <div className="text-sm font-medium text-gray-900">Upload Image</div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <label className="text-sm">
-            Target
-            <input
-              aria-label={`${isCharacter ? "Character" : "Background"} upload target`}
-              value={target}
-              onChange={(event) => setTarget(event.target.value.trim())}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-              placeholder={isCharacter ? "character name/id" : "scene id"}
-            />
-          </label>
-          <label className="text-sm">
-            Variant
-            <input
-              aria-label={`${isCharacter ? "Character" : "Background"} upload variant`}
-              value={variant}
-              onChange={(event) => setVariant(event.target.value.trim())}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-              placeholder={isCharacter ? "normal" : "main"}
-            />
-          </label>
-        </div>
-        {!isCharacter ? (
-          <label className="mt-3 block text-sm">
-            Description
-            <textarea
-              aria-label="Background upload description"
-              className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
-              rows={3}
-              value={description}
-              placeholder="Describe the uploaded scene background composition and mood."
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </label>
-        ) : null}
-        <div className="mt-3">
-          <label className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-blue-700">
-            <Upload className="h-4 w-4" />
-            Manual Upload
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              disabled={disabled}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                onFile(file);
-                event.target.value = "";
-              }}
-              className="sr-only"
-            />
-          </label>
-        </div>
-      </div>
-    );
   };
 
   const slotActionPanel = (slot: AssetSlot) => {
@@ -587,7 +358,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               disabled={!canGenerateSlot || busyAction === `generate-${slot.asset_id}`}
               className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isAccepted ? "Regenerate accepted" : "Regenerate"}
+              {slot.status === "empty" ? "Generate with AI" : isAccepted ? "Regenerate accepted" : "Regenerate"}
             </button>
           </div>
           {isAccepted ? (
@@ -674,40 +445,10 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
           {characters.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm text-gray-700">No character slots yet.</p>
-              <div className="mt-3 grid gap-4 lg:grid-cols-2">
-                {manualAiCard(
-                  "character",
-                  "Generate with AI",
-                  manualCharacterTarget,
-                  manualCharacterVariant,
-                  manualCharacterPromptValue,
-                  "",
-                  "generate-manual-character",
-                  async ({ target, variant, prompt }) => {
-                    await generateCharacterSlot(target, variant || "normal", prompt);
-                  }
-                )}
-                {manualUploadCard(
-                  "character",
-                  manualCharacterUploadTarget,
-                  manualCharacterUploadVariant,
-                  "",
-                  setManualCharacterUploadTarget,
-                  setManualCharacterUploadVariant,
-                  () => {},
-                  (file) =>
-                    withBusy("upload-manual-character", async () => {
-                      await uploadForSlot(
-                        "character_sprite",
-                        manualCharacterUploadTarget,
-                        manualCharacterUploadVariant || "normal",
-                        file
-                      );
-                      clearManualCharacterUploadInputs();
-                    })
-                )}
-              </div>
+              <p className="text-sm font-medium text-gray-800">No derived character slots available.</p>
+              <p className="mt-1 text-xs text-gray-500">
+                Confirm or refresh the frozen blueprint so character designs can be listed here before asset generation.
+              </p>
             </div>
           ) : (
             <div className="mt-3 grid gap-3">
@@ -818,41 +559,10 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
           {backgrounds.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm text-gray-700">No scene background slots yet.</p>
-              <div className="mt-3 grid gap-4 lg:grid-cols-2">
-                {manualAiCard(
-                  "background",
-                  "Generate with AI",
-                  manualBackgroundTarget,
-                  manualBackgroundVariant,
-                  manualBackgroundPromptValue,
-                  manualBackgroundDescriptionValue,
-                  "generate-manual-background",
-                  async ({ target, variant, prompt, description }) => {
-                    await generateBackgroundSlot(target, variant || "main", prompt, false, description);
-                  }
-                )}
-                {manualUploadCard(
-                  "background",
-                  manualBackgroundUploadTarget,
-                  manualBackgroundUploadVariant,
-                  manualBackgroundUploadDescription,
-                  setManualBackgroundUploadTarget,
-                  setManualBackgroundUploadVariant,
-                  setManualBackgroundUploadDescription,
-                  (file) =>
-                    withBusy("upload-manual-background", async () => {
-                      await uploadForSlot(
-                        "background",
-                        manualBackgroundUploadTarget,
-                        manualBackgroundUploadVariant || "main",
-                        file,
-                        manualBackgroundUploadDescription
-                      );
-                      clearManualBackgroundUploadInputs();
-                    })
-                )}
-              </div>
+              <p className="text-sm font-medium text-gray-800">No derived scene background slots available.</p>
+              <p className="mt-1 text-xs text-gray-500">
+                Generate scene packages from the frozen blueprint so each scene can expose an AI generation/upload entry.
+              </p>
             </div>
           ) : (
             <div className="mt-3 grid gap-3">
