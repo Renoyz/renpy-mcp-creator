@@ -16,6 +16,11 @@ function baseState(state: GenerationState["state"]): GenerationState {
         target: "Alice",
         variant: "normal",
         generation_prompt: "existing generated prompt",
+        display_name: "Aya",
+        role: "Detective protagonist",
+        appearance: "red coat, black notebook",
+        character_source: "blueprint",
+        prompt: "Generate Aya with red coat and black notebook.",
         source: "uploaded",
         status: "uploaded",
         path: "game/images/sprites/char_Alice_normal.png",
@@ -75,6 +80,27 @@ describe("StepwiseGenerationView", () => {
 
     expect(within(characterSection as HTMLElement).getByRole("button", { name: "Confirm Characters" })).toBeEnabled();
     expect(within(characterSection as HTMLElement).getByRole("button", { name: "Accept" })).toBeEnabled();
+  });
+
+  it("shows derived character design metadata as a reviewable slot list", () => {
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={baseState("character_assets_draft")}
+        loadGenerationState={vi.fn()}
+      />
+    );
+
+    const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
+
+    expect(screen.queryByText("No character slots yet.")).not.toBeInTheDocument();
+    expect(within(slotCard).getByText("Aya")).toBeInTheDocument();
+    expect(within(slotCard).getByText(/Detective protagonist/)).toBeInTheDocument();
+    expect(within(slotCard).getByText(/red coat, black notebook/)).toBeInTheDocument();
+    expect(within(slotCard).getByText(/Design source: blueprint/)).toBeInTheDocument();
+    expect(within(slotCard).getByLabelText("Alice normal prompt")).toHaveValue(
+      "existing generated prompt"
+    );
   });
 
   it("shows AI generation and manual upload as peer entry points without fallback wording", () => {

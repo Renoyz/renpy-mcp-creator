@@ -290,7 +290,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     activeState === "script_preview";
 
   const currentPrompt = (slot: AssetSlot) => {
-    return slotPrompts[slot.asset_id] ?? slot.generation_prompt ?? "";
+    return slotPrompts[slot.asset_id] ?? slot.generation_prompt ?? slot.prompt ?? "";
   };
 
   const promptPayloadValue = (slot: AssetSlot) => {
@@ -720,18 +720,29 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-gray-900">
-                        {slot.target} <span className="text-xs text-gray-500">({slot.variant})</span>
+                        {slot.display_name || slot.target} <span className="text-xs text-gray-500">({slot.variant})</span>
                       </div>
                       <div className="text-xs text-gray-500">Source: {slot.source ?? "none"}</div>
+                      {slot.character_source ? (
+                        <div className="text-xs text-gray-500">Design source: {slot.character_source}</div>
+                      ) : null}
                     </div>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusChipClass(slot.status)}`}>
                       {slot.status}
                     </span>
                   </div>
+                  {(slot.role || slot.appearance) && (
+                    <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700">
+                      {slot.role ? <p><span className="font-medium text-gray-900">Role:</span> {slot.role}</p> : null}
+                      {slot.appearance ? (
+                        <p className="mt-1"><span className="font-medium text-gray-900">Appearance:</span> {slot.appearance}</p>
+                      ) : null}
+                    </div>
+                  )}
                   {slot.preview_url && (
                     <img
                       src={slot.preview_url}
-                      alt={`${slot.target} ${slot.variant}`}
+                      alt={`${slot.display_name || slot.target} ${slot.variant}`}
                       className="mt-3 h-28 w-auto rounded border object-contain"
                     />
                   )}

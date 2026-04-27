@@ -104,6 +104,56 @@ def _seed_two_chapter_scene_packages(pm, project_name: str) -> None:
     )
 
 
+def _seed_blueprint_characters(pm, project_name: str) -> None:
+    from renpy_mcp.blueprint.models import BlueprintCharacter, ProjectBlueprint
+
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(
+            title="Character Slot VN",
+            genre="mystery",
+            worldview="rainy city",
+            characters=[
+                BlueprintCharacter(
+                    name="Aya",
+                    role="Detective protagonist",
+                    personality="observant and guarded",
+                    appearance="red coat, black notebook, tired eyes",
+                )
+            ],
+        ),
+    )
+
+
+def _seed_brief_characters(pm, project_name: str) -> None:
+    from renpy_mcp.blueprint.models import BriefCard, ProjectBrief
+
+    pm.write_project_brief(
+        project_name,
+        ProjectBrief(
+            cards={
+                "character_identity": BriefCard(
+                    content={
+                        "characters": [
+                            {
+                                "character_id": "aya",
+                                "name": "Aya",
+                                "story_role": "Detective protagonist",
+                                "core_motivation": "Find the missing witness",
+                                "personality_anchors": ["observant", "guarded"],
+                                "visual_identity_anchors": ["red coat", "black notebook"],
+                                "forbidden_drift": [],
+                            }
+                        ]
+                    },
+                    confirmed=True,
+                )
+            },
+            updated_at="2026-04-27T00:00:00Z",
+        ),
+    )
+
+
 class FakeImageService:
     def __init__(self, color=(21, 42, 84, 255), size=(640, 360)):
         self.color = color
@@ -265,6 +315,56 @@ class TestStepwiseService:
             )
 
         assert slot_path.read_bytes() == original_staging_bytes
+
+    def test_start_characters_creates_slots_from_blueprint_characters(self, service, project):
+        project_name, _ = project
+        _seed_blueprint_characters(service.pm, project_name)
+
+        state = service.start_characters(project_name)
+
+        slot = state["character_assets"]["char_Aya_normal"]
+        assert slot["target"] == "Aya"
+        assert slot["display_name"] == "Aya"
+        assert slot["role"] == "Detective protagonist"
+        assert slot["appearance"] == "red coat, black notebook, tired eyes"
+        assert slot["character_source"] == "blueprint"
+        assert "red coat" in slot["prompt"]
+
+    def test_start_characters_falls_back_to_brief_character_identity(self, service, project):
+        project_name, _ = project
+        _seed_brief_characters(service.pm, project_name)
+
+        state = service.start_characters(project_name)
+
+        slot = state["character_assets"]["char_aya_normal"]
+        assert slot["target"] == "aya"
+        assert slot["display_name"] == "Aya"
+        assert slot["role"] == "Detective protagonist"
+        assert slot["appearance"] == "red coat, black notebook"
+        assert slot["character_source"] == "brief"
+        assert "Find the missing witness" in slot["prompt"]
+
+    def test_generated_character_default_prompt_uses_character_design_metadata(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        _seed_blueprint_characters(pm, project_name)
+        fake_image_service = FakeImageService()
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+
+        slot = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="Aya",
+                variant="normal",
+                prompt="",
+            )
+        )
+
+        assert slot["display_name"] == "Aya"
+        assert slot["appearance"] == "red coat, black notebook, tired eyes"
+        assert "red coat, black notebook, tired eyes" in fake_image_service.calls[0]["prompt"]
 
     def test_generated_character_slot_can_be_accepted_and_keeps_prompt(self, pm, project):
         from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService

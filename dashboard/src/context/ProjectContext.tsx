@@ -230,6 +230,10 @@ export interface AssetSlot {
   variant: string;
   generation_prompt?: string | null;
   prompt?: string | null;
+  display_name?: string | null;
+  role?: string | null;
+  appearance?: string | null;
+  character_source?: string | null;
   description?: string | null;
   source: "generated" | "uploaded" | null;
   status: "empty" | "generating" | "generated" | "uploaded" | "accepted" | "failed";

@@ -200,11 +200,13 @@ class StepwiseGenerationService:
             return list(state[collection].keys())
 
         if collection == "character_assets":
-            required_targets: set[str] = set()
-            for chapter in scene_packages.chapters:
-                for scene in chapter.scenes:
-                    for character in scene.characters_present:
-                        required_targets.add(self._normalize_target(character))
+            required_targets = {
+                self._normalize_target(str(req.get("target", "")))
+                for req in self._collect_character_requirements(project_name)
+                if req.get("target")
+            }
+            if not required_targets:
+                return list(state[collection].keys())
             return [
                 slot_id for slot_id, slot in state[collection].items()
                 if self._slot_target(slot) and self._normalize_target(self._slot_target(slot)) in required_targets
@@ -232,25 +234,186 @@ class StepwiseGenerationService:
                 raise ValueError(f"{label} asset {slot_id} must be accepted first")
 
     def _ensure_required_character_slots(self, project_name: str, state: dict[str, Any]) -> None:
+        for requirement in self._collect_character_requirements(project_name):
+            safe_character = self._normalize_target(str(requirement.get("target", "")))
+            if not safe_character:
+                continue
+            char_asset_id = self._slot_asset_id("character_sprite", safe_character, "normal")
+            existing = state["character_assets"].get(char_asset_id)
+            if existing is None:
+                slot = self._build_empty_slot(
+                    kind="character_sprite",
+                    target=safe_character,
+                    variant="normal",
+                )
+                state["character_assets"][char_asset_id] = self._apply_character_metadata(slot, requirement)
+                continue
+            state["character_assets"][char_asset_id] = self._apply_character_metadata(existing, requirement)
+
+    def _collect_character_requirements(self, project_name: str) -> list[dict[str, str]]:
+        """Collect character asset slots from finalized design artifacts."""
+        blueprint_requirements = self._blueprint_character_requirements(project_name)
+        brief_requirements = self._brief_character_requirements(project_name)
+        design_lookup = {
+            self._normalized_slot_match_key(item["target"]): item
+            for item in [*brief_requirements, *blueprint_requirements]
+            if item.get("target")
+        }
+        for item in [*brief_requirements, *blueprint_requirements]:
+            display_name = item.get("display_name", "")
+            if display_name:
+                design_lookup.setdefault(self._normalized_slot_match_key(display_name), item)
+
+        scene_requirements = self._scene_package_character_requirements(project_name, design_lookup)
+        if scene_requirements:
+            return scene_requirements
+        if blueprint_requirements:
+            return blueprint_requirements
+        return brief_requirements
+
+    def _scene_package_character_requirements(
+        self,
+        project_name: str,
+        design_lookup: dict[str, dict[str, str]],
+    ) -> list[dict[str, str]]:
         scene_packages = self.pm.read_scene_packages(project_name)
         if scene_packages is None:
-            return
+            return []
+
+        requirements: dict[str, dict[str, str]] = {}
+
+        def add_character(target: str, display_name: str = "") -> None:
+            safe_target = self._normalize_target(target)
+            if not safe_target:
+                return
+            design = design_lookup.get(self._normalized_slot_match_key(safe_target))
+            if design is None and display_name:
+                design = design_lookup.get(self._normalized_slot_match_key(display_name))
+            item = dict(design or {})
+            item["target"] = safe_target
+            item["display_name"] = item.get("display_name") or display_name or target
+            item["character_source"] = "scene_package"
+            requirements.setdefault(self._normalized_slot_match_key(safe_target), item)
 
         for chapter in scene_packages.chapters:
             for scene in chapter.scenes:
-                for character in scene.characters_present:
-                    safe_character = self._normalize_target(character)
-                    if not safe_character:
-                        continue
-                    char_asset_id = self._slot_asset_id("character_sprite", safe_character, "normal")
-                    state["character_assets"].setdefault(
-                        char_asset_id,
-                        self._build_empty_slot(
-                            kind="character_sprite",
-                            target=safe_character,
-                            variant="normal",
-                        ),
+                for plan_item in scene.sprite_plan:
+                    add_character(
+                        plan_item.character_id or plan_item.character_name,
+                        plan_item.character_name,
                     )
+                for character in scene.characters_present:
+                    add_character(character, character)
+        return list(requirements.values())
+
+    def _blueprint_character_requirements(self, project_name: str) -> list[dict[str, str]]:
+        try:
+            blueprint = self.pm.read_blueprint(project_name)
+        except ValueError:
+            return []
+        if blueprint is None:
+            return []
+        requirements: list[dict[str, str]] = []
+        for character in blueprint.characters:
+            target = self._normalize_target(character.name)
+            if not target:
+                continue
+            requirements.append(
+                {
+                    "target": target,
+                    "display_name": character.name,
+                    "role": character.role,
+                    "appearance": character.appearance,
+                    "character_source": "blueprint",
+                    "prompt": self._character_prompt_from_parts(
+                        display_name=character.name,
+                        role=character.role,
+                        appearance=character.appearance,
+                        personality=character.personality,
+                    ),
+                }
+            )
+        return requirements
+
+    def _brief_character_requirements(self, project_name: str) -> list[dict[str, str]]:
+        try:
+            brief = self.pm.read_project_brief(project_name)
+        except ValueError:
+            return []
+        if brief is None:
+            return []
+        card = brief.cards.get("character_identity")
+        if card is None or not isinstance(card.content, dict):
+            return []
+        characters = card.content.get("characters")
+        if not isinstance(characters, list):
+            return []
+        requirements: list[dict[str, str]] = []
+        for raw in characters:
+            if not isinstance(raw, dict):
+                continue
+            target = self._coerce_prompt_text(raw.get("character_id")) or self._coerce_prompt_text(raw.get("name"))
+            safe_target = self._normalize_target(target)
+            if not safe_target:
+                continue
+            visual_anchors = raw.get("visual_identity_anchors")
+            if not isinstance(visual_anchors, list):
+                visual_anchors = []
+            personality_anchors = raw.get("personality_anchors")
+            if not isinstance(personality_anchors, list):
+                personality_anchors = []
+            appearance = ", ".join(str(anchor).strip() for anchor in visual_anchors if str(anchor).strip())
+            personality = ", ".join(str(anchor).strip() for anchor in personality_anchors if str(anchor).strip())
+            display_name = self._coerce_prompt_text(raw.get("name")) or safe_target
+            role = self._coerce_prompt_text(raw.get("story_role"))
+            motivation = self._coerce_prompt_text(raw.get("core_motivation"))
+            requirements.append(
+                {
+                    "target": safe_target,
+                    "display_name": display_name,
+                    "role": role,
+                    "appearance": appearance,
+                    "character_source": "brief",
+                    "prompt": self._character_prompt_from_parts(
+                        display_name=display_name,
+                        role=role,
+                        appearance=appearance,
+                        personality=personality,
+                        motivation=motivation,
+                    ),
+                }
+            )
+        return requirements
+
+    def _apply_character_metadata(self, slot: dict[str, Any], metadata: dict[str, str]) -> dict[str, Any]:
+        for key in ("display_name", "role", "appearance", "character_source", "prompt"):
+            value = self._coerce_prompt_text(metadata.get(key))
+            if value:
+                slot[key] = value
+        return slot
+
+    @staticmethod
+    def _character_prompt_from_parts(
+        *,
+        display_name: str,
+        role: str = "",
+        appearance: str = "",
+        personality: str = "",
+        motivation: str = "",
+    ) -> str:
+        parts = [
+            f"Generate a visual novel character sprite for {display_name}.",
+            "One character only, full body, transparent background.",
+        ]
+        if role:
+            parts.append(f"Role: {role}.")
+        if appearance:
+            parts.append(f"Appearance: {appearance}.")
+        if personality:
+            parts.append(f"Personality: {personality}.")
+        if motivation:
+            parts.append(f"Motivation: {motivation}.")
+        return " ".join(parts)
 
     def _ensure_required_background_slots(self, project_name: str, state: dict[str, Any]) -> None:
         scene_packages = self.pm.read_scene_packages(project_name)
@@ -784,6 +947,9 @@ class StepwiseGenerationService:
             slot["placeholder"] = existing.get("placeholder", slot["placeholder"])
             slot["description"] = existing.get("description", slot.get("description"))
             slot["description_source"] = existing.get("description_source", slot.get("description_source"))
+            for key in ("display_name", "role", "appearance", "character_source", "prompt"):
+                if key in existing:
+                    slot[key] = existing[key]
 
         state["character_assets"][target_slot_id] = slot
         if original_slot_id != target_slot_id:
@@ -834,6 +1000,7 @@ class StepwiseGenerationService:
             raise ValueError(f"Asset {slot_id} is already accepted")
         description = ""
         description_source: str | None = None
+        prompt_for_generation = self._coerce_prompt_text(prompt)
         if existing_slot is not None:
             description_value = existing_slot.get("description")
             if isinstance(description_value, str):
@@ -841,6 +1008,8 @@ class StepwiseGenerationService:
             source_value = existing_slot.get("description_source")
             if isinstance(source_value, str):
                 description_source = source_value
+            if not prompt_for_generation:
+                prompt_for_generation = self._coerce_prompt_text(existing_slot.get("prompt"))
 
         project_dir = self.pm._project_dir(project_name)
         slot, _ = await self._generate_and_stage_image(
@@ -849,11 +1018,15 @@ class StepwiseGenerationService:
             kind="character_sprite",
             target=character_id,
             variant=variant,
-            prompt=self._coerce_prompt_text(prompt),
+            prompt=prompt_for_generation,
             round_id=round_id,
             description=description,
             description_source=description_source,
         )
+        if existing_slot is not None:
+            for key in ("display_name", "role", "appearance", "character_source", "prompt"):
+                if key in existing_slot:
+                    slot[key] = existing_slot[key]
         _ = self._persist_generated_slot(
             state=state,
             collection=collection,
