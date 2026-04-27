@@ -1,14 +1,32 @@
 # Tier 4 Stepwise Generation With User Image Import
 
-Updated: 2026-04-26
+Updated: 2026-04-27
 
-Status: Design proposal
+Status: Implemented v1 (User Import + Workflow Controls), generate endpoints pending v1.1
+
+## Implementation Status
+
+- **v1 implemented (commit f5a980b):** Tier 4 stepwise generation with user image import has shipped.
+- **Scope covered in v1:** generation-state persistence, scene outline start/confirm, character/background upload/accept/confirm, script preview + commit/rollback, and user-import asset paths.
+- **Current gap in v1:** `/generation/{characters|backgrounds}/{...}/generate` routes are still unimplemented (`501`) and planned for v1.1 hardening.
+
+## Acceptance Notes
+
+### v1 Completed
+- Asset lifecycle is slot-based and shared between imported assets in the implemented flow.
+- Scene generation and user imports are intended to share state machine semantics, but AI generation routes are still pending.
+- User-imported images are project-scoped, staged first, and only promoted on successful commit.
+- Rollback behavior preserves prior stable assets and prototype files on failed commit.
+
+### v1.1 Optional Hardening
+- Additional UI affordances for recovery/retry edge cases (if needed).
+- Extra observability for step transitions and per-item reject causes.
+- Additional parity checks for same-path regeneration and long-running import edge cases.
 
 ## Goal
 
-Tier 4 should let users review and intervene at every generation step, and image assets must support two first-class sources:
+Tier 4 should let users review and intervene at every generation step. In v1, user-imported images are the implemented source.
 
-- AI-generated assets
 - User-imported images
 
 User import is not a fallback for failed generation. It is an equal path for filling an asset slot, with the same validation, preview, accept, retry, persistence, commit, and rollback behavior.
@@ -18,8 +36,8 @@ User import is not a fallback for failed generation. It is an equal path for fil
 ```text
 Freeze Blueprint
   -> Step 1: Generate and review scene outline
-  -> Step 2: Character sprites: generate or upload -> accept per asset
-  -> Step 3: Backgrounds: generate or upload -> accept per asset
+  -> Step 2: Character sprites: upload -> accept per asset
+  -> Step 3: Backgrounds: upload -> accept per asset
   -> Step 4: Script preview -> final commit -> build/preview
 ```
 
@@ -37,11 +55,11 @@ Example:
   "kind": "character_sprite",
   "target": "Alice",
   "variant": "normal",
-  "source": "generated",
+  "source": "uploaded",
   "status": "accepted",
-  "path": "game/images/character/alice_normal.png",
-  "staging_path": "game/__staging__/r123/images/character/alice_normal.png",
-  "preview_url": "/api/projects/demo/asset-file/__staging__/r123/images/character/alice_normal.png",
+  "path": "game/images/sprites/alice_normal.png",
+  "staging_path": "game/__staging__/r123/images/sprites/alice_normal.png",
+  "preview_url": "/api/projects/demo/asset-file/__staging__/r123/images/sprites/alice_normal.png",
   "placeholder": false,
   "renderable": true,
   "validation": {
@@ -82,7 +100,8 @@ src/renpy_mcp/services/imported_asset_service.py
 - step state machine
 - step gate checks
 - scene outline start/confirm
-- character/background generate, upload, accept, confirm
+- character/background upload, accept, confirm
+- AI generation routes (`/generate`) are tracked as v1.1 work
 - script preview
 - final commit coordination
 - rollback coordination
@@ -173,20 +192,20 @@ POST /api/projects/{name}/generation/scene-outline/start
 POST /api/projects/{name}/generation/scene-outline/confirm
 
 POST /api/projects/{name}/generation/characters/start
-POST /api/projects/{name}/generation/characters/{character_id}/{variant}/generate
 POST /api/projects/{name}/generation/characters/{character_id}/{variant}/upload
-POST /api/projects/{name}/generation/characters/{character_id}/{variant}/accept
+POST /api/projects/{name}/generation/characters/{asset_id}/accept
 POST /api/projects/{name}/generation/characters/confirm
 
 POST /api/projects/{name}/generation/backgrounds/start
-POST /api/projects/{name}/generation/backgrounds/{location_id}/generate
-POST /api/projects/{name}/generation/backgrounds/{location_id}/upload
-POST /api/projects/{name}/generation/backgrounds/{location_id}/accept
+POST /api/projects/{name}/generation/backgrounds/{location_id}/{variant}/upload
+POST /api/projects/{name}/generation/backgrounds/{asset_id}/accept
 POST /api/projects/{name}/generation/backgrounds/confirm
 
 POST /api/projects/{name}/generation/script/preview
 POST /api/projects/{name}/generation/script/commit
 ```
+
+`/generate` endpoints are intentionally excluded from v1 implementation status and currently return `501` in the active API.
 
 Upload endpoints use `multipart/form-data`:
 
@@ -213,16 +232,20 @@ The Dashboard should recover state from `GET /generation-state`, not from local 
 Step 2 and Step 3 asset cards should expose the same actions:
 
 ```text
-[AI Generate] [Upload Image] [Accept] [Replace]
+[Upload Image] [Accept] [Replace]
 ```
+
+`[AI Generate]` is a v1.1 action. The v1 UI may show only the implemented
+upload path, or show a disabled/pending AI-generate control if the unavailable
+state is explicit to the user.
 
 Character card layout:
 
 ```text
 Alice
-  normal: empty/generated/uploaded/accepted
-  happy:  empty/generated/uploaded/accepted
-  sad:    empty/generated/uploaded/accepted
+  normal: empty/uploaded/accepted
+  happy:  empty/uploaded/accepted
+  sad:    empty/uploaded/accepted
 ```
 
 Background card layout:
@@ -250,7 +273,8 @@ This sprite has no transparent background. Choose background removal, re-upload,
 
 These rules are non-negotiable:
 
-- Generate and upload must write draft assets to staging only.
+- Upload must write draft assets to staging only. AI generate must follow the
+  same rule when v1.1 implements it.
 - Accepting an item updates metadata only; it does not promote files to final runtime paths.
 - Retrying or uploading one item must not affect other accepted items.
 - Accepted items must not be overwritten unless the user explicitly replaces them.
@@ -285,7 +309,7 @@ Required coverage:
 - Uploading a non-image file returns `400`.
 - Uploading with a malicious filename cannot escape the staging directory.
 - Accepting one item updates only that item.
-- AI generation after upload replaces only the draft for that item.
+- v1.1 AI generation after upload replaces only the draft for that item.
 - An accepted item is not overwritten unless the request explicitly says replace.
 - Script preview does not write final script files.
 - Final commit fails when required assets are missing or unaccepted.
@@ -314,7 +338,7 @@ Do not run real LLM or real image-generation services in automated tests. Stub p
 
 1. Add `ImportedAssetService` tests and implementation.
 2. Add stepwise state model tests and implementation.
-3. Add `StepwiseGenerationService` unit tests for gate, start, upload, generate, accept, confirm, preview, and commit.
+3. Add `StepwiseGenerationService` unit tests for gate, start, upload, accept, confirm, preview, and commit.
 4. Add REST API integration tests and routes.
 5. Integrate script preview and final commit with existing prototype activation logic.
 6. Update Dashboard to consume real project-scoped APIs.
@@ -322,4 +346,8 @@ Do not run real LLM or real image-generation services in automated tests. Stub p
 
 ## Main Risk
 
-The main risk is accidentally creating two separate asset lifecycles: one for generated assets and one for uploaded assets. The design avoids that by making the asset slot the shared abstraction. Generation and upload are only two ways to fill a slot; validation, acceptance, preview, persistence, commit, and rollback must be shared.
+The main risk is accidentally creating separate asset lifecycles as v1.1 adds
+AI generation beside the v1 upload path. The design avoids that by making the
+asset slot the shared abstraction. Upload now fills the slot; generation must
+fill the same slot later, with validation, acceptance, preview, persistence,
+commit, and rollback remaining shared.

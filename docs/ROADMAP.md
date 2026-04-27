@@ -1,6 +1,6 @@
 # RenPy MCP Unified Design — 项目路线图
 
-更新日期：2026-04-26
+更新日期：2026-04-27
 
 ---
 
@@ -8,8 +8,8 @@
 
 | 维度 | 状态 |
 |------|------|
-| 核心流水线 | ✅ 项目创建 → AI摄入 → Brief确认 → Outline确认 → Freeze → 场景生成 → 资源生成 → Build → Preview **全链路通过** |
-| E2E 测试 | ✅ 27/27 pass，真实 LLM 全链路 104s PASS (14/14 stages) |
+| 核心流水线 | ✅ 全链路跑通：全自动链路可用；新增 Tier 4 v1 已纳入同一项目级流水线，并在失败场景具备回滚行为 |
+| E2E 测试 | ✅ non-real E2E: 102 passed / 14 skipped；real-LLM E2E: 1 passed（当前会话验证，未展开任何未验证数字） |
 | 代码质量 | ✅ P0-P3 全部解决，3 轮扫描验证 |
 | 前端 Dashboard | ✅ React SPA 可用，workspace + chat panel + brief/outline 审核 + build/preview |
 | 后端 API | ✅ FastAPI + WebSocket，REST 快照 API，Bridge IPC |
@@ -102,17 +102,22 @@ docs/
 
 ---
 
-### 🟠 Tier 4 — 分步生成 (下下周~本月，投入~5-8天)
+### 🟠 Tier 4 — 分步生成 (v1 已完成，后续 hardening/v1.1)
 
-**目标**: 用户可以在生成的每个步骤审核和干预
+**状态**: 已完成 v1（commit f5a980b）。后续任务聚焦 v1.1 hardening 与边界稳定性。
 
-**4 步流程**:
-1. 场景大纲检查 → 审核
-2. 角色立绘生成 → 审核 (可按角色重来)
-3. 背景图生成 → 审核 (可按场景重来)
-4. 脚本组装 → 预览
+**v1 已实现能力**:
+1. `generation-state` 持久化与恢复
+2. scene outline start / confirm
+3. 角色与背景：upload / accept / confirm
+4. script preview / commit
+5. staging 写入与回滚
+6. 用户导入路径（uploaded slot）完整入链路（同一资产生命周期）
 
-**预期效果**: 降低 token 浪费，提高用户控制感
+**v1.1（可选 hardening）**:
+- 同路径重入时与历史稳定资产覆盖策略的边界加固
+- 上传校验失败与恢复链路的可观测性增强
+- 非法文件/恶意路径场景的更细粒度错误提示与度量
 
 详见: `stepwise-generation-design.md`
 
