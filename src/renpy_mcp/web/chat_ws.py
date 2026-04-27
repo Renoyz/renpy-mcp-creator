@@ -1073,6 +1073,30 @@ class BlueprintOrchestrator:
         self._load_history()
         lang = _preferred_output_language_from_messages(self.messages)
 
+        from ..services.dev_test_command import (
+            dev_test_command_event,
+            dev_test_commands_enabled,
+            disabled_dev_test_command_event,
+            is_dev_test_command,
+        )
+
+        if is_dev_test_command(content):
+            if not dev_test_commands_enabled():
+                event = disabled_dev_test_command_event()
+                self.messages.append({"role": "assistant", "message_kind": event["message_kind"], "content": event["content"]})
+                self._save_history()
+                return [event]
+            event = dev_test_command_event(self.project_name, self.pm)
+            self.phase = PipelineStage.EDITING
+            self.turn_count = 0
+            self.draft = self.pm.read_blueprint(self.project_name)
+            self.confirmation_id = None
+            self.intake_mode = False
+            self.messages.append({"role": "assistant", "message_kind": event["message_kind"], "content": event["content"]})
+            self._save_history()
+            self._save_session()
+            return [event]
+
         # Handle explicit start trigger without consuming a turn
         if (content in _START_TRIGGERS or content in _INTAKE_START_TRIGGERS) and self.turn_count == 0:
             self.intake_mode = content in _INTAKE_START_TRIGGERS
