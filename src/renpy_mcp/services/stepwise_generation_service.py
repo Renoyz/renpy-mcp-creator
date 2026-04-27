@@ -48,6 +48,7 @@ class StepwiseGenerationService:
         pm: "ProjectManager",
         imported_asset_service: ImportedAssetService | None = None,
         image_service: Any | None = None,
+        background_remover: Any | None = None,
     ) -> None:
         if pm is None:
             raise ValueError("ProjectManager is required")
@@ -60,6 +61,11 @@ class StepwiseGenerationService:
 
             image_service = ImageService(pm.settings)
         self.image_service = image_service
+        if background_remover is None:
+            from renpy_mcp.ai.background_remover import BackgroundRemover
+
+            background_remover = BackgroundRemover()
+        self.background_remover = background_remover
 
     # ------------------------------------------------------------------
     # State persistence helpers
@@ -811,6 +817,22 @@ class StepwiseGenerationService:
             slot["description_source"] = resolved_source
         return slot
 
+    def _postprocess_generated_character(self, generated_file: Path) -> tuple[Path, list[Path]]:
+        intermediates: list[Path] = []
+        transparent_file = self.background_remover.remove_background(generated_file)
+        if transparent_file is None:
+            return generated_file, intermediates
+
+        transparent_path = Path(transparent_file)
+        intermediates.append(transparent_path)
+        normalized_file, _metadata = self.background_remover.normalize_sprite(transparent_path)
+        if normalized_file is None:
+            return generated_file, intermediates
+
+        normalized_path = Path(normalized_file)
+        intermediates.append(normalized_path)
+        return normalized_path, intermediates
+
     async def _generate_and_stage_image(
         self,
         project_name: str,
@@ -867,6 +889,10 @@ class StepwiseGenerationService:
         if not generated_file.exists():
             raise RuntimeError("Generated image file is missing")
 
+        postprocess_files: list[Path] = []
+        if kind == "character_sprite":
+            generated_file, postprocess_files = self._postprocess_generated_character(generated_file)
+
         slot = self._build_generated_slot(
             project_name=project_name,
             round_id=round_id,
@@ -882,6 +908,7 @@ class StepwiseGenerationService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(generated_file.read_bytes())
         cleanup_files = [Path(path) for path in result.files]
+        cleanup_files.extend(postprocess_files)
         if generated_file not in cleanup_files:
             cleanup_files.append(generated_file)
         self._cleanup_generated_intermediates(project_dir, cleanup_files)

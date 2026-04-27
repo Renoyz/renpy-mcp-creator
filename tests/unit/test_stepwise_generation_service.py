@@ -235,6 +235,31 @@ class FakeImageService:
         )
 
 
+class FakeBackgroundRemover:
+    def __init__(self):
+        self.remove_calls: list[Path] = []
+        self.normalize_calls: list[Path] = []
+
+    def remove_background(self, input_path: Path) -> Path:
+        self.remove_calls.append(input_path)
+        output_path = input_path.with_name(f"{input_path.stem}_transparent.png")
+        output_path.write_bytes(_rgba_png_bytes(size=(500, 750)))
+        return output_path
+
+    def normalize_sprite(self, input_path: Path, output_path: Path | None = None, target_height=750, canvas_height=900):
+        self.normalize_calls.append(input_path)
+        output = output_path or input_path.with_name(f"{input_path.stem}_normalized.png")
+        output.write_bytes(_rgba_png_bytes(size=(900, 900)))
+        return output, {
+            "bbox": {"left": 0, "top": 0, "right": 500, "bottom": 750},
+            "baseline_offset": 150,
+            "normalized_size": (900, 900),
+            "visible_ratio": 0.5,
+            "renderable": True,
+            "reason": "ok",
+        }
+
+
 @pytest.fixture()
 def pm(tmp_path, monkeypatch):
     from renpy_mcp.config import get_settings
@@ -451,6 +476,37 @@ class TestStepwiseService:
 
         accepted = service.accept_asset(project_name, slot["asset_id"])
         assert accepted["status"] == "accepted"
+
+    def test_generated_character_asset_removes_background_and_normalizes_sprite(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, project_dir = project
+        fake_image_service = FakeImageService(color=(21, 42, 84), size=(500, 750))
+        fake_remover = FakeBackgroundRemover()
+        service = StepwiseGenerationService(
+            pm,
+            image_service=fake_image_service,
+            background_remover=fake_remover,
+        )
+        service.start_characters(project_name)
+
+        slot = asyncio.run(
+            service.generate_character_asset(
+                project_name=project_name,
+                character_id="alice",
+                variant="normal",
+                prompt="ink vampire hunter sprite",
+            )
+        )
+
+        assert fake_remover.remove_calls, "character generation should remove raw image backgrounds"
+        assert fake_remover.normalize_calls, "character generation should normalize transparent sprites"
+        assert slot["renderable"] is True
+        assert slot["validation"]["reason"] == "ok"
+        assert slot["validation"]["width"] == 900
+        assert slot["validation"]["height"] == 900
+        assert slot["staging_path"].endswith(".png")
+        assert (project_dir / slot["staging_path"]).exists()
 
     def test_generate_replaces_draft_slot_with_new_prompt(self, pm, project):
         from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
