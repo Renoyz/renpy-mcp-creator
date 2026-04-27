@@ -12,11 +12,13 @@ import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutl
 import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
 import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
 import { StepwiseGenerationView } from "../components/workspace/StepwiseGenerationView";
+import { GameShellWorkspaceView } from "../components/workspace/GameShellWorkspaceView";
 import { runFreezeAutoGenerationChain } from "../lib/refinementAutomation";
-import { Loader2, Play, Hammer, AlertCircle } from "lucide-react";
+import { Loader2, Play, Package, AlertCircle } from "lucide-react";
 
 type Status = "idle" | "running" | "success" | "failed";
 type UiFlowState = "idle" | "running" | "success" | "failed";
+type BuildTarget = "web" | "windows";
 
 type FlowBanner = {
   status: UiFlowState;
@@ -69,6 +71,8 @@ export function ProjectWorkspacePage() {
   const autoRouteTokenRef = useRef(0);
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
+  const [buildInProgressTarget, setBuildInProgressTarget] = useState<BuildTarget | null>(null);
+  const [lastBuildTarget, setLastBuildTarget] = useState<BuildTarget>("web");
   const [previewStatus, setPreviewStatus] = useState<Status>("idle");
   const [previewMessage, setPreviewMessage] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -224,9 +228,20 @@ export function ProjectWorkspacePage() {
     return () => clearInterval(id);
   }, [activeProjectName, pipelineStage]);
 
-  const handleBuild = async () => {
+  const buildButtonLabel = (target: BuildTarget) => {
+    if (buildInProgressTarget === target && buildStatus === "running") return "Building...";
+    if (postFreezeFlow.status === "running") return "Preparing...";
+    if (buildStatus === "failed") return "Retry Build";
+    if (buildStatus === "success" && lastBuildTarget === target) {
+      return target === "web" ? "Web Build OK" : "Windows Build OK";
+    }
+    return target === "web" ? "Build Web Preview" : "Build Windows Package";
+  };
+
+  const handleBuild = async (target: BuildTarget) => {
     if (!activeProjectName) return;
     setBuildStatus("running");
+    setBuildInProgressTarget(target);
     setBuildMessage("");
     setPreviewUrl(null);
     try {
@@ -248,20 +263,29 @@ export function ProjectWorkspacePage() {
       let resp = await fetch(buildUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: "web" }),
+        body: JSON.stringify({ target }),
       });
       const data = await resp.json();
         if (resp.ok && data.success) {
         setBuildStatus("success");
-        setBuildMessage(data.output_path ? `Built to ${data.output_path}` : "Build succeeded");
-        setPreviewAvailable(true);
+        setLastBuildTarget(target);
+        setBuildMessage(
+          data.output_path
+            ? `Built ${target} to ${data.output_path}`
+            : `Build ${target} succeeded`
+        );
+        if (target === "web") {
+          setPreviewAvailable(true);
+        }
         if (hasActivePrototype) {
-          setPipelineStage("prototype_preview_ready");
+          setPipelineStage(target === "web" ? "prototype_preview_ready" : "prototype_committed");
         }
       } else {
         setBuildStatus("failed");
-        setBuildMessage(data.error || "Build failed");
-        setPreviewAvailable(false);
+        setBuildMessage(data.error || data.detail || `Build ${target} failed`);
+        if (target === "web") {
+          setPreviewAvailable(false);
+        }
         if (hasActivePrototype) {
           setPipelineStage("prototype_build_failed");
         }
@@ -269,6 +293,8 @@ export function ProjectWorkspacePage() {
     } catch (e) {
       setBuildStatus("failed");
       setBuildMessage(e instanceof Error ? e.message : "Build request failed");
+    } finally {
+      setBuildInProgressTarget(null);
     }
   };
 
@@ -412,30 +438,28 @@ export function ProjectWorkspacePage() {
           {canRunBuildPreview && (
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={handleBuild}
+                onClick={() => void handleBuild("web")}
                 disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed ${
-                  buildStatus === "failed"
-                    ? "bg-red-600 text-white"
-                    : buildStatus === "success"
-                    ? "bg-green-600 text-white"
-                    : "bg-gray-900 text-white"
-                }`}
+                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-gray-900 text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {buildStatus === "running" || postFreezeFlow.status === "running" ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Hammer className="h-3.5 w-3.5" />
+                  <Package className="h-3.5 w-3.5" />
                 )}
-                {postFreezeFlow.status === "running"
-                  ? "Preparing..."
-                  : buildStatus === "running"
-                  ? "Building..."
-                  : buildStatus === "success"
-                  ? "Build OK"
-                  : buildStatus === "failed"
-                  ? "Retry Build"
-                  : "Build"}
+                {buildButtonLabel("web")}
+              </button>
+              <button
+                onClick={() => void handleBuild("windows")}
+                disabled={buildStatus === "running" || postFreezeFlow.status === "running"}
+                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-gray-900 text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {buildStatus === "running" || postFreezeFlow.status === "running" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Package className="h-3.5 w-3.5" />
+                )}
+                {buildButtonLabel("windows")}
               </button>
               <button
                 onClick={handlePreview}
@@ -688,6 +712,9 @@ export function ProjectWorkspacePage() {
                 generationState={generationState}
                 loadGenerationState={loadGenerationState}
               />
+            )}
+            {activeTab === "gameshell" && (
+              <GameShellWorkspaceView projectName={activeProjectName} />
             )}
             {activeTab === "scene" && (
               <SceneWorkspaceView

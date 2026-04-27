@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ProjectStatus(StrEnum):
@@ -108,6 +108,118 @@ class ProjectBlueprint(BaseModel):
     audio_style: str = ""
     characters: list[BlueprintCharacter] = Field(default_factory=list)
     chapters: list[ChapterSummary] = Field(default_factory=list)
+
+
+def _validate_project_relative_path(value: str) -> str:
+    """Validate a project-relative asset path used by generated shell metadata."""
+    if not value:
+        return value
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("path must be project-relative and cannot contain traversal")
+    return value.replace("\\", "/")
+
+
+class GameShellGalleryItem(BaseModel):
+    """Editable gallery item derived from generated prototype assets."""
+
+    id: str
+    title: str
+    image_path: str = ""
+    source: Literal["background", "sprite", "cg", "placeholder"] = "placeholder"
+    unlock_mode: Literal["always", "persistent"] = "always"
+    persistent_key: str = ""
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, value: str) -> str:
+        return _validate_project_relative_path(value)
+
+
+class GameShellEndingItem(BaseModel):
+    """Editable ending gallery item derived from prototype structure."""
+
+    id: str
+    title: str
+    description: str = ""
+    unlock_mode: Literal["always", "persistent"] = "always"
+    persistent_key: str = ""
+
+
+class GameShellConfig(BaseModel):
+    """Project-scoped presentation shell for a generated prototype."""
+
+    title: str = ""
+    subtitle: str = ""
+    theme: Literal["default", "dark", "light", "dramatic"] | str = "default"
+    main_menu_background: str = ""
+    show_gallery: bool = True
+    show_endings: bool = True
+    show_replay: bool = False
+    show_credits: bool = True
+    gallery_items: list[GameShellGalleryItem] = Field(default_factory=list)
+    ending_items: list[GameShellEndingItem] = Field(default_factory=list)
+    credits: list[str] = Field(default_factory=list)
+    updated_at: str = ""
+
+    @field_validator("main_menu_background")
+    @classmethod
+    def validate_main_menu_background(cls, value: str) -> str:
+        return _validate_project_relative_path(value)
+
+    @field_validator("gallery_items", mode="before")
+    @classmethod
+    def coerce_gallery_items(cls, value):
+        if isinstance(value, list):
+            items = []
+            for idx, item in enumerate(value):
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        items.append({
+                            "id": f"gallery_{idx + 1}",
+                            "title": text,
+                            "source": "placeholder",
+                        })
+                else:
+                    items.append(item)
+            return items
+        return value
+
+    @field_validator("ending_items", mode="before")
+    @classmethod
+    def coerce_ending_items(cls, value):
+        if isinstance(value, list):
+            items = []
+            for idx, item in enumerate(value):
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        items.append({
+                            "id": f"ending_{idx + 1}",
+                            "title": text,
+                        })
+                else:
+                    items.append(item)
+            return items
+        return value
+
+    @field_validator("credits", mode="before")
+    @classmethod
+    def coerce_credits(cls, value):
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+        return value
+
+
+class GameShellRenderPreview(BaseModel):
+    """Response returned after rendering additive shell scripts to staging."""
+
+    script_files: list[str] = Field(default_factory=list)
+    preview: str = ""
+    gallery_count: int = 0
+    ending_count: int = 0
+    preview_url: str = ""
 
 
 class SceneScript(BaseModel):

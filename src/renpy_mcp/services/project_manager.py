@@ -18,6 +18,7 @@ from renpy_mcp.blueprint.models import (
     PipelineStage,
     ProjectBlueprint,
     ProjectBrief,
+    GameShellConfig,
     ProjectMeta,
     ProjectStatus,
     ProjectStyleBible,
@@ -285,6 +286,41 @@ class ProjectManager:
         index_path = meta_dir / "index.json"
         index_path.write_text(
             json.dumps(index, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    # -----------------------------------------------------------------------
+    # Game shell persistence
+    # -----------------------------------------------------------------------
+
+    def read_game_shell(self, name: str) -> GameShellConfig | None:
+        """Read meta/game_shell.json for a project, if it exists."""
+        path = self._project_dir(name) / "meta" / "game_shell.json"
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Cannot read game_shell.json for project {name!r}") from exc
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"game_shell.json for project {name!r} contains invalid JSON") from exc
+        try:
+            return GameShellConfig.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(f"game_shell.json for project {name!r} has an invalid structure") from exc
+
+    def write_game_shell(self, name: str, config: GameShellConfig) -> None:
+        """Persist meta/game_shell.json for a project."""
+        from datetime import datetime
+
+        meta_dir = self._project_dir(name) / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        path = meta_dir / "game_shell.json"
+        updated = config.model_copy(update={"updated_at": datetime.utcnow().isoformat()})
+        path.write_text(
+            updated.model_dump_json(indent=2, by_alias=False),
             encoding="utf-8",
         )
 

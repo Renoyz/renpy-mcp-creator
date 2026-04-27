@@ -1,4 +1,4 @@
-import { FileText, Map, Code, ArrowLeft, BookOpen, ListOrdered, MessageSquarePlus } from "lucide-react";
+import { FileText, Map, Code, ArrowLeft, BookOpen, ListOrdered, MessageSquarePlus, LayoutDashboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type WorkspaceTab =
@@ -8,6 +8,7 @@ export type WorkspaceTab =
   | "blueprint"
   | "storymap"
   | "generation"
+  | "gameshell"
   | "scene";
 
 interface Props {
@@ -80,6 +81,12 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
           onClick={() => onChange("storymap")}
           icon={<Map className="w-4 h-4" />}
           label="Story Map"
+        />
+        <TabButton
+          active={activeTab === "gameshell"}
+          onClick={() => onChange("gameshell")}
+          icon={<LayoutDashboard className="w-4 h-4" />}
+          label="Game Shell"
         />
       </div>
     </div>

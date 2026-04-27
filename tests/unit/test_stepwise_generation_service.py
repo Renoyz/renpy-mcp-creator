@@ -722,6 +722,108 @@ class TestStepwiseService:
         assert "script.rpy" not in preview["script"]
         assert script_file.read_text(encoding="utf-8") == original
 
+    def test_script_preview_and_commit_include_game_shell_files(self, service, project):
+        project_name, project_dir = project
+        (project_dir / "game" / "script.rpy").write_text(
+            'label start:\n    "Hello from the Ren\'Py MCP server!"\n    return\n',
+            encoding="utf-8",
+        )
+
+        service.start_characters(project_name)
+        alice = service.upload_character_asset(
+            project_name=project_name,
+            character_id="alice",
+            variant="normal",
+            filename="alice.png",
+            file_bytes=_rgba_png_bytes(),
+        )
+        service.accept_asset(project_name, alice["asset_id"])
+        service.start_backgrounds(project_name)
+        bg = service.upload_background_asset(
+            project_name=project_name,
+            location_id="rooftop",
+            variant="main",
+            filename="roof.png",
+            file_bytes=_rgba_png_bytes(size=(1280, 720)),
+        )
+        service.accept_asset(project_name, bg["asset_id"])
+        service.confirm_characters(project_name)
+        service.confirm_backgrounds(project_name)
+
+        preview = service.preview_script(project_name)
+
+        assert "game/zz_generated_shell.rpy" in preview["shell_files"]
+        assert "game/zz_generated_gallery.rpy" in preview["shell_files"]
+        assert "game/zz_generated_shell.rpy" in preview["script_files"]
+        assert "game/zz_generated_gallery.rpy" in preview["script_files"]
+        state = service.get_state(project_name)
+        round_id = state["round_id"]
+        assert (project_dir / "game" / "__staging__" / round_id / "shell" / "zz_generated_shell.rpy").exists()
+        assert not (project_dir / "game" / "zz_generated_shell.rpy").exists()
+
+        service.commit(project_name)
+
+        assert (project_dir / "game" / "zz_generated_shell.rpy").exists()
+        assert (project_dir / "game" / "zz_generated_gallery.rpy").exists()
+
+    def test_script_preview_commits_round_scoped_game_shell_when_manual_preview_overwrites_shared_shell(self, service, project):
+        project_name, project_dir = project
+        from renpy_mcp.blueprint.models import ProjectBlueprint
+
+        service.pm.write_blueprint(
+            project_name,
+            ProjectBlueprint(
+                title="Round Shell Title",
+                genre="mystery",
+                worldview="rainy city",
+            ),
+        )
+        (project_dir / "game" / "script.rpy").write_text(
+            'label start:\n    "Hello from the Ren\'Py MCP server!"\n    return\n',
+            encoding="utf-8",
+        )
+
+        service.start_characters(project_name)
+        alice = service.upload_character_asset(
+            project_name=project_name,
+            character_id="alice",
+            variant="normal",
+            filename="alice.png",
+            file_bytes=_rgba_png_bytes(),
+        )
+        service.accept_asset(project_name, alice["asset_id"])
+        service.start_backgrounds(project_name)
+        bg = service.upload_background_asset(
+            project_name=project_name,
+            location_id="rooftop",
+            variant="main",
+            filename="roof.png",
+            file_bytes=_rgba_png_bytes(size=(1280, 720)),
+        )
+        service.accept_asset(project_name, bg["asset_id"])
+        service.confirm_characters(project_name)
+        service.confirm_backgrounds(project_name)
+
+        preview = service.preview_script(project_name)
+        shell_files = preview["shell_files"]
+        assert shell_files
+
+        from renpy_mcp.blueprint.models import GameShellConfig
+        from renpy_mcp.services.game_shell_render_service import GameShellRenderService
+
+        GameShellRenderService(service.pm).render_preview(
+            project_name,
+            GameShellConfig(title="Manual Shell Title"),
+        )
+
+        service.commit(project_name)
+
+        final_shell = project_dir / shell_files[0]
+        assert final_shell.exists()
+        content = final_shell.read_text(encoding="utf-8")
+        assert "Round Shell Title" in content
+        assert "Manual Shell Title" not in content
+
     def test_start_characters_and_backgrounds_create_required_slots_from_scene_packages(self, service, project):
         project_name, _ = project
         _seed_scene_packages(service.pm, project_name)
@@ -1338,7 +1440,11 @@ class TestStepwiseService:
         assert preview["label"] == "script_preview"
         assert preview.get("staging_paths") is not None
         assert len(preview["staging_paths"]) == 2
-        assert len(preview["script_files"]) == 2
+        assert len([path for path in preview["script_files"] if "prototype_" in path]) == 2
+        assert "game/zz_generated_shell.rpy" in preview["script_files"]
+        state = service.get_state(project_name)
+        assert "game/zz_generated_shell.rpy" in state["script_preview"]["script_files"]
+        assert "game/zz_generated_shell.rpy" not in state["script_preview"]["prototype_script_files"]
         assert preview["staging_paths"][0] != preview["staging_paths"][1]
 
         result = service.commit(project_name)

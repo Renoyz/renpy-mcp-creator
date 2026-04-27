@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from PIL import Image
 
 from renpy_mcp.services.imported_asset_service import ImportedAssetService
+from renpy_mcp.services.game_shell_render_service import GameShellRenderService
 from renpy_mcp.services.prototype_activation_service import PrototypeActivationService
 from renpy_mcp.services.script_render_service import ScriptRenderService, final_path_from_staging
 from renpy_mcp.models import ImageGenerationResult
@@ -1529,6 +1530,7 @@ class StepwiseGenerationService:
         )
         self._ensure_required_slots_accepted(project_name, state, "character_assets")
         self._ensure_required_slots_accepted(project_name, state, "background_assets")
+        round_id = self._ensure_round_id(state, project_name)
 
         preview_plans = self._build_preview_plan(project_name, state)
         script_text_parts: list[str] = []
@@ -1577,12 +1579,22 @@ class StepwiseGenerationService:
             plan["final_script_path"] = final_script_path
 
         script_text = "\n\n".join(script_text_parts)
+        shell_preview = GameShellRenderService(self.pm).render_preview(project_name, staging_namespace=round_id)
+        shell_staging_paths = shell_preview.script_files
+        shell_files = [self._final_shell_path_from_staging(path) for path in shell_staging_paths]
+        all_script_files = script_files + shell_files
+        if shell_preview.preview:
+            script_text = "\n\n".join([script_text, "# Game Shell Preview", shell_preview.preview])
 
         state["state"] = "script_preview"
         state["script_preview"] = {
             "staging_paths": staging_paths,
             "staging_path": staging_paths[0] if staging_paths else None,
-            "script_files": script_files,
+            "script_files": all_script_files,
+            "prototype_script_files": script_files,
+            "all_script_files": all_script_files,
+            "shell_staging_paths": shell_staging_paths,
+            "shell_files": shell_files,
             "entry_label": preview_plans[0]["scenes"][0].entry_label if preview_plans else "prototype_stepwise_start",
             "scene_ids": all_scene_ids,
             "chapter_ids": chapter_ids,
@@ -1594,7 +1606,8 @@ class StepwiseGenerationService:
             "script": script_text,
             "staging_paths": staging_paths,
             "staging_path": staging_paths[0] if staging_paths else None,
-            "script_files": script_files,
+            "script_files": all_script_files,
+            "shell_files": shell_files,
             "entry_label": preview_plans[0]["scenes"][0].entry_label if preview_plans else "prototype_stepwise_start",
             "scene_ids": all_scene_ids,
         }
@@ -1735,6 +1748,39 @@ class StepwiseGenerationService:
             final_paths.append(final_path)
         return final_paths
 
+    @staticmethod
+    def _final_shell_path_from_staging(staging_path: str) -> str:
+        parts = staging_path.replace("\\", "/").split("/")
+        if len(parts) >= 5 and parts[0] == "game" and parts[1] == "__staging__" and parts[-2] == "shell":
+            return f"game/{parts[-1]}"
+        return final_path_from_staging(staging_path)
+
+    def _promote_shell_staging(self, project_dir: Path, shell_staging_paths: list[str]) -> list[str]:
+        final_paths: list[str] = []
+        for staging_path in shell_staging_paths:
+            if not staging_path:
+                continue
+            final_path = self._final_shell_path_from_staging(staging_path)
+            src = project_dir / staging_path
+            dst = project_dir / final_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.exists():
+                src.replace(dst)
+            final_paths.append(final_path)
+
+        shell_dirs = {project_dir / path for path in shell_staging_paths if path}
+        cleanup_dirs = {path.parent for path in shell_dirs}
+        for shell_staging_dir in cleanup_dirs:
+            if not shell_staging_dir.exists():
+                continue
+            try:
+                import shutil
+
+                shutil.rmtree(shell_staging_dir)
+            except OSError:
+                pass
+        return final_paths
+
     def _cleanup_stale_prototype_files(self, project_dir: Path, active_final_paths: list[str]) -> None:
         game_dir = project_dir / "game"
         if not game_dir.exists():
@@ -1794,11 +1840,24 @@ class StepwiseGenerationService:
                 raise ValueError("No preview script available")
             staging_paths = [legacy_staging_path]
 
-        script_files = script_preview.get("script_files")
+        script_files = script_preview.get("prototype_script_files")
+        if not isinstance(script_files, list) or not script_files:
+            script_files = script_preview.get("script_files")
         if not isinstance(script_files, list) or not script_files:
             script_files = [final_path_from_staging(path) for path in staging_paths]
         elif len(script_files) != len(staging_paths):
             raise ValueError("Preview state does not match generated scripts")
+
+        shell_staging_paths = script_preview.get("shell_staging_paths")
+        shell_files = script_preview.get("shell_files")
+        if isinstance(shell_staging_paths, list):
+            shell_staging_paths = [str(path) for path in shell_staging_paths if isinstance(path, str)]
+        else:
+            shell_staging_paths = []
+        if isinstance(shell_files, list):
+            shell_files = [str(path) for path in shell_files if isinstance(path, str)]
+        else:
+            shell_files = [self._final_shell_path_from_staging(path) for path in shell_staging_paths]
 
         entry_label = script_preview.get("entry_label")
         scene_ids = script_preview.get("scene_ids")
@@ -1837,7 +1896,7 @@ class StepwiseGenerationService:
         preview_asset_slots = self._collect_preview_asset_slots(preview_plans)
         asset_backups = self._collect_asset_backups(project_dir, preview_asset_slots)
 
-        script_backups = self._collect_file_backups(project_dir, script_files)
+        script_backups = self._collect_file_backups(project_dir, script_files + shell_files)
         prototype_file_backups: dict[Path, bytes] = self._collect_existing_prototype_file_backups(project_dir)
 
         try:
@@ -1861,8 +1920,10 @@ class StepwiseGenerationService:
                     staging_script_path=staging_paths[0],
                     round_id=None,
                 )
+                self._promote_shell_staging(project_dir, shell_staging_paths)
             else:
                 self._promote_script_staging(project_dir, staging_paths)
+                self._promote_shell_staging(project_dir, shell_staging_paths)
                 self._promote_staged_asset_slots(project_dir, preview_asset_slots)
                 self._cleanup_stale_prototype_files(project_dir, script_files)
                 self._cleanup_stale_prototype_index_entries(
@@ -1884,7 +1945,10 @@ class StepwiseGenerationService:
             state["script_preview"] = {
                 "staging_paths": staging_paths,
                 "staging_path": staging_paths[0],
-                "script_files": script_files,
+                "script_files": script_files + shell_files,
+                "prototype_script_files": script_files,
+                "shell_staging_paths": shell_staging_paths,
+                "shell_files": shell_files,
                 "entry_label": entry_label,
                 "scene_ids": scene_ids,
                 "chapter_ids": [plan["chapter"].id for plan in preview_plans],
@@ -1912,7 +1976,10 @@ class StepwiseGenerationService:
             state["script_preview"] = {
                 "staging_paths": staging_paths,
                 "staging_path": staging_paths[0],
-                "script_files": script_files,
+                "script_files": script_files + shell_files,
+                "prototype_script_files": script_files,
+                "shell_staging_paths": shell_staging_paths,
+                "shell_files": shell_files,
                 "entry_label": entry_label,
                 "scene_ids": scene_ids,
                 "chapter_ids": [plan["chapter"].id for plan in preview_plans],

@@ -228,6 +228,8 @@ async def api_stepwise_generation_state(project_name: str):
         _check_stepwise_generation_gate(project_name)
     except HTTPException:
         return _attach_scene_generation_status(pm, project_name, state)
+    if state.get("state") in {"failed", "script_preview", "committed"}:
+        return _attach_scene_generation_status(pm, project_name, state)
     try:
         state = service.prepare_asset_slots(project_name)
         return _attach_scene_generation_status(pm, project_name, state)

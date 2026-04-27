@@ -63,7 +63,31 @@ def _project_upload(
 
 
 def _seed_single_scene_packages(pm, project_name: str) -> None:
-    from renpy_mcp.blueprint.models import ScenePackageChapter, ScenePackageScene, ScenePackagesSnapshot
+    from renpy_mcp.blueprint.models import (
+        BlueprintFreezeStatus,
+        ProjectBlueprint,
+        ProjectMeta,
+        ProjectStatus,
+        RefinementState,
+        ScenePackageChapter,
+        ScenePackageScene,
+        ScenePackagesSnapshot,
+    )
+
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(title="Stepwise Commit VN", genre="test", worldview="test world"),
+    )
+    pm.write_project_meta(
+        project_name,
+        ProjectMeta(
+            name=project_name,
+            path=pm._project_dir(project_name),
+            status=ProjectStatus.DRAFT,
+            refinement_state=RefinementState.BLUEPRINT_READY,
+            blueprint_freeze_status=BlueprintFreezeStatus.FROZEN,
+        ),
+    )
 
     pm.write_scene_packages(
         project_name,

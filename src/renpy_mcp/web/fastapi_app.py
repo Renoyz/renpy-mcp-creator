@@ -131,6 +131,33 @@ def _build_status_path(project_name: str) -> Path:
     return settings.workspace / project_name / "logs" / "build-status.json"
 
 
+def _public_build_output_path(output_path: Path | None) -> str | None:
+    if output_path is None:
+        return None
+    settings = get_settings()
+    try:
+        return output_path.resolve().relative_to(settings.workspace.resolve()).as_posix()
+    except ValueError:
+        return output_path.name
+
+
+def _redact_local_paths(value: str) -> str:
+    settings = get_settings()
+    workspace = settings.workspace.resolve()
+    redacted = value.replace(str(workspace), "<workspace>")
+    redacted = redacted.replace(workspace.as_posix(), "<workspace>")
+    return redacted
+
+
+def _status_output_to_path(output_path: str | None) -> Path | None:
+    if not output_path:
+        return None
+    path = Path(output_path)
+    if path.is_absolute():
+        return path
+    return get_settings().workspace / path
+
+
 def _write_build_status(
     project_name: str,
     status: str,
@@ -141,12 +168,32 @@ def _write_build_status(
 ) -> None:
     status_path = _build_status_path(project_name)
     status_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_build_status(project_name) or {}
+    targets = existing.get("targets")
+    if not isinstance(targets, dict):
+        targets = {}
+
+    target_name = target or "web"
+    target_entry = {
+        "status": status,
+        "message": _redact_local_paths(message),
+        "output_path": _public_build_output_path(output_path),
+        "previewable": _previewable_output_path(output_path) is not None,
+        "target": target_name,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    targets[target_name] = target_entry
+
+    web_entry = targets.get("web") if isinstance(targets.get("web"), dict) else None
+    previewable = bool(web_entry and web_entry.get("previewable"))
     data = {
         "status": status,
-        "message": message,
-        "output_path": str(output_path) if output_path else None,
-        "previewable": _previewable_output_path(output_path) is not None,
-        "target": target,
+        "message": _redact_local_paths(message),
+        "output_path": target_entry["output_path"],
+        "previewable": previewable,
+        "preview_output_path": web_entry.get("output_path") if previewable and web_entry else None,
+        "target": target_name,
+        "targets": targets,
         "updated_at": datetime.utcnow().isoformat(),
     }
     status_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -170,8 +217,13 @@ def _resolve_preview_build_dir(project_name: str) -> Path | None:
     if cached is not None:
         return Path(cached)
     persisted = _read_build_status(project_name)
-    if persisted and persisted.get("previewable") and persisted.get("output_path"):
-        return Path(persisted["output_path"])
+    if persisted and persisted.get("previewable"):
+        targets = persisted.get("targets")
+        if isinstance(targets, dict):
+            web_entry = targets.get("web")
+            if isinstance(web_entry, dict):
+                return _status_output_to_path(web_entry.get("output_path"))
+        return _status_output_to_path(persisted.get("preview_output_path") or persisted.get("output_path"))
     return None
 
 
@@ -195,6 +247,7 @@ def create_app() -> FastAPI:
     from .routers.projects import router as projects_router
     from .routers.refinement import router as refinement_router
     from .routers.generation import router as generation_router
+    from .routers.game_shell import router as game_shell_router
     from .routers.preview_build import router as preview_build_router
     from .routers.scripts_assets import router as scripts_assets_router
 
@@ -202,6 +255,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(refinement_router)
     app.include_router(generation_router)
+    app.include_router(game_shell_router)
     app.include_router(preview_build_router)
     app.include_router(scripts_assets_router)
 

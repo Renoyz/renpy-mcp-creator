@@ -18,6 +18,7 @@ from ..fastapi_app import (
     _resolve_current_project_name,
     _resolve_preview_build_dir,
     _store_previewable_build_result,
+    _public_build_output_path,
     _write_build_status,
     _build_status_path,
 )
@@ -25,6 +26,32 @@ from ..fastapi_app import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _mock_build_dir(project_name: str, target: str, project_dir: Path) -> Path:
+    suffix = "windows" if target == "windows" else "web"
+    return project_dir.parent / f"{project_name}-dists" / f"{project_name}-{suffix}"
+
+
+def _record_successful_build(project_name: str, target: str, output_path: Path | None) -> None:
+    if target == "web":
+        _store_previewable_build_result(project_name, output_path)
+
+
+def _public_build_result(result: BuildResult) -> dict:
+    data = result.model_dump(mode="json")
+    data["output_path"] = _public_build_output_path(result.output_path)
+    data["log_path"] = _public_build_output_path(result.log_path)
+    return data
+
+
+def _write_mock_build_output(project_name: str, target: str, project_dir: Path) -> Path:
+    build_dir = _mock_build_dir(project_name=project_name, target=target, project_dir=project_dir)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    if target == "web":
+        (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
+    _record_successful_build(project_name, target, build_dir)
+    return build_dir
 
 
 @router.post("/api/projects/{project_name}/prototype/build")
@@ -96,13 +123,11 @@ async def api_build_project_prototype(request: Request, project_name: str):
                 ),
             )
 
-    target = "web"
+    body = await request.json()
+    target = body.get("target", "web")
 
     if os.environ.get("RENPY_MCP_MOCK_BUILD"):
-        build_dir = project_dir.parent / f"{project_name}-dists" / f"{project_name}-web"
-        build_dir.mkdir(parents=True, exist_ok=True)
-        (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
-        _store_previewable_build_result(project_name, build_dir)
+        build_dir = _write_mock_build_output(project_name=project_name, target=target, project_dir=project_dir)
         _write_build_status(
             project_name, "success",
             f"Prototype built to {build_dir}", build_dir, target=target,
@@ -117,12 +142,12 @@ async def api_build_project_prototype(request: Request, project_name: str):
             target=target,
             success=True,
             output_path=build_dir,
-        ).model_dump(mode="json")
+        ).model_dump(mode="json") | {"output_path": _public_build_output_path(build_dir), "log_path": None}
 
     manager = BuildManager(settings)
     result = await manager.build(BuildRequest(project_name=project_name, target=target))
     if result.success:
-        _store_previewable_build_result(project_name, result.output_path)
+        _record_successful_build(project_name, target, result.output_path)
         _write_build_status(
             project_name,
             "success",
@@ -144,7 +169,7 @@ async def api_build_project_prototype(request: Request, project_name: str):
         data = json.loads(status_path.read_text(encoding="utf-8"))
         data["kind"] = "prototype"
         status_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return result.model_dump(mode="json")
+    return _public_build_result(result)
 
 
 @router.post("/api/projects/build")
@@ -157,22 +182,19 @@ async def api_build_project(request: Request):
         raise HTTPException(status_code=404, detail="Project not found")
 
     if os.environ.get("RENPY_MCP_MOCK_BUILD"):
-        build_dir = project_dir.parent / f"{name}-dists" / f"{name}-web"
-        build_dir.mkdir(parents=True, exist_ok=True)
-        (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
-        _store_previewable_build_result(name, build_dir)
+        build_dir = _write_mock_build_output(project_name=name, target=target, project_dir=project_dir)
         _write_build_status(name, "success", f"Built to {build_dir}", build_dir, target=target)
         return BuildResult(
             project_name=name,
             target=target,
             success=True,
             output_path=build_dir,
-        ).model_dump(mode="json")
+        ).model_dump(mode="json") | {"output_path": _public_build_output_path(build_dir), "log_path": None}
 
     manager = BuildManager(get_settings())
     result = await manager.build(BuildRequest(project_name=name, target=target))
     if result.success:
-        _store_previewable_build_result(name, result.output_path)
+        _record_successful_build(name, target, result.output_path)
         _write_build_status(
             name,
             "success",
@@ -189,7 +211,7 @@ async def api_build_project(request: Request):
             None,
             target=target,
         )
-    return result.model_dump(mode="json")
+    return _public_build_result(result)
 
 
 @router.post("/api/projects/{project_name}/build")
@@ -202,22 +224,19 @@ async def api_build_project_scoped(request: Request, project_name: str):
         raise HTTPException(status_code=404, detail="Project not found")
 
     if os.environ.get("RENPY_MCP_MOCK_BUILD"):
-        build_dir = project_dir.parent / f"{project_name}-dists" / f"{project_name}-web"
-        build_dir.mkdir(parents=True, exist_ok=True)
-        (build_dir / "index.html").write_text("<html><body>mock preview</body></html>", encoding="utf-8")
-        _store_previewable_build_result(project_name, build_dir)
+        build_dir = _write_mock_build_output(project_name=project_name, target=target, project_dir=project_dir)
         _write_build_status(project_name, "success", f"Built to {build_dir}", build_dir, target=target)
         return BuildResult(
             project_name=project_name,
             target=target,
             success=True,
             output_path=build_dir,
-        ).model_dump(mode="json")
+        ).model_dump(mode="json") | {"output_path": _public_build_output_path(build_dir), "log_path": None}
 
     manager = BuildManager(get_settings())
     result = await manager.build(BuildRequest(project_name=project_name, target=target))
     if result.success:
-        _store_previewable_build_result(project_name, result.output_path)
+        _record_successful_build(project_name, target, result.output_path)
         _write_build_status(
             project_name,
             "success",
@@ -234,7 +253,7 @@ async def api_build_project_scoped(request: Request, project_name: str):
             None,
             target=target,
         )
-    return result.model_dump(mode="json")
+    return _public_build_result(result)
 
 
 @router.get("/api/projects/build/status")
@@ -249,6 +268,7 @@ async def api_build_status(request: Request):
         "output_path": status.get("output_path"),
         "previewable": status.get("previewable", False),
         "target": status.get("target"),
+        "targets": status.get("targets", {}),
         "updated_at": status.get("updated_at"),
     }
 
@@ -308,6 +328,7 @@ async def api_project_build_status(project_name: str):
         "output_path": status.get("output_path"),
         "previewable": status.get("previewable", False),
         "target": status.get("target"),
+        "targets": status.get("targets", {}),
         "updated_at": status.get("updated_at"),
     }
 

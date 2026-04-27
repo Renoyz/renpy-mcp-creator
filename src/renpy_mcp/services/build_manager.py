@@ -58,7 +58,10 @@ class BuildManager:
         """Return a helpful message when no toolchain is available."""
         base = "No usable Ren'Py SDK found."
         if self.settings.renpy_sdk_path:
-            return f"{base} Checked {self.settings.renpy_sdk_path}, but could not locate 'renpy.sh'."
+            return (
+                f"{base} Checked {self.settings.renpy_sdk_path}, but could not find a usable "
+                "Ren'Py executable (renpy.sh or renpy.exe)."
+            )
         return f"{base} Set the RENPY_SDK_PATH environment variable to an extracted Ren'Py SDK."
 
 
@@ -83,25 +86,29 @@ class LocalRenpyToolchain:
                 error=f"Ren'Py executable not found under {self.sdk_path}",
             )
 
-        if request.target != "web":
-            return BuildResult(
-                project_name=request.project_name,
-                target=request.target,
-                success=False,
-                error=f"Unsupported build target '{request.target}'. Only 'web' is currently implemented.",
-            )
-
-        if not self.web_support_available:
+        if request.target not in {"web", "windows"}:
             return BuildResult(
                 project_name=request.project_name,
                 target=request.target,
                 success=False,
                 error=(
-                    "Ren'Py Web support is not installed. "
-                    "Open the Ren'Py launcher and download web support, "
-                    "or place the 'web' directory inside the SDK path."
+                    f"Unsupported build target '{request.target}'. "
+                    "Supported targets are: web, windows."
                 ),
             )
+
+        if not self.web_support_available:
+            if request.target == "web":
+                return BuildResult(
+                    project_name=request.project_name,
+                    target=request.target,
+                    success=False,
+                    error=(
+                        "Ren'Py Web support is not installed. "
+                        "Open the Ren'Py launcher and download web support, "
+                        "or place the 'web' directory inside the SDK path."
+                    ),
+                )
 
         build_dest = project_dir.parent / f"{project_dir.name}-dists"
         log_dir = project_dir / "logs"
@@ -112,15 +119,29 @@ class LocalRenpyToolchain:
 
         env = self._build_env()
         destination = str(build_dest.resolve())
-        command = self._build_command(project_dir, destination, request.force_rebuild)
-
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.sdk_path),
-            env=env,
+        command = self._build_command(
+            project_dir=project_dir,
+            destination=destination,
+            force_rebuild=request.force_rebuild,
+            target=request.target,
         )
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(self.sdk_path),
+                env=env,
+            )
+        except OSError as exc:
+            return BuildResult(
+                project_name=request.project_name,
+                target=request.target,
+                success=False,
+                log_path=log_file,
+                error=f"Failed to launch Ren'Py SDK executable: {exc}",
+            )
 
         await self._stream_log(process, log_file)
 
@@ -128,56 +149,11 @@ class LocalRenpyToolchain:
         success = returncode == 0
 
         if success:
-            project_name = project_dir.name
-            web_zip = build_dest / f"{project_name}-web.zip"
-            zip_files = list(build_dest.glob("*-web.zip"))
-            if zip_files:
-                web_zip = zip_files[0]
-
-            output_path = None
-
-            if web_zip.exists():
-                web_dir = build_dest / f"{project_name}-web"
-
-                if web_dir.exists():
-                    shutil.rmtree(web_dir)
-
-                try:
-                    with zipfile.ZipFile(web_zip, "r") as zip_ref:
-                        zip_ref.extractall(web_dir)
-
-                    if await self._create_web_player(web_dir, project_name):
-                        game_zip = web_dir / "game.zip"
-                        with zipfile.ZipFile(game_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-                            exclude_files = {
-                                "index.html",
-                                "index.html.symbols",
-                                "manifest.json",
-                                "renpy-pre.js",
-                                "renpy.data",
-                                "renpy.js",
-                                "renpy.wasm",
-                                "service-worker.js",
-                                "web-icon.png",
-                                "web-presplash.jpg",
-                            }
-
-                            for file_path in web_dir.rglob("*"):
-                                if file_path.is_file() and file_path.name not in exclude_files:
-                                    if file_path == game_zip:
-                                        continue
-                                    arcname = file_path.relative_to(web_dir)
-                                    zf.write(file_path, arcname)
-                        output_path = web_dir
-                    else:
-                        output_path = web_dir
-                except Exception:
-                    logger.warning("Failed to build packaged web assets for %s, fallback to archive output", project_name, exc_info=True)
-                    output_path = web_zip
-            else:
-                web_dir = build_dest / f"{project_name}-web"
-                if web_dir.exists():
-                    output_path = web_dir
+            output_path = self._resolve_output_path(
+                build_dest=build_dest,
+                project_name=project_dir.name,
+                target=request.target,
+            )
 
             return BuildResult(
                 project_name=request.project_name,
@@ -275,14 +251,119 @@ class LocalRenpyToolchain:
         return True
 
     def _build_command(
-        self, project_dir: Path, destination: str, force_rebuild: bool
+        self,
+        project_dir: Path,
+        destination: str,
+        force_rebuild: bool,
+        target: str,
     ) -> list[str]:
         launcher_path = self.sdk_path / "launcher"
         command = [str(self.executable), str(launcher_path.resolve()), "distribute"]
-        command.extend(["--package", "web"])
+        command.extend(["--package", self._package_name(target)])
+        if force_rebuild:
+            command.append("--force-rebuild")
         command.extend(["--destination", str(destination)])
         command.append(str(project_dir.resolve()))
         return command
+
+    def _package_name(self, target: str) -> str:
+        if target == "windows":
+            return "pc"
+        return "web"
+
+    def _resolve_output_path(
+        self, build_dest: Path, project_name: str, target: str
+    ) -> Path | None:
+        if target == "web":
+            return self._resolve_web_output(build_dest, project_name)
+        if target == "windows":
+            return self._resolve_windows_output(build_dest, project_name)
+        return None
+
+    def _resolve_web_output(self, build_dest: Path, project_name: str) -> Path | None:
+        web_zip = build_dest / f"{project_name}-web.zip"
+        zip_files = list(build_dest.glob("*-web.zip"))
+        if zip_files:
+            web_zip = zip_files[0]
+
+        if web_zip.exists():
+            web_dir = build_dest / f"{project_name}-web"
+
+            if web_dir.exists():
+                shutil.rmtree(web_dir)
+
+            try:
+                with zipfile.ZipFile(web_zip, "r") as zip_ref:
+                    zip_ref.extractall(web_dir)
+
+                if not self._create_web_player_sync(web_dir, project_name):
+                    return web_dir
+                game_zip = web_dir / "game.zip"
+                with zipfile.ZipFile(game_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    exclude_files = {
+                        "index.html",
+                        "index.html.symbols",
+                        "manifest.json",
+                        "renpy-pre.js",
+                        "renpy.data",
+                        "renpy.js",
+                        "renpy.wasm",
+                        "service-worker.js",
+                        "web-icon.png",
+                        "web-presplash.jpg",
+                    }
+
+                    for file_path in web_dir.rglob("*"):
+                        if file_path.is_file() and file_path.name not in exclude_files:
+                            if file_path == game_zip:
+                                continue
+                            arcname = file_path.relative_to(web_dir)
+                            zf.write(file_path, arcname)
+                return web_dir
+            except Exception:
+                logger.warning(
+                    "Failed to build packaged web assets for %s, fallback to archive output",
+                    project_name,
+                    exc_info=True,
+                )
+                return web_zip
+        else:
+            web_dir = build_dest / f"{project_name}-web"
+            if web_dir.exists():
+                return web_dir
+        return None
+
+    def _resolve_windows_output(self, build_dest: Path, project_name: str) -> Path:
+        zip_patterns = ["*-pc.zip", "*-win.zip", "*-windows.zip"]
+        for pattern in zip_patterns:
+            candidates = sorted(build_dest.glob(pattern))
+            if candidates:
+                return candidates[0]
+        # Fallback to explicit dist path from legacy SDK layout.
+        dist_dir = build_dest / "dist"
+        if dist_dir.exists():
+            return dist_dir
+        return build_dest
+
+    def _create_web_player_sync(self, web_dir: Path, project_name: str) -> bool:
+        """Copy web runtime files from SDK and create a proper web player."""
+        web_runtime = self.sdk_path / "web"
+        if not web_runtime.exists():
+            return False
+
+        for item in web_runtime.iterdir():
+            if item.name == "index.html":
+                html_content = item.read_text(encoding="utf-8")
+                html_content = html_content.replace("%%TITLE%%", project_name)
+                (web_dir / "index.html").write_text(html_content, encoding="utf-8")
+            elif item.name not in {"hash.txt"}:
+                dest = web_dir / item.name
+                if item.is_file():
+                    shutil.copy2(item, dest)
+                elif item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+
+        return True
 
     async def _stream_log(
         self,
