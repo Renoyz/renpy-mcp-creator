@@ -1372,7 +1372,7 @@ class TestCharacterIdentitySemanticReadiness:
     def test_generation_gate_rejects_invalid_confirmed_character_identity_even_when_flags_are_true(
         self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
 
         _create_project(client, tmp_path, "dirty_gen")
         # Seed a valid blueprint
@@ -1424,9 +1424,9 @@ class TestCharacterIdentitySemanticReadiness:
 
         # Monkeypatch generation so if gate passes we get 200, not 503 from missing provider
         async def _fake_generate(*args, **kwargs):
-            return {}
+            return {"status": "complete", "completed_count": 1, "total_count": 1, "chapters": []}
 
-        monkeypatch.setattr(PrototypeGenerationService, "generate_all_chapter_scenes", _fake_generate)
+        monkeypatch.setattr(SceneGenerationService, "generate_next_chapter_scene_package", _fake_generate)
 
         r = client.post("/api/projects/dirty_gen/scene-packages/generate")
         assert r.status_code == 403, r.text
@@ -1588,7 +1588,7 @@ class TestRefinementStatusReadOnly:
     def test_scene_packages_generate_is_allowed_after_refinement_reaches_blueprint_ready(
         self, client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        from renpy_mcp.services.prototype_generation_service import PrototypeGenerationService
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
 
         _create_project(client, tmp_path, "gen_allowed")
         brief = _make_valid_brief()
@@ -1628,9 +1628,23 @@ class TestRefinementStatusReadOnly:
 
         # Monkeypatch the async generation so no real LLM/images are invoked
         async def _fake_generate(*args, **kwargs):
-            return {}
+            return {
+                "status": "complete",
+                "current_chapter_id": None,
+                "completed_count": 1,
+                "total_count": 1,
+                "chapters": [
+                    {
+                        "chapter_id": "ch1",
+                        "chapter_name": "Ch1",
+                        "chapter_order": 1,
+                        "status": "complete",
+                        "scene_count": 1,
+                    }
+                ],
+            }
 
-        monkeypatch.setattr(PrototypeGenerationService, "generate_all_chapter_scenes", _fake_generate)
+        monkeypatch.setattr(SceneGenerationService, "generate_next_chapter_scene_package", _fake_generate)
 
         r = client.post("/api/projects/gen_allowed/scene-packages/generate")
         # Must NOT be 403 (gate blocked). 200 means gate passed.

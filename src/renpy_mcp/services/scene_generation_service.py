@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
@@ -55,6 +56,238 @@ class SceneGenerationService:
     def __init__(self, pm: ProjectManager | None, provider: Any | None) -> None:
         self.pm = pm
         self.provider = provider
+
+    # ------------------------------------------------------------------
+    # Incremental scene package progress
+    # ------------------------------------------------------------------
+
+    def _progress_path(self, project_name: str):
+        if self.pm is None:
+            raise RuntimeError("ProjectManager is required for scene generation progress")
+        return self.pm._project_dir(project_name) / "meta" / "scene_generation_progress.json"
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _chapter_progress_from_blueprint(blueprint: ProjectBlueprint) -> list[dict[str, Any]]:
+        return [
+            {
+                "chapter_id": chapter.id,
+                "chapter_name": chapter.name,
+                "chapter_order": chapter.order,
+                "status": "pending",
+                "scene_count": 0,
+            }
+            for chapter in blueprint.chapters
+        ]
+
+    def _empty_progress(self, blueprint: ProjectBlueprint) -> dict[str, Any]:
+        return {
+            "status": "idle",
+            "current_chapter_id": None,
+            "completed_count": 0,
+            "total_count": len(blueprint.chapters),
+            "chapters": self._chapter_progress_from_blueprint(blueprint),
+            "generated_chapters": {},
+            "updated_at": self._now_iso(),
+        }
+
+    @staticmethod
+    def _public_progress(progress: dict[str, Any]) -> dict[str, Any]:
+        chapters = []
+        for chapter in progress.get("chapters", []):
+            if not isinstance(chapter, dict):
+                continue
+            safe = {
+                "chapter_id": chapter.get("chapter_id"),
+                "chapter_name": chapter.get("chapter_name"),
+                "chapter_order": chapter.get("chapter_order"),
+                "status": chapter.get("status", "pending"),
+                "scene_count": chapter.get("scene_count", 0),
+            }
+            if chapter.get("error"):
+                safe["error"] = chapter.get("error")
+            chapters.append(safe)
+        return {
+            "status": progress.get("status", "idle"),
+            "current_chapter_id": progress.get("current_chapter_id"),
+            "completed_count": progress.get("completed_count", 0),
+            "total_count": progress.get("total_count", len(chapters)),
+            "chapters": chapters,
+            "updated_at": progress.get("updated_at"),
+        }
+
+    def _read_progress(self, project_name: str, blueprint: ProjectBlueprint) -> dict[str, Any]:
+        if self.pm is None:
+            return self._empty_progress(blueprint)
+
+        path = self._progress_path(project_name)
+        if not path.exists():
+            snapshot = self.pm.read_scene_packages(project_name)
+            if snapshot is not None:
+                generated_chapters: dict[str, list[dict[str, Any]]] = {}
+                chapters: list[dict[str, Any]] = []
+                for chapter in sorted(snapshot.chapters, key=lambda ch: ch.chapter_order):
+                    generated_chapters[chapter.chapter_id] = [
+                        scene.model_dump(mode="json") for scene in chapter.scenes
+                    ]
+                    chapters.append({
+                        "chapter_id": chapter.chapter_id,
+                        "chapter_name": chapter.chapter_name,
+                        "chapter_order": chapter.chapter_order,
+                        "status": "complete",
+                        "scene_count": len(chapter.scenes),
+                    })
+                return {
+                    "status": "complete",
+                    "current_chapter_id": None,
+                    "completed_count": len(chapters),
+                    "total_count": len(chapters),
+                    "chapters": chapters,
+                    "generated_chapters": generated_chapters,
+                    "updated_at": self._now_iso(),
+                }
+            return self._empty_progress(blueprint)
+
+        try:
+            progress = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"scene_generation_progress.json for {project_name!r} is invalid") from exc
+        if not isinstance(progress, dict):
+            raise ValueError(f"scene_generation_progress.json for {project_name!r} is invalid")
+
+        expected_ids = [chapter.id for chapter in blueprint.chapters]
+        existing_ids = [
+            chapter.get("chapter_id")
+            for chapter in progress.get("chapters", [])
+            if isinstance(chapter, dict)
+        ]
+        if existing_ids != expected_ids:
+            return self._empty_progress(blueprint)
+        progress.setdefault("generated_chapters", {})
+        return progress
+
+    def _write_progress(self, project_name: str, progress: dict[str, Any]) -> None:
+        path = self._progress_path(project_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        progress["updated_at"] = self._now_iso()
+        path.write_text(json.dumps(progress, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def get_scene_generation_status(self, project_name: str, blueprint: ProjectBlueprint) -> dict[str, Any]:
+        """Return persisted chapter-level scene generation progress without scene payloads."""
+        return self._public_progress(self._read_progress(project_name, blueprint))
+
+    def _chapter_by_id(self, blueprint: ProjectBlueprint, chapter_id: str) -> ChapterSummary:
+        for chapter in blueprint.chapters:
+            if chapter.id == chapter_id:
+                return chapter
+        raise ValueError(f"Unknown chapter_id in scene generation progress: {chapter_id}")
+
+    @staticmethod
+    def _previous_summaries_from_progress(progress: dict[str, Any], blueprint: ProjectBlueprint, before_chapter_id: str) -> list[str]:
+        generated = progress.get("generated_chapters", {})
+        if not isinstance(generated, dict):
+            return []
+        summaries: list[str] = []
+        for chapter in blueprint.chapters:
+            if chapter.id == before_chapter_id:
+                break
+            scenes = generated.get(chapter.id)
+            if not isinstance(scenes, list):
+                continue
+            parts = [f"Chapter {chapter.order}: {chapter.name}"]
+            for scene in scenes:
+                if not isinstance(scene, dict):
+                    continue
+                parts.append(f"  - {scene.get('scene_id')}: {scene.get('summary')}")
+            summaries.append("\n".join(parts))
+        return summaries
+
+    def _outline_lookup(self, project_name: str) -> dict[str, dict]:
+        outline_lookup: dict[str, dict] = {}
+        if self.pm is None:
+            return outline_lookup
+        try:
+            outline = self.pm.read_chapter_outline(project_name)
+            if outline:
+                for entry in outline.chapters:
+                    outline_lookup[entry.chapter_id] = entry.model_dump()
+        except Exception as exc:
+            logger.warning(
+                "Failed to read chapter outline for project %s; continuing without narrative direction: %s",
+                project_name,
+                exc,
+                exc_info=True,
+            )
+        return outline_lookup
+
+    def _persist_scene_packages_from_progress(
+        self,
+        project_name: str,
+        blueprint: ProjectBlueprint,
+        progress: dict[str, Any],
+    ) -> dict[str, list]:
+        from renpy_mcp.services.prototype_generation_service import PrototypeScene
+
+        generated = progress.get("generated_chapters", {})
+        if not isinstance(generated, dict):
+            raise RuntimeError("Scene generation progress is missing generated chapters")
+
+        packages: dict[str, list] = {}
+        chapter_map = {chapter.id: chapter for chapter in blueprint.chapters}
+        for chapter in blueprint.chapters:
+            raw_scenes = generated.get(chapter.id)
+            if not isinstance(raw_scenes, list):
+                raise RuntimeError(f"Scene generation progress is missing chapter {chapter.id!r}")
+            packages[chapter.id] = [PrototypeScene(**item) for item in raw_scenes]
+
+        if self.pm is not None:
+            snapshot = ScenePackagesSnapshot(
+                chapters=[
+                    ScenePackageChapter(
+                        chapter_id=ch_id,
+                        chapter_name=chapter_map[ch_id].name,
+                        chapter_order=chapter_map[ch_id].order,
+                        scenes=[
+                            ScenePackageScene(
+                                scene_id=s.scene_id,
+                                title=s.title,
+                                summary=s.summary,
+                                location=s.location,
+                                location_visual_brief=s.location_visual_brief,
+                                mood=s.mood,
+                                characters_present=s.characters_present,
+                                dialogue_beats=s.dialogue_beats,
+                                sprite_plan=[
+                                    ScenePackageSpritePlanItem(
+                                        character_name=sp.character_name,
+                                        character_id=sp.character_id,
+                                        sprite_path=sp.sprite_path,
+                                        sprite_placeholder=sp.sprite_placeholder,
+                                        sprite_renderable=sp.sprite_renderable,
+                                        sprite_quality_reason=sp.sprite_quality_reason,
+                                        position=sp.position,
+                                        expression=sp.expression,
+                                        layout_mode=sp.layout_mode,
+                                        transform_name=sp.transform_name,
+                                    )
+                                    for sp in s.sprite_plan
+                                ],
+                                entry_label=s.entry_label,
+                                next_scene_id=s.next_scene_id,
+                                scene_order=idx + 1,
+                            )
+                            for idx, s in enumerate(sc_list)
+                        ],
+                    )
+                    for ch_id, sc_list in packages.items()
+                ]
+            )
+            self.pm.write_scene_packages(project_name, snapshot)
+
+        return packages
 
     # ------------------------------------------------------------------
     # Style bible inference and contract assembly
@@ -469,6 +702,96 @@ Requirements:
     # Multi-chapter scene generation
     # ------------------------------------------------------------------
 
+    async def generate_next_chapter_scene_package(
+        self,
+        project_name: str,
+        blueprint: ProjectBlueprint,
+    ) -> dict[str, Any]:
+        """Generate exactly one pending/failed chapter and persist progress.
+
+        The official ``scene_packages.json`` is written only after every chapter
+        succeeds, so downstream prototype/script generation never consumes a
+        partial scene package snapshot.
+        """
+        if self.provider is None:
+            raise RuntimeError("No LLM provider configured for prototype generation.")
+
+        progress = self._read_progress(project_name, blueprint)
+        if progress.get("status") == "complete":
+            return self._public_progress(progress)
+
+        chapters = progress.get("chapters", [])
+        if not isinstance(chapters, list):
+            progress = self._empty_progress(blueprint)
+            chapters = progress["chapters"]
+
+        next_entry: dict[str, Any] | None = None
+        for entry in chapters:
+            if isinstance(entry, dict) and entry.get("status") in {"pending", "failed"}:
+                next_entry = entry
+                break
+        if next_entry is None:
+            progress["status"] = "complete"
+            progress["current_chapter_id"] = None
+            self._persist_scene_packages_from_progress(project_name, blueprint, progress)
+            self._write_progress(project_name, progress)
+            return self._public_progress(progress)
+
+        chapter_id = str(next_entry.get("chapter_id"))
+        chapter = self._chapter_by_id(blueprint, chapter_id)
+        next_entry["status"] = "generating"
+        next_entry.pop("error", None)
+        progress["status"] = "in_progress"
+        progress["current_chapter_id"] = chapter_id
+        self._write_progress(project_name, progress)
+
+        outline_lookup = self._outline_lookup(project_name)
+        contract = self.build_generation_contract(project_name, blueprint, chapter)
+        previous_chapter_summaries = self._previous_summaries_from_progress(progress, blueprint, chapter_id)
+
+        try:
+            scenes = await self.generate_scenes(
+                chapter,
+                blueprint,
+                contract=contract,
+                outline_entry=outline_lookup.get(chapter.id),
+                previous_chapter_summaries=previous_chapter_summaries,
+                min_beats_per_scene=4,
+                max_beats_per_scene=8,
+            )
+        except Exception as exc:
+            next_entry["status"] = "failed"
+            next_entry["error"] = str(exc)
+            progress["status"] = "failed"
+            progress["current_chapter_id"] = chapter_id
+            self._write_progress(project_name, progress)
+            raise
+
+        generated = progress.setdefault("generated_chapters", {})
+        if not isinstance(generated, dict):
+            generated = {}
+            progress["generated_chapters"] = generated
+        generated[chapter_id] = [scene.model_dump(mode="json") for scene in scenes]
+        next_entry["status"] = "complete"
+        next_entry["scene_count"] = len(scenes)
+        next_entry.pop("error", None)
+
+        completed = sum(
+            1 for entry in chapters
+            if isinstance(entry, dict) and entry.get("status") == "complete"
+        )
+        progress["completed_count"] = completed
+        progress["total_count"] = len(chapters)
+        if completed == len(chapters):
+            progress["status"] = "complete"
+            progress["current_chapter_id"] = None
+            self._persist_scene_packages_from_progress(project_name, blueprint, progress)
+        else:
+            progress["status"] = "in_progress"
+            progress["current_chapter_id"] = chapter_id
+        self._write_progress(project_name, progress)
+        return self._public_progress(progress)
+
     async def generate_all_chapter_scenes(
         self, project_name: str, blueprint: ProjectBlueprint
     ) -> dict[str, list]:
@@ -483,96 +806,13 @@ Requirements:
         Returns:
             Mapping chapter_id -> list[PrototypeScene].
         """
-        from renpy_mcp.services.prototype_generation_service import PrototypeScene
-
         if self.provider is None:
             raise RuntimeError("No LLM provider configured for prototype generation.")
 
-        # Read chapter outline for narrative direction
-        outline_lookup: dict[str, dict] = {}
-        if self.pm is not None:
-            try:
-                outline = self.pm.read_chapter_outline(project_name)
-                if outline:
-                    for entry in outline.chapters:
-                        outline_lookup[entry.chapter_id] = entry.model_dump()
-            except Exception as exc:
-                logger.warning(
-                    "Failed to read chapter outline for project %s; continuing without narrative direction: %s",
-                    project_name,
-                    exc,
-                    exc_info=True,
-                )
+        while True:
+            status = await self.generate_next_chapter_scene_package(project_name, blueprint)
+            if status.get("status") == "complete":
+                break
 
-        packages: dict[str, list] = {}
-        chapter_map: dict[str, ChapterSummary] = {}
-        previous_chapter_summaries: list[str] = []
-
-        for chapter in blueprint.chapters:
-            contract = self.build_generation_contract(project_name, blueprint, chapter)
-            outline_entry = outline_lookup.get(chapter.id)
-
-            scenes = await self.generate_scenes(
-                chapter,
-                blueprint,
-                contract=contract,
-                outline_entry=outline_entry,
-                previous_chapter_summaries=list(previous_chapter_summaries),
-                min_beats_per_scene=4,
-                max_beats_per_scene=8,
-            )
-            packages[chapter.id] = scenes
-            chapter_map[chapter.id] = chapter
-
-            # Accumulate chapter summary for continuity
-            ch_summary_parts = [f"Chapter {chapter.order}: {chapter.name}"]
-            for s in scenes:
-                ch_summary_parts.append(f"  - {s.scene_id}: {s.summary}")
-            previous_chapter_summaries.append("\n".join(ch_summary_parts))
-
-        # Persist scene packages snapshot
-        if self.pm is not None:
-            snapshot = ScenePackagesSnapshot(
-                chapters=[
-                    ScenePackageChapter(
-                        chapter_id=ch_id,
-                        chapter_name=chapter_map[ch_id].name,
-                        chapter_order=chapter_map[ch_id].order,
-                        scenes=[
-                            ScenePackageScene(
-                                scene_id=s.scene_id,
-                                title=s.title,
-                                summary=s.summary,
-                                location=s.location,
-                                location_visual_brief=s.location_visual_brief,
-                                mood=s.mood,
-                                characters_present=s.characters_present,
-                                dialogue_beats=s.dialogue_beats,
-                                sprite_plan=[
-                                    ScenePackageSpritePlanItem(
-                                        character_name=sp.character_name,
-                                        character_id=sp.character_id,
-                                        sprite_path=sp.sprite_path,
-                                        sprite_placeholder=sp.sprite_placeholder,
-                                        sprite_renderable=sp.sprite_renderable,
-                                        sprite_quality_reason=sp.sprite_quality_reason,
-                                        position=sp.position,
-                                        expression=sp.expression,
-                                        layout_mode=sp.layout_mode,
-                                        transform_name=sp.transform_name,
-                                    )
-                                    for sp in s.sprite_plan
-                                ],
-                                entry_label=s.entry_label,
-                                next_scene_id=s.next_scene_id,
-                                scene_order=idx + 1,
-                            )
-                            for idx, s in enumerate(sc_list)
-                        ],
-                    )
-                    for ch_id, sc_list in packages.items()
-                ]
-            )
-            self.pm.write_scene_packages(project_name, snapshot)
-
-        return packages
+        progress = self._read_progress(project_name, blueprint)
+        return self._persist_scene_packages_from_progress(project_name, blueprint, progress)

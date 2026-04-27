@@ -639,6 +639,89 @@ class TestGenerateAllChapterScenes:
         assert len(snapshot.chapters) == 1
         assert snapshot.chapters[0].chapter_id == "ch1"
 
+    def test_generate_next_chapter_persists_progress_before_final_snapshot(self, pm, project_env):
+        """Scene package generation can advance one chapter at a time and survive refreshes."""
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        call_counter = {"count": 0}
+
+        def fake_chat(**kwargs):
+            call_counter["count"] += 1
+            call_index = call_counter["count"]
+            chapter_id = f"ch{call_index}"
+            return _fake_llm_response([
+                {
+                    "scene_id": f"{chapter_id}-s1",
+                    "title": f"Scene {call_index}",
+                    "summary": f"Summary {call_index}",
+                    "location": f"Location {call_index}",
+                    "location_visual_brief": f"Visual {call_index}",
+                    "mood": "tense",
+                    "characters_present": [],
+                    "dialogue_beats": [],
+                    "entry_label": "x",
+                    "next_scene_id": None,
+                }
+            ])
+
+        provider.chat.side_effect = fake_chat
+
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=2)
+        project_name, project_dir = project_env
+
+        first_status = asyncio.get_event_loop().run_until_complete(
+            svc.generate_next_chapter_scene_package(project_name, bp)
+        )
+
+        assert first_status["status"] == "in_progress"
+        assert first_status["completed_count"] == 1
+        assert first_status["total_count"] == 2
+        assert first_status["current_chapter_id"] == "ch1"
+        assert first_status["chapters"][0]["status"] == "complete"
+        assert first_status["chapters"][1]["status"] == "pending"
+        assert not (project_dir / "meta" / "scene_packages.json").exists()
+
+        reloaded = svc.get_scene_generation_status(project_name, bp)
+        assert reloaded["completed_count"] == 1
+        assert reloaded["chapters"][0]["scene_count"] == 1
+
+        second_status = asyncio.get_event_loop().run_until_complete(
+            svc.generate_next_chapter_scene_package(project_name, bp)
+        )
+
+        assert second_status["status"] == "complete"
+        assert second_status["completed_count"] == 2
+        assert second_status["total_count"] == 2
+        assert provider.chat.call_count == 2
+
+        snapshot = pm.read_scene_packages(project_name)
+        assert snapshot is not None
+        assert [ch.chapter_id for ch in snapshot.chapters] == ["ch1", "ch2"]
+
+    def test_generate_next_chapter_records_failed_chapter_for_retry(self, pm, project_env):
+        """A failed chapter attempt is persisted so the UI can show retryable progress."""
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response({"not": "a scene array"})
+
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=2)
+        project_name, _ = project_env
+
+        with pytest.raises(RuntimeError, match="Scene generation failed"):
+            asyncio.get_event_loop().run_until_complete(
+                svc.generate_next_chapter_scene_package(project_name, bp)
+            )
+
+        status = svc.get_scene_generation_status(project_name, bp)
+        assert status["status"] == "failed"
+        assert status["current_chapter_id"] == "ch1"
+        assert status["chapters"][0]["status"] == "failed"
+        assert "error" in status["chapters"][0]
+
     def test_outline_read_failure_is_logged(self, pm, project_env, caplog):
         from renpy_mcp.services.scene_generation_service import SceneGenerationService
 

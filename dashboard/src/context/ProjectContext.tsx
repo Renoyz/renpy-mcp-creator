@@ -254,9 +254,28 @@ export interface GenerationScriptPreview {
   chapter_ids?: string[] | null;
 }
 
+export interface SceneGenerationChapterStatus {
+  chapter_id: string;
+  chapter_name: string;
+  chapter_order: number;
+  status: "pending" | "generating" | "complete" | "failed";
+  scene_count: number;
+  error?: string | null;
+}
+
+export interface SceneGenerationStatus {
+  status: "idle" | "in_progress" | "complete" | "failed";
+  current_chapter_id: string | null;
+  completed_count: number;
+  total_count: number;
+  chapters: SceneGenerationChapterStatus[];
+  updated_at?: string | null;
+}
+
 export interface GenerationState {
   state: GenerationStep;
   round_id: string | null;
+  scene_generation: SceneGenerationStatus | null;
   character_assets: Record<string, AssetSlot>;
   background_assets: Record<string, AssetSlot>;
   script_preview: GenerationScriptPreview | null;
@@ -288,6 +307,7 @@ function normalizeGenerationState(raw: unknown): GenerationState {
   return {
     state: normalizeGenerationStep(payload.state),
     round_id: typeof payload.round_id === "string" ? payload.round_id : null,
+    scene_generation: (payload.scene_generation as SceneGenerationStatus) ?? null,
     character_assets: (payload.character_assets as Record<string, AssetSlot>) ?? {},
     background_assets: (payload.background_assets as Record<string, AssetSlot>) ?? {},
     script_preview: (payload.script_preview as GenerationScriptPreview) ?? null,
@@ -610,6 +630,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setGenerationState({
           state: "idle",
           round_id: null,
+          scene_generation: null,
           character_assets: {},
           background_assets: {},
           script_preview: null,
@@ -619,6 +640,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setGenerationState({
           state: "idle",
           round_id: null,
+          scene_generation: null,
           character_assets: {},
           background_assets: {},
           script_preview: null,
@@ -867,6 +889,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setGenerationState({
           state: "idle",
           round_id: null,
+          scene_generation: null,
           character_assets: {},
           background_assets: {},
           script_preview: null,

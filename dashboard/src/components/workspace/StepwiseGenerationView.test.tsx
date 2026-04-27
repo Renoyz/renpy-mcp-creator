@@ -9,6 +9,7 @@ function baseState(state: GenerationState["state"]): GenerationState {
   return {
     state,
     round_id: "r0001",
+    scene_generation: null,
     character_assets: {
       char_Alice_normal: {
         asset_id: "char_Alice_normal",
@@ -159,6 +160,60 @@ describe("StepwiseGenerationView", () => {
     expect(screen.getByText("Character Assets")).toBeInTheDocument();
     expect(screen.getByText("Scene Backgrounds")).toBeInTheDocument();
     expect(screen.getByText("Script Preview & Commit")).toBeInTheDocument();
+  });
+
+  it("shows per-chapter scene package progress and advances the next chapter", async () => {
+    const user = userEvent.setup();
+    const loadGenerationState = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        scene_generation: {
+          status: "in_progress",
+          completed_count: 1,
+          total_count: 2,
+          current_chapter_id: "ch1",
+          chapters: [],
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={{
+          ...baseState("idle"),
+          scene_generation: {
+            status: "in_progress",
+            completed_count: 1,
+            total_count: 2,
+            current_chapter_id: "ch1",
+            chapters: [
+              { chapter_id: "ch1", chapter_name: "Opening", chapter_order: 1, status: "complete", scene_count: 3 },
+              { chapter_id: "ch2", chapter_name: "Aftermath", chapter_order: 2, status: "pending", scene_count: 0 },
+            ],
+          },
+        }}
+        loadGenerationState={loadGenerationState}
+      />
+    );
+
+    expect(screen.getByText("Scene Package Progress")).toBeInTheDocument();
+    expect(screen.getByText(/1\s*\/\s*2 chapters complete/)).toBeInTheDocument();
+    expect(screen.getByText("Opening")).toBeInTheDocument();
+    expect(screen.getByText("Aftermath")).toBeInTheDocument();
+    expect(screen.getByText("complete")).toBeInTheDocument();
+    expect(screen.getByText("pending")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate Next Chapter Scenes" }));
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects/demo/scene-packages/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(loadGenerationState).toHaveBeenCalledWith("demo");
   });
 
   it("shows scene background description field and keeps prompt editable from the UI", async () => {

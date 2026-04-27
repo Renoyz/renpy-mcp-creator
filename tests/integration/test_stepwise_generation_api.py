@@ -67,6 +67,43 @@ def _allow_stepwise_generation(tmp_path: Path, project_name: str) -> None:
     )
 
 
+def _allow_stepwise_generation_with_chapters(tmp_path: Path, project_name: str) -> None:
+    from renpy_mcp.blueprint.models import (
+        BlueprintFreezeStatus,
+        ChapterSummary,
+        ProjectBlueprint,
+        ProjectMeta,
+        ProjectStatus,
+        RefinementState,
+    )
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.services.project_manager import ProjectManager
+
+    pm = ProjectManager(get_settings())
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(
+            title="Chapter VN",
+            genre="test",
+            worldview="test world",
+            chapters=[
+                ChapterSummary(id="ch1", name="Opening", order=1),
+                ChapterSummary(id="ch2", name="Aftermath", order=2),
+            ],
+        ),
+    )
+    pm.write_project_meta(
+        project_name,
+        ProjectMeta(
+            name=project_name,
+            path=tmp_path / project_name,
+            status=ProjectStatus.DRAFT,
+            refinement_state=RefinementState.BLUEPRINT_READY,
+            blueprint_freeze_status=BlueprintFreezeStatus.FROZEN,
+        ),
+    )
+
+
 def _seed_unicode_blueprint(project_name: str) -> None:
     from renpy_mcp.blueprint.models import BlueprintCharacter, ProjectBlueprint
     from renpy_mcp.config import get_settings
@@ -188,6 +225,29 @@ def test_generation_state_returns_idle_default_for_existing_project(client: Test
     assert r.status_code == 200, r.text
     second = r.json()
     assert second == first
+
+
+def test_generation_state_includes_scene_generation_progress_for_frozen_blueprint(
+    client: TestClient, tmp_path: Path
+):
+    project_name = "stepwise_state_scene_progress"
+    _make_project(client, project_name)
+    _allow_stepwise_generation_with_chapters(tmp_path, project_name)
+
+    r = client.get(f"/api/projects/{project_name}/generation-state")
+    assert r.status_code == 200, r.text
+    state = r.json()
+
+    assert state["scene_generation"]["status"] == "idle"
+    assert state["scene_generation"]["completed_count"] == 0
+    assert state["scene_generation"]["total_count"] == 2
+    assert [
+        (chapter["chapter_id"], chapter["chapter_name"], chapter["status"])
+        for chapter in state["scene_generation"]["chapters"]
+    ] == [
+        ("ch1", "Opening", "pending"),
+        ("ch2", "Aftermath", "pending"),
+    ]
 
 
 def test_generation_state_prepares_character_and_scene_asset_lists_for_frozen_blueprint(

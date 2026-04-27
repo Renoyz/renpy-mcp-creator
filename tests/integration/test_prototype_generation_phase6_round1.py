@@ -1346,7 +1346,7 @@ def test_generation_contract_uses_structured_contract_models() -> None:
 async def test_generate_scene_packages_api_persists_multi_chapter_snapshot(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, tmp_path: Path
 ) -> None:
-    """POST /api/projects/{name}/scene-packages/generate must trigger multi-chapter generation and persist scene_packages.json."""
+    """POST /scene-packages/generate advances one chapter per call and persists the final snapshot."""
     from renpy_mcp.services.project_manager import ProjectManager
     from renpy_mcp.config import get_settings
 
@@ -1368,11 +1368,20 @@ async def test_generate_scene_packages_api_persists_multi_chapter_snapshot(
     assert response.status_code == 200, response.text
     data = response.json()
     assert data.get("success") is True
-    assert "chapters" in data
-    assert len(data["chapters"]) >= 2
+    assert data.get("complete") is False
+    assert data["scene_generation"]["completed_count"] == 1
+    assert data["scene_generation"]["total_count"] == 2
+
+    snapshot_path = tmp_path / project_name / "meta" / "scene_packages.json"
+    assert not snapshot_path.exists(), "scene_packages.json must not expose a partial generation"
+
+    response = client.post(f"/api/projects/{project_name}/scene-packages/generate")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data.get("complete") is True
+    assert data["scene_generation"]["completed_count"] == 2
 
     # Snapshot must be persisted
-    snapshot_path = tmp_path / project_name / "meta" / "scene_packages.json"
     assert snapshot_path.exists(), "scene_packages.json must be written by the API"
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     ch_ids = {ch["chapter_id"] for ch in snapshot.get("chapters", [])}

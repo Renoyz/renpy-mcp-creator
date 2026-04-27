@@ -18,6 +18,7 @@ from ...blueprint.models import (
 from ...config import get_settings, resolve_project_dir
 from ...services.project_manager import ProjectManager
 from ...services.prototype_generation_service import PrototypeGenerationService
+from ...services.scene_generation_service import SceneGenerationService
 from ...services.stepwise_generation_service import StepwiseGenerationService
 from ...services.refinement_logic import (
     compute_blueprint_freeze_status,
@@ -112,6 +113,27 @@ def _make_stepwise_service(project_name: str) -> StepwiseGenerationService:
     return StepwiseGenerationService(ProjectManager(settings))
 
 
+def _attach_scene_generation_status(
+    pm: ProjectManager,
+    project_name: str,
+    state: dict[str, object],
+) -> dict[str, object]:
+    """Attach lightweight per-chapter scene generation progress to generation-state."""
+    try:
+        blueprint = pm.read_blueprint(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if blueprint is None:
+        state["scene_generation"] = None
+        return state
+    scene_service = SceneGenerationService(pm=pm, provider=None)
+    try:
+        state["scene_generation"] = scene_service.get_scene_generation_status(project_name, blueprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return state
+
+
 def _check_stepwise_generation_gate(project_name: str) -> None:
     settings = get_settings()
     pm = ProjectManager(settings)
@@ -199,13 +221,16 @@ async def _read_upload_bytes(file: UploadFile | None) -> bytes:
 @router.get("/api/projects/{project_name}/generation-state")
 async def api_stepwise_generation_state(project_name: str):
     service = _make_stepwise_service(project_name)
+    settings = get_settings()
+    pm = ProjectManager(settings)
     state = service.get_state(project_name)
     try:
         _check_stepwise_generation_gate(project_name)
     except HTTPException:
-        return state
+        return _attach_scene_generation_status(pm, project_name, state)
     try:
-        return service.prepare_asset_slots(project_name)
+        state = service.prepare_asset_slots(project_name)
+        return _attach_scene_generation_status(pm, project_name, state)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -509,22 +534,18 @@ async def api_generate_scene_packages(project_name: str):
         raise HTTPException(status_code=404, detail="Blueprint not found")
 
     provider = _get_provider()
-    service = PrototypeGenerationService(pm=pm, provider=provider)
+    service = SceneGenerationService(pm=pm, provider=provider)
 
     try:
-        packages = await service.generate_all_chapter_scenes(project_name, blueprint)
+        scene_status = await service.generate_next_chapter_scene_package(project_name, blueprint)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
     return {
         "success": True,
-        "chapters": [
-            {
-                "chapter_id": ch_id,
-                "scene_count": len(scenes),
-            }
-            for ch_id, scenes in packages.items()
-        ],
+        "complete": scene_status.get("status") == "complete",
+        "scene_generation": scene_status,
+        "chapters": scene_status.get("chapters", []),
     }
 
 
