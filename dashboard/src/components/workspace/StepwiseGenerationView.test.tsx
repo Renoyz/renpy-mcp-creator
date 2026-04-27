@@ -238,6 +238,55 @@ describe("StepwiseGenerationView", () => {
     expect(loadGenerationState).toHaveBeenCalledTimes(3);
   });
 
+  it("does not hammer scene package generation while a chapter is already generating", async () => {
+    const user = userEvent.setup();
+    const loadGenerationState = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        complete: false,
+        scene_generation: {
+          status: "in_progress",
+          completed_count: 1,
+          total_count: 2,
+          current_chapter_id: "ch1",
+          chapters: [
+            { chapter_id: "ch1", chapter_name: "Opening", chapter_order: 1, status: "generating", scene_count: 0 },
+            { chapter_id: "ch2", chapter_name: "Aftermath", chapter_order: 2, status: "pending", scene_count: 0 },
+          ],
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={{
+          ...baseState("idle"),
+          scene_generation: {
+            status: "in_progress",
+            completed_count: 1,
+            total_count: 2,
+            current_chapter_id: "ch1",
+            chapters: [
+              { chapter_id: "ch1", chapter_name: "Opening", chapter_order: 1, status: "generating", scene_count: 0 },
+              { chapter_id: "ch2", chapter_name: "Aftermath", chapter_order: 2, status: "pending", scene_count: 0 },
+            ],
+          },
+        }}
+        loadGenerationState={loadGenerationState}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Generate Scene Packages" }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(loadGenerationState).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Scene package generation did not reach completion.")).not.toBeInTheDocument();
+  });
+
   it("shows scene background description field and edits prompt from a dialog", async () => {
     const user = userEvent.setup();
     render(
@@ -379,6 +428,50 @@ describe("StepwiseGenerationView", () => {
       })
     );
     expect(loadGenerationState).toHaveBeenCalledWith("demo");
+  });
+
+  it("does not render polluted background slots in the character asset list", async () => {
+    const user = userEvent.setup();
+    const loadGenerationState = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const state = baseState("character_assets_draft");
+    state.character_assets.bg_polluted_main = {
+      asset_id: "bg_polluted_main",
+      kind: "background",
+      target: "polluted",
+      variant: "main",
+      generation_prompt: "background prompt leaked into character collection",
+      source: null,
+      status: "empty",
+      path: null,
+      staging_path: null,
+      preview_url: null,
+      placeholder: false,
+      renderable: true,
+      description: "A leaked background slot.",
+      validation: { ok: true, width: 1280, height: 720, reason: "ok" },
+    };
+
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={state}
+        loadGenerationState={loadGenerationState}
+      />
+    );
+
+    expect(screen.queryByTestId("slot-card-bg_polluted_main")).not.toBeInTheDocument();
+
+    const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
+    await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/projects/demo/generation/characters/assets/char_Alice_normal/generate");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/generation/backgrounds/"))).toBe(false);
   });
 
   it("regenerates an accepted slot with replace=true so edited prompts can be applied", async () => {

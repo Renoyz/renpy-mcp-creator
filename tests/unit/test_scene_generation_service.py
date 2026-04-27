@@ -803,6 +803,158 @@ class TestGenerateAllChapterScenes:
         assert snapshot is not None
         assert [ch.chapter_id for ch in snapshot.chapters] == ["ch1", "ch2"]
 
+    def test_generate_next_chapter_returns_existing_progress_when_chapter_is_generating(self, pm, project_env):
+        """A concurrent generate call must not advance or finalize while another chapter is in-flight."""
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch2-s1",
+                "title": "Should not be generated",
+                "summary": "Should not be generated",
+                "location": "Nowhere",
+                "location_visual_brief": "None",
+                "mood": "tense",
+                "characters_present": [],
+                "dialogue_beats": [],
+                "entry_label": "prototype_ch2_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=3)
+        project_name, project_dir = project_env
+        progress_path = project_dir / "meta" / "scene_generation_progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "status": "in_progress",
+                    "current_chapter_id": "ch1",
+                    "completed_count": 1,
+                    "total_count": 3,
+                    "chapters": [
+                        {
+                            "chapter_id": "ch1",
+                            "chapter_name": "Chapter 1",
+                            "chapter_order": 1,
+                            "status": "generating",
+                            "scene_count": 0,
+                        },
+                        {
+                            "chapter_id": "ch2",
+                            "chapter_name": "Chapter 2",
+                            "chapter_order": 2,
+                            "status": "pending",
+                            "scene_count": 0,
+                        },
+                        {
+                            "chapter_id": "ch3",
+                            "chapter_name": "Chapter 3",
+                            "chapter_order": 3,
+                            "status": "complete",
+                            "scene_count": 1,
+                        },
+                    ],
+                    "generated_chapters": {
+                        "ch3": [
+                            {
+                                "scene_id": "ch3-s1",
+                                "title": "Existing scene",
+                                "summary": "Existing summary",
+                                "location": "Existing location",
+                                "location_visual_brief": "Existing visual",
+                                "mood": "tense",
+                                "characters_present": [],
+                                "dialogue_beats": [],
+                                "sprite_plan": [],
+                                "entry_label": "prototype_ch3_start",
+                                "next_scene_id": None,
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = asyncio.get_event_loop().run_until_complete(
+            svc.generate_next_chapter_scene_package(project_name, bp)
+        )
+
+        assert status["status"] == "in_progress"
+        assert status["current_chapter_id"] == "ch1"
+        assert status["completed_count"] == 1
+        assert status["chapters"][0]["status"] == "generating"
+        assert status["chapters"][1]["status"] == "pending"
+        assert provider.chat.call_count == 0
+        assert pm.read_scene_packages(project_name) is None
+
+    def test_generate_next_chapter_does_not_finalize_when_generating_payload_is_missing(self, pm, project_env):
+        """A generating chapter without generated payload is in-flight, not a complete snapshot."""
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=2)
+        project_name, project_dir = project_env
+        progress_path = project_dir / "meta" / "scene_generation_progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "status": "in_progress",
+                    "current_chapter_id": "ch1",
+                    "completed_count": 1,
+                    "total_count": 2,
+                    "chapters": [
+                        {
+                            "chapter_id": "ch1",
+                            "chapter_name": "Chapter 1",
+                            "chapter_order": 1,
+                            "status": "generating",
+                            "scene_count": 0,
+                        },
+                        {
+                            "chapter_id": "ch2",
+                            "chapter_name": "Chapter 2",
+                            "chapter_order": 2,
+                            "status": "complete",
+                            "scene_count": 1,
+                        },
+                    ],
+                    "generated_chapters": {
+                        "ch2": [
+                            {
+                                "scene_id": "ch2-s1",
+                                "title": "Existing scene",
+                                "summary": "Existing summary",
+                                "location": "Existing location",
+                                "location_visual_brief": "Existing visual",
+                                "mood": "tense",
+                                "characters_present": [],
+                                "dialogue_beats": [],
+                                "sprite_plan": [],
+                                "entry_label": "prototype_ch2_start",
+                                "next_scene_id": None,
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = asyncio.get_event_loop().run_until_complete(
+            svc.generate_next_chapter_scene_package(project_name, bp)
+        )
+
+        assert status["status"] == "in_progress"
+        assert status["current_chapter_id"] == "ch1"
+        assert status["chapters"][0]["status"] == "generating"
+        assert provider.chat.call_count == 0
+        assert pm.read_scene_packages(project_name) is None
+
     def test_outline_read_failure_is_logged(self, pm, project_env, caplog):
         from renpy_mcp.services.scene_generation_service import SceneGenerationService
 

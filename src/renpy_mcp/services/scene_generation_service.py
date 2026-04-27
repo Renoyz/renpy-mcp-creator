@@ -750,6 +750,27 @@ Requirements:
             progress = self._empty_progress(blueprint)
             chapters = progress["chapters"]
 
+        generating_entry = next(
+            (
+                entry
+                for entry in chapters
+                if isinstance(entry, dict) and entry.get("status") == "generating"
+            ),
+            None,
+        )
+        if generating_entry is not None:
+            chapter_id = str(generating_entry.get("chapter_id") or "")
+            progress["status"] = "in_progress"
+            progress["current_chapter_id"] = chapter_id or progress.get("current_chapter_id")
+            completed = sum(
+                1 for entry in chapters
+                if isinstance(entry, dict) and entry.get("status") == "complete"
+            )
+            progress["completed_count"] = completed
+            progress["total_count"] = len(chapters)
+            self._write_progress(project_name, progress)
+            return self._public_progress(progress)
+
         next_entry: dict[str, Any] | None = None
         for entry in chapters:
             if isinstance(entry, dict) and entry.get("status") in {"pending", "failed"}:

@@ -66,8 +66,14 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
   const [slotDescriptions, setSlotDescriptions] = useState<SlotDescriptionMap>({});
   const [promptEditorSlotId, setPromptEditorSlotId] = useState<string | null>(null);
 
-  const characters = useMemo(() => (generationState ? Object.values(generationState.character_assets) : []), [generationState]);
-  const backgrounds = useMemo(() => (generationState ? Object.values(generationState.background_assets) : []), [generationState]);
+  const characters = useMemo(
+    () => (generationState ? Object.values(generationState.character_assets).filter((slot) => slot.kind === "character_sprite") : []),
+    [generationState]
+  );
+  const backgrounds = useMemo(
+    () => (generationState ? Object.values(generationState.background_assets).filter((slot) => slot.kind === "background") : []),
+    [generationState]
+  );
   const sceneGeneration = generationState?.scene_generation ?? null;
   const allSlots = useMemo(() => [...characters, ...backgrounds], [characters, backgrounds]);
   const promptEditorSlot = useMemo(
@@ -146,7 +152,13 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
         }
         const data = await response.json().catch(() => ({}));
         complete = data.complete === true || data.scene_generation?.status === "complete";
+        const hasInFlightChapter =
+          Array.isArray(data.scene_generation?.chapters) &&
+          data.scene_generation.chapters.some((chapter: { status?: string }) => chapter.status === "generating");
         await loadGenerationState(projectName);
+        if (hasInFlightChapter) {
+          return;
+        }
         if (!data.scene_generation && data.complete !== false) {
           complete = true;
         }
