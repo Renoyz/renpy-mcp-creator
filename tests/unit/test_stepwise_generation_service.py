@@ -260,6 +260,14 @@ class FakeBackgroundRemover:
         }
 
 
+class NoopBackgroundRemover:
+    def remove_background(self, input_path: Path):
+        return None
+
+    def normalize_sprite(self, input_path: Path, output_path: Path | None = None, target_height=750, canvas_height=900):
+        return None, {"renderable": False, "reason": "unavailable"}
+
+
 @pytest.fixture()
 def pm(tmp_path, monkeypatch):
     from renpy_mcp.config import get_settings
@@ -877,6 +885,34 @@ class TestStepwiseService:
         assert set(state["character_assets"]) == {"char_Alice_normal", "char_Bob_normal"}
         assert state["character_assets"]["char_Alice_normal"]["status"] == "uploaded"
 
+    def test_upload_character_asset_removes_background_and_normalizes_sprite(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, project_dir = project
+        remover = FakeBackgroundRemover()
+        service = StepwiseGenerationService(pm, background_remover=remover)
+        service.start_characters(project_name)
+
+        uploaded = service.upload_character_asset(
+            project_name=project_name,
+            character_id="Alice",
+            variant="normal",
+            filename="alice.jpg",
+            file_bytes=_rgb_png_bytes(size=(1024, 1536)),
+        )
+
+        assert remover.remove_calls, "character uploads should invoke background removal"
+        assert remover.normalize_calls, "character uploads should invoke sprite normalization"
+        assert uploaded["renderable"] is True
+        assert uploaded["validation"]["ok"] is True
+        assert uploaded["validation"]["width"] == 900
+        assert uploaded["validation"]["height"] == 900
+        assert uploaded["path"] == "game/images/sprites/char_Alice_normal.png"
+        staged_path = project_dir / uploaded["staging_path"]
+        with Image.open(staged_path) as image:
+            assert image.size == (900, 900)
+            assert "A" in image.getbands()
+
     def test_upload_character_asset_distinguishes_variants(self, service, project):
         project_name, _ = project
         _seed_scene_packages(service.pm, project_name)
@@ -1126,7 +1162,10 @@ class TestStepwiseService:
         assert slot["description_source"] == "target"
         assert "rooftop" in fake_image_service.calls[0]["prompt"]
 
-    def test_accept_asset_rejects_non_renderable_characters_by_default(self, service, project):
+    def test_accept_asset_rejects_non_renderable_characters_by_default(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        service = StepwiseGenerationService(pm, background_remover=NoopBackgroundRemover())
         project_name, _ = project
         service.start_characters(project_name)
         char = service.upload_character_asset(
@@ -1141,7 +1180,10 @@ class TestStepwiseService:
         with pytest.raises(ValueError, match="renderable"):
             service.accept_asset(project_name, char["asset_id"])
 
-    def test_accept_asset_can_override_non_renderable_character(self, service, project):
+    def test_accept_asset_can_override_non_renderable_character(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        service = StepwiseGenerationService(pm, background_remover=NoopBackgroundRemover())
         project_name, _ = project
         service.start_characters(project_name)
         char = service.upload_character_asset(

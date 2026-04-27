@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import hashlib
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -834,6 +835,29 @@ class StepwiseGenerationService:
         intermediates.append(normalized_path)
         return normalized_path, intermediates
 
+    def _postprocess_uploaded_character(self, *, filename: str, file_bytes: bytes) -> tuple[str, bytes]:
+        try:
+            _width, _height, has_alpha = self.imported_asset_service._decode(file_bytes)
+        except Exception:
+            return filename, file_bytes
+        if has_alpha:
+            return filename, file_bytes
+
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ImportedAssetService._ALLOWED_EXTENSIONS:
+            suffix = ".png"
+        with tempfile.TemporaryDirectory(prefix="renpy_mcp_upload_") as tmp_dir:
+            input_path = Path(tmp_dir) / f"upload{suffix}"
+            input_path.write_bytes(file_bytes)
+            processed_path, _intermediates = self._postprocess_generated_character(input_path)
+            if processed_path == input_path:
+                return filename, file_bytes
+            processed_suffix = processed_path.suffix.lower() or ".png"
+            if processed_suffix not in ImportedAssetService._ALLOWED_EXTENSIONS:
+                processed_suffix = ".png"
+            processed_name = f"{Path(filename).stem or 'upload'}{processed_suffix}"
+            return processed_name, processed_path.read_bytes()
+
     async def _generate_and_stage_image(
         self,
         project_name: str,
@@ -1046,6 +1070,10 @@ class StepwiseGenerationService:
         if existing is not None and existing.get("status") == "accepted" and not replace:
             raise ValueError(f"Asset {target_slot_id} is already accepted")
 
+        filename, file_bytes = self._postprocess_uploaded_character(
+            filename=filename,
+            file_bytes=file_bytes,
+        )
         slot = self.imported_asset_service.import_image(
             project_name=project_name,
             round_id=round_id,

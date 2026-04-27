@@ -365,9 +365,9 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
       <div
         role="row"
         data-testid={`asset-row-${slot.asset_id}`}
-        className="grid gap-3 border-b border-gray-100 p-3 last:border-b-0 xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]"
+        className="grid min-w-[980px] gap-3 border-b border-gray-100 p-3 last:border-b-0 xl:grid-cols-[96px_minmax(240px,1.1fr)_minmax(260px,1fr)_220px]"
       >
-        <div role="cell">
+        <div role="cell" className="min-w-0">
           {slot.preview_url ? (
             <img
               src={slot.preview_url}
@@ -473,7 +473,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               })
             }
             disabled={!canGenerateSlot || busyAction === `generate-${slot.asset_id}`}
-            className="w-full rounded-md bg-gray-900 px-2 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full whitespace-normal rounded-md bg-gray-900 px-2 py-2 text-xs font-medium leading-snug text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {slot.status === "empty" ? "Generate with AI" : isAccepted ? "Regenerate accepted" : "Regenerate"}
           </button>
@@ -620,8 +620,8 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               </p>
             </div>
           ) : (
-            <div role="table" className="mt-3 overflow-hidden rounded-md border border-gray-200">
-              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]">
+            <div role="table" className="mt-3 overflow-x-auto rounded-md border border-gray-200">
+              <div role="row" className="hidden min-w-[980px] bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(240px,1.1fr)_minmax(260px,1fr)_220px]">
                 <div role="columnheader">Thumbnail</div>
                 <div role="columnheader">Description</div>
                 <div role="columnheader">Prompt</div>
@@ -664,8 +664,8 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               </p>
             </div>
           ) : (
-            <div role="table" className="mt-3 overflow-hidden rounded-md border border-gray-200">
-              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]">
+            <div role="table" className="mt-3 overflow-x-auto rounded-md border border-gray-200">
+              <div role="row" className="hidden min-w-[980px] bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(240px,1.1fr)_minmax(260px,1fr)_220px]">
                 <div role="columnheader">Thumbnail</div>
                 <div role="columnheader">Description</div>
                 <div role="columnheader">Prompt</div>
