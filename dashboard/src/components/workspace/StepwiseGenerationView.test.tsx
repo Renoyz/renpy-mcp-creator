@@ -99,14 +99,13 @@ describe("StepwiseGenerationView", () => {
     expect(within(slotCard).getByText(/Detective protagonist/)).toBeInTheDocument();
     expect(within(slotCard).getByText(/red coat, black notebook/)).toBeInTheDocument();
     expect(within(slotCard).getByText(/Design source: blueprint/)).toBeInTheDocument();
-    expect(within(slotCard).getByLabelText("Alice normal prompt")).toHaveValue(
-      "existing generated prompt"
-    );
+    expect(within(slotCard).getByText("existing generated prompt")).toBeInTheDocument();
+    expect(within(slotCard).getByRole("button", { name: "Edit Prompt" })).toBeInTheDocument();
     expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
     expect(within(slotCard).getByLabelText("Manual Upload")).toBeInTheDocument();
   });
 
-  it("renders generated assets as list rows with thumbnail, description, prompt, AI, and upload columns", () => {
+  it("renders generated assets as list rows with thumbnail, description, prompt, and combined actions columns", () => {
     render(
       <StepwiseGenerationView
         projectName="demo"
@@ -118,13 +117,14 @@ describe("StepwiseGenerationView", () => {
     const slotRow = screen.getByTestId("asset-row-char_Alice_normal");
     const columns = within(slotRow).getAllByRole("cell");
 
-    expect(columns).toHaveLength(5);
+    expect(columns).toHaveLength(4);
     expect(within(columns[0]).getByAltText("Aya normal")).toBeInTheDocument();
     expect(within(columns[1]).getByText("Aya")).toBeInTheDocument();
     expect(within(columns[1]).getByText(/Detective protagonist/)).toBeInTheDocument();
-    expect(within(columns[2]).getByLabelText("Alice normal prompt")).toHaveValue("existing generated prompt");
+    expect(within(columns[2]).getByText("existing generated prompt")).toBeInTheDocument();
+    expect(within(columns[2]).getByRole("button", { name: "Edit Prompt" })).toBeInTheDocument();
     expect(within(columns[3]).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
-    expect(within(columns[4]).getByLabelText("Manual Upload")).toBeInTheDocument();
+    expect(within(columns[3]).getByLabelText("Manual Upload")).toBeInTheDocument();
   });
 
   it("does not show manual target forms as the default empty-state workflow", () => {
@@ -162,22 +162,39 @@ describe("StepwiseGenerationView", () => {
     expect(screen.getByText("Script Preview & Commit")).toBeInTheDocument();
   });
 
-  it("shows per-chapter scene package progress and advances the next chapter", async () => {
+  it("shows per-chapter scene package progress and generates all remaining chapters in one action", async () => {
     const user = userEvent.setup();
     const loadGenerationState = vi.fn().mockResolvedValue(undefined);
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        success: true,
-        scene_generation: {
-          status: "in_progress",
-          completed_count: 1,
-          total_count: 2,
-          current_chapter_id: "ch1",
-          chapters: [],
-        },
-      }),
-    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          complete: false,
+          scene_generation: {
+            status: "in_progress",
+            completed_count: 1,
+            total_count: 2,
+            current_chapter_id: "ch1",
+            chapters: [],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          complete: true,
+          scene_generation: {
+            status: "complete",
+            completed_count: 2,
+            total_count: 2,
+            current_chapter_id: null,
+            chapters: [],
+          },
+        }),
+      });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
@@ -207,16 +224,21 @@ describe("StepwiseGenerationView", () => {
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Generate Next Chapter Scenes" }));
+    await user.click(screen.getByRole("button", { name: "Generate Scene Packages" }));
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/projects/demo/scene-packages/generate", {
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects/demo/scene-packages/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
-    expect(loadGenerationState).toHaveBeenCalledWith("demo");
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects/demo/scene-packages/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(loadGenerationState).toHaveBeenCalledTimes(3);
   });
 
-  it("shows scene background description field and keeps prompt editable from the UI", async () => {
+  it("shows scene background description field and edits prompt from a dialog", async () => {
     const user = userEvent.setup();
     render(
       <StepwiseGenerationView
@@ -228,17 +250,20 @@ describe("StepwiseGenerationView", () => {
 
     const slotCard = screen.getByTestId("slot-card-bg_scene_01_main");
     const descriptionBox = within(slotCard).getByLabelText("scene_01 main description");
-    const promptBox = within(slotCard).getByLabelText("scene_01 main prompt");
 
     expect(descriptionBox).toHaveValue("An evening city street with neon lights and wet pavement.");
-    expect(promptBox).toHaveValue("existing background prompt");
+    expect(within(slotCard).getByText("existing background prompt")).toBeInTheDocument();
     await user.clear(descriptionBox);
     await user.type(descriptionBox, "A moonlit cyberpunk alley.");
+    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
+    const promptBox = within(dialog).getByLabelText("scene_01 main prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "wide-angle alley backdrop");
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
 
     expect(descriptionBox).toHaveValue("A moonlit cyberpunk alley.");
-    expect(promptBox).toHaveValue("wide-angle alley backdrop");
+    expect(within(slotCard).getByText("wide-angle alley backdrop")).toBeInTheDocument();
   });
 
   it("sends background generation body with prompt/replace/description payload when regenerating", async () => {
@@ -337,9 +362,12 @@ describe("StepwiseGenerationView", () => {
     );
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    const promptBox = within(slotCard).getByLabelText("Alice normal prompt");
+    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
+    const promptBox = within(dialog).getByLabelText("Alice normal prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "new ink vampire sprite prompt");
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
     await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -373,9 +401,12 @@ describe("StepwiseGenerationView", () => {
     );
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    const promptBox = within(slotCard).getByLabelText("Alice normal prompt");
+    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
+    const promptBox = within(dialog).getByLabelText("Alice normal prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "replacement accepted sprite prompt");
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
     await user.click(within(slotCard).getByRole("button", { name: "Regenerate accepted" }));
 
     expect(fetchMock).toHaveBeenCalledWith(

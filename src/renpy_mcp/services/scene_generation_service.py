@@ -166,7 +166,32 @@ class SceneGenerationService:
         ]
         if existing_ids != expected_ids:
             return self._empty_progress(blueprint)
-        progress.setdefault("generated_chapters", {})
+        generated = progress.get("generated_chapters", {})
+        if not isinstance(generated, dict):
+            generated = {}
+            progress["generated_chapters"] = generated
+
+        repaired = False
+        for chapter in progress.get("chapters", []):
+            if not isinstance(chapter, dict):
+                continue
+            chapter_id = chapter.get("chapter_id")
+            if chapter.get("status") == "complete" and not isinstance(generated.get(chapter_id), list):
+                chapter["status"] = "pending"
+                chapter["scene_count"] = 0
+                chapter.pop("error", None)
+                repaired = True
+        if repaired:
+            chapters = [
+                chapter
+                for chapter in progress.get("chapters", [])
+                if isinstance(chapter, dict)
+            ]
+            completed = sum(1 for chapter in chapters if chapter.get("status") == "complete")
+            progress["completed_count"] = completed
+            progress["total_count"] = len(chapters)
+            progress["current_chapter_id"] = None
+            progress["status"] = "complete" if chapters and completed == len(chapters) else "in_progress"
         return progress
 
     def _write_progress(self, project_name: str, progress: dict[str, Any]) -> None:

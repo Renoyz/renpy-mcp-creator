@@ -64,10 +64,16 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
   const [slotPrompts, setSlotPrompts] = useState<SlotPromptMap>({});
   const [slotDescriptions, setSlotDescriptions] = useState<SlotDescriptionMap>({});
+  const [promptEditorSlotId, setPromptEditorSlotId] = useState<string | null>(null);
 
   const characters = useMemo(() => (generationState ? Object.values(generationState.character_assets) : []), [generationState]);
   const backgrounds = useMemo(() => (generationState ? Object.values(generationState.background_assets) : []), [generationState]);
   const sceneGeneration = generationState?.scene_generation ?? null;
+  const allSlots = useMemo(() => [...characters, ...backgrounds], [characters, backgrounds]);
+  const promptEditorSlot = useMemo(
+    () => allSlots.find((slot) => slot.asset_id === promptEditorSlotId) ?? null,
+    [allSlots, promptEditorSlotId]
+  );
 
   const activeState = generationState?.state ?? "idle";
 
@@ -124,14 +130,29 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
       }
     });
 
-  const generateNextScenePackage = () =>
-    withBusy("scene-packages-next", async () => {
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/scene-packages/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!response.ok) {
-        await parseError(response);
+  const generateScenePackages = () =>
+    withBusy("scene-packages-all", async () => {
+      let complete = false;
+      let attempts = 0;
+      const maxAttempts = Math.max(sceneGeneration?.total_count ?? 1, 1) + 2;
+      while (!complete && attempts < maxAttempts) {
+        attempts += 1;
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectName)}/scene-packages/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        if (!response.ok) {
+          await parseError(response);
+        }
+        const data = await response.json().catch(() => ({}));
+        complete = data.complete === true || data.scene_generation?.status === "complete";
+        await loadGenerationState(projectName);
+        if (!data.scene_generation && data.complete !== false) {
+          complete = true;
+        }
+      }
+      if (!complete) {
+        throw new Error("Scene package generation did not reach completion.");
       }
     });
 
@@ -283,7 +304,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
   const canPreview =
     activeState === "background_assets_confirmed" ||
     activeState === "script_preview";
-  const canGenerateNextScenePackage =
+  const canGenerateScenePackages =
     busyAction === null &&
     sceneGeneration !== null &&
     sceneGeneration.status !== "complete" &&
@@ -332,7 +353,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
       <div
         role="row"
         data-testid={`asset-row-${slot.asset_id}`}
-        className="grid gap-3 border-b border-gray-100 p-3 last:border-b-0 lg:grid-cols-[112px_minmax(220px,1.2fr)_minmax(280px,1fr)_140px_150px]"
+        className="grid gap-3 border-b border-gray-100 p-3 last:border-b-0 xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]"
       >
         <div role="cell">
           {slot.preview_url ? (
@@ -382,6 +403,21 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             </div>
           ) : null}
           {slot.placeholder && <div className="mt-2 text-xs text-gray-500">Placeholder slot</div>}
+          {slot.kind === "background" ? (
+            <label className="mt-3 block text-xs font-medium text-gray-700">
+              Editable description
+              <textarea
+                aria-label={`${slot.target} ${slot.variant} description`}
+                className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
+                rows={2}
+                value={slotDescriptions[slot.asset_id] ?? slot.description ?? ""}
+                placeholder={descriptionPlaceholder(slot.description)}
+                onChange={(event) => {
+                  updateSlotDescription(slot, event.target.value);
+                }}
+              />
+            </label>
+          ) : null}
           {slot.status !== "accepted" ? (
             <button
               type="button"
@@ -398,34 +434,19 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           ) : null}
         </div>
         <div role="cell">
-          {slot.kind === "background" ? (
-            <label className="block text-xs font-medium text-gray-700">
-              Description
-              <textarea
-                aria-label={`${slot.target} ${slot.variant} description`}
-                className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
-                rows={2}
-                value={slotDescriptions[slot.asset_id] ?? slot.description ?? ""}
-                placeholder={descriptionPlaceholder(slot.description)}
-                onChange={(event) => {
-                  updateSlotDescription(slot, event.target.value);
-                }}
-              />
-            </label>
-          ) : null}
-          <label className={slot.kind === "background" ? "mt-2 block text-xs font-medium text-gray-700" : "block text-xs font-medium text-gray-700"}>
+          <div className="text-xs font-medium text-gray-700">
             Prompt
-            <textarea
-              aria-label={`${slot.target} ${slot.variant} prompt`}
-              className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
-              rows={4}
-              value={prompt}
-              placeholder={slot.generation_prompt || slot.prompt || promptPlaceholder(slot.kind, slot.target, slot.variant)}
-              onChange={(event) => {
-                updateSlotPrompt(slot, event.target.value);
-              }}
-            />
-          </label>
+          </div>
+          <p className="mt-1 line-clamp-3 whitespace-pre-wrap rounded-md border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700">
+            {prompt || slot.generation_prompt || slot.prompt || promptPlaceholder(slot.kind, slot.target, slot.variant)}
+          </p>
+          <button
+            type="button"
+            onClick={() => setPromptEditorSlotId(slot.asset_id)}
+            className="mt-2 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Edit Prompt
+          </button>
         </div>
         <div role="cell">
           <button
@@ -440,14 +461,12 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               })
             }
             disabled={!canGenerateSlot || busyAction === `generate-${slot.asset_id}`}
-            className="w-full rounded-md bg-gray-900 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-gray-900 px-2 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {slot.status === "empty" ? "Generate with AI" : isAccepted ? "Regenerate accepted" : "Regenerate"}
           </button>
           {isAccepted ? <p className="mt-2 text-xs text-amber-700">Requires re-accept after regeneration.</p> : null}
-        </div>
-        <div role="cell">
-          <label className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium">
+          <label className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-300 px-2 py-2 text-xs font-medium">
             <Upload className="h-4 w-4" />
             Manual Upload
             <input
@@ -468,9 +487,9 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 });
                 event.target.value = "";
               }}
-              className="sr-only"
-            />
-          </label>
+                className="sr-only"
+              />
+            </label>
         </div>
       </div>
       </div>
@@ -479,14 +498,14 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
   return (
     <div className="h-full overflow-auto p-6">
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-none space-y-6">
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-gray-900">Stepwise Generation</h2>
               <p className="mt-1 text-sm text-gray-500">Current state: {activeState}</p>
               <p className="mt-1 text-xs text-gray-500">
-                Manual progression: Character Assets → Scene Backgrounds → Script Preview &amp; Commit; Build is outside this tab.
+                Manual progression: Character Assets -&gt; Scene Backgrounds -&gt; Script Preview &amp; Commit; Build is outside this tab.
               </p>
             </div>
             <button
@@ -514,11 +533,11 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               </div>
               <button
                 type="button"
-                onClick={() => void generateNextScenePackage()}
-                disabled={!canGenerateNextScenePackage || busyAction === "scene-packages-next"}
+                onClick={() => void generateScenePackages()}
+                disabled={!canGenerateScenePackages || busyAction === "scene-packages-all"}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "scene-packages-next" ? "Generating..." : "Generate Next Chapter Scenes"}
+                {busyAction === "scene-packages-all" ? "Generating..." : "Generate Scene Packages"}
               </button>
             </div>
             {sceneGeneration.chapters.length > 0 && (
@@ -590,12 +609,11 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             </div>
           ) : (
             <div role="table" className="mt-3 overflow-hidden rounded-md border border-gray-200">
-              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 lg:grid lg:grid-cols-[112px_minmax(220px,1.2fr)_minmax(280px,1fr)_140px_150px]">
+              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]">
                 <div role="columnheader">Thumbnail</div>
                 <div role="columnheader">Description</div>
                 <div role="columnheader">Prompt</div>
-                <div role="columnheader">AI Generate</div>
-                <div role="columnheader">Upload Image</div>
+                <div role="columnheader">Actions</div>
               </div>
               {characters.map((slot) => assetRow(slot))}
             </div>
@@ -635,12 +653,11 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             </div>
           ) : (
             <div role="table" className="mt-3 overflow-hidden rounded-md border border-gray-200">
-              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 lg:grid lg:grid-cols-[112px_minmax(220px,1.2fr)_minmax(280px,1fr)_140px_150px]">
+              <div role="row" className="hidden bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(220px,1.2fr)_minmax(220px,1fr)_160px]">
                 <div role="columnheader">Thumbnail</div>
                 <div role="columnheader">Description</div>
                 <div role="columnheader">Prompt</div>
-                <div role="columnheader">AI Generate</div>
-                <div role="columnheader">Upload Image</div>
+                <div role="columnheader">Actions</div>
               </div>
               {backgrounds.map((slot) => assetRow(slot))}
             </div>
@@ -686,6 +703,57 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           )}
         </div>
       </div>
+      {promptEditorSlot ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit asset prompt"
+            className="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Edit Prompt</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  {promptEditorSlot.display_name || promptEditorSlot.target} ({promptEditorSlot.variant})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPromptEditorSlotId(null)}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700"
+              >
+                Close
+              </button>
+            </div>
+            <label className="mt-4 block text-sm font-medium text-gray-700">
+              Prompt
+              <textarea
+                aria-label={`${promptEditorSlot.target} ${promptEditorSlot.variant} prompt`}
+                className="mt-1 block min-h-56 w-full rounded-md border border-gray-300 p-3 text-sm"
+                value={currentPrompt(promptEditorSlot)}
+                placeholder={
+                  promptEditorSlot.generation_prompt ||
+                  promptEditorSlot.prompt ||
+                  promptPlaceholder(promptEditorSlot.kind, promptEditorSlot.target, promptEditorSlot.variant)
+                }
+                onChange={(event) => {
+                  updateSlotPrompt(promptEditorSlot, event.target.value);
+                }}
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPromptEditorSlotId(null)}
+                className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

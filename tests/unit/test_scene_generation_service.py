@@ -722,6 +722,87 @@ class TestGenerateAllChapterScenes:
         assert status["chapters"][0]["status"] == "failed"
         assert "error" in status["chapters"][0]
 
+    def test_generate_next_chapter_repairs_complete_progress_missing_payload(self, pm, project_env):
+        """A stale progress file with a complete marker but missing scenes should retry that chapter."""
+        from renpy_mcp.services.scene_generation_service import SceneGenerationService
+
+        provider = MagicMock()
+        provider.chat.return_value = _fake_llm_response([
+            {
+                "scene_id": "ch2-s1",
+                "title": "Recovered scene",
+                "summary": "Recovered summary",
+                "location": "Recovered location",
+                "location_visual_brief": "Recovered visual",
+                "mood": "tense",
+                "characters_present": [],
+                "dialogue_beats": [],
+                "entry_label": "prototype_ch2_start",
+                "next_scene_id": None,
+            }
+        ])
+
+        svc = SceneGenerationService(pm=pm, provider=provider)
+        bp = _make_blueprint(chapter_count=2)
+        project_name, project_dir = project_env
+        progress_path = project_dir / "meta" / "scene_generation_progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "status": "in_progress",
+                    "current_chapter_id": "ch1",
+                    "completed_count": 1,
+                    "total_count": 2,
+                    "chapters": [
+                        {
+                            "chapter_id": "ch1",
+                            "chapter_name": "Chapter 1",
+                            "chapter_order": 1,
+                            "status": "complete",
+                            "scene_count": 1,
+                        },
+                        {
+                            "chapter_id": "ch2",
+                            "chapter_name": "Chapter 2",
+                            "chapter_order": 2,
+                            "status": "complete",
+                            "scene_count": 2,
+                        },
+                    ],
+                    "generated_chapters": {
+                        "ch1": [
+                            {
+                                "scene_id": "ch1-s1",
+                                "title": "Existing scene",
+                                "summary": "Existing summary",
+                                "location": "Existing location",
+                                "location_visual_brief": "Existing visual",
+                                "mood": "tense",
+                                "characters_present": [],
+                                "dialogue_beats": [],
+                                "sprite_plan": [],
+                                "entry_label": "prototype_ch1_start",
+                                "next_scene_id": None,
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = asyncio.get_event_loop().run_until_complete(
+            svc.generate_next_chapter_scene_package(project_name, bp)
+        )
+
+        assert status["status"] == "complete"
+        assert status["completed_count"] == 2
+        assert status["chapters"][1]["status"] == "complete"
+        assert provider.chat.call_count == 1
+        snapshot = pm.read_scene_packages(project_name)
+        assert snapshot is not None
+        assert [ch.chapter_id for ch in snapshot.chapters] == ["ch1", "ch2"]
+
     def test_outline_read_failure_is_logged(self, pm, project_env, caplog):
         from renpy_mcp.services.scene_generation_service import SceneGenerationService
 
