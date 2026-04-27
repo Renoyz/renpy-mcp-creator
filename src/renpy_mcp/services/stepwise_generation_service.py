@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -150,7 +151,12 @@ class StepwiseGenerationService:
 
     @staticmethod
     def _normalize_target(value: str) -> str:
-        return ImportedAssetService._normalize_component(value, "asset")
+        value = str(value)
+        normalized = ImportedAssetService._normalize_component(value, "asset")
+        if normalized != "asset" or value.strip().casefold() == "asset":
+            return normalized
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:10]
+        return f"u_{digest}"
 
     def _slot_asset_id(self, kind: str, target: str, variant: str) -> str:
         return self.imported_asset_service._make_asset_id(kind, target, variant)
@@ -235,20 +241,69 @@ class StepwiseGenerationService:
 
     def _ensure_required_character_slots(self, project_name: str, state: dict[str, Any]) -> None:
         for requirement in self._collect_character_requirements(project_name):
-            safe_character = self._normalize_target(str(requirement.get("target", "")))
-            if not safe_character:
+            character_target = self._coerce_prompt_text(requirement.get("target"))
+            safe_character = self._normalize_target(character_target)
+            if not character_target or not safe_character:
                 continue
             char_asset_id = self._slot_asset_id("character_sprite", safe_character, "normal")
             existing = state["character_assets"].get(char_asset_id)
             if existing is None:
+                legacy_slot_id = self._find_existing_character_design_slot_id(
+                    state,
+                    requirement=requirement,
+                    variant="normal",
+                    exclude_asset_id=char_asset_id,
+                )
+                if legacy_slot_id:
+                    existing = state["character_assets"].pop(legacy_slot_id)
+                    existing["asset_id"] = char_asset_id
+                    existing["target"] = character_target
+                    existing["variant"] = "normal"
+                    state["character_assets"][char_asset_id] = existing
+            if existing is None:
                 slot = self._build_empty_slot(
                     kind="character_sprite",
-                    target=safe_character,
+                    target=character_target,
                     variant="normal",
                 )
                 state["character_assets"][char_asset_id] = self._apply_character_metadata(slot, requirement)
                 continue
             state["character_assets"][char_asset_id] = self._apply_character_metadata(existing, requirement)
+
+    def _find_existing_character_design_slot_id(
+        self,
+        state: dict[str, Any],
+        *,
+        requirement: dict[str, str],
+        variant: str,
+        exclude_asset_id: str,
+    ) -> str | None:
+        display_name = self._coerce_prompt_text(requirement.get("display_name"))
+        target = self._coerce_prompt_text(requirement.get("target"))
+        match_keys = {
+            self._normalized_slot_match_key(value)
+            for value in (display_name, target)
+            if value
+        }
+        if not match_keys:
+            return None
+        variant_key = self._normalized_variant_match_key(variant)
+        for slot_id, slot in state["character_assets"].items():
+            if slot_id == exclude_asset_id or slot.get("kind") != "character_sprite":
+                continue
+            if self._normalized_variant_match_key(str(slot.get("variant", ""))) != variant_key:
+                continue
+            slot_keys = {
+                self._normalized_slot_match_key(value)
+                for value in (
+                    self._coerce_prompt_text(slot.get("display_name")),
+                    self._coerce_prompt_text(slot.get("target")),
+                )
+                if value
+            }
+            if match_keys & slot_keys:
+                return slot_id
+        return None
 
     def _collect_character_requirements(self, project_name: str) -> list[dict[str, str]]:
         """Collect character asset slots from finalized design artifacts."""
@@ -290,7 +345,7 @@ class StepwiseGenerationService:
             if design is None and display_name:
                 design = design_lookup.get(self._normalized_slot_match_key(display_name))
             item = dict(design or {})
-            item["target"] = safe_target
+            item["target"] = target
             item["display_name"] = item.get("display_name") or display_name or target
             item["character_source"] = "scene_package"
             requirements.setdefault(self._normalized_slot_match_key(safe_target), item)
@@ -315,7 +370,7 @@ class StepwiseGenerationService:
             return []
         requirements: list[dict[str, str]] = []
         for character in blueprint.characters:
-            target = self._normalize_target(character.name)
+            target = self._coerce_prompt_text(character.name)
             if not target:
                 continue
             requirements.append(
@@ -597,7 +652,7 @@ class StepwiseGenerationService:
         slot = {
             "asset_id": self._slot_asset_id(kind, self._normalize_target(target), variant),
             "kind": kind,
-            "target": self._normalize_target(target),
+            "target": target,
             "variant": variant,
             "source": None,
             "status": "empty",

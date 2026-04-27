@@ -101,8 +101,29 @@ describe("StepwiseGenerationView", () => {
     expect(within(slotCard).getByLabelText("Alice normal prompt")).toHaveValue(
       "existing generated prompt"
     );
-    expect(within(slotCard).getByText("Generate with AI")).toBeInTheDocument();
+    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
     expect(within(slotCard).getByLabelText("Manual Upload")).toBeInTheDocument();
+  });
+
+  it("renders generated assets as list rows with thumbnail, description, prompt, AI, and upload columns", () => {
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={baseState("character_assets_draft")}
+        loadGenerationState={vi.fn()}
+      />
+    );
+
+    const slotRow = screen.getByTestId("asset-row-char_Alice_normal");
+    const columns = within(slotRow).getAllByRole("cell");
+
+    expect(columns).toHaveLength(5);
+    expect(within(columns[0]).getByAltText("Aya normal")).toBeInTheDocument();
+    expect(within(columns[1]).getByText("Aya")).toBeInTheDocument();
+    expect(within(columns[1]).getByText(/Detective protagonist/)).toBeInTheDocument();
+    expect(within(columns[2]).getByLabelText("Alice normal prompt")).toHaveValue("existing generated prompt");
+    expect(within(columns[3]).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+    expect(within(columns[4]).getByLabelText("Manual Upload")).toBeInTheDocument();
   });
 
   it("does not show manual target forms as the default empty-state workflow", () => {
@@ -267,7 +288,7 @@ describe("StepwiseGenerationView", () => {
     await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/demo/generation/characters/Alice/normal/generate",
+      "/api/projects/demo/generation/characters/assets/char_Alice_normal/generate",
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -303,7 +324,7 @@ describe("StepwiseGenerationView", () => {
     await user.click(within(slotCard).getByRole("button", { name: "Regenerate accepted" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/projects/demo/generation/characters/Alice/normal/generate",
+      "/api/projects/demo/generation/characters/assets/char_Alice_normal/generate",
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json" },

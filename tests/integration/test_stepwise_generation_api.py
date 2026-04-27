@@ -67,6 +67,30 @@ def _allow_stepwise_generation(tmp_path: Path, project_name: str) -> None:
     )
 
 
+def _seed_unicode_blueprint(project_name: str) -> None:
+    from renpy_mcp.blueprint.models import BlueprintCharacter, ProjectBlueprint
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.services.project_manager import ProjectManager
+
+    pm = ProjectManager(get_settings())
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(
+            title="Unicode VN",
+            genre="test",
+            worldview="test world",
+            characters=[
+                BlueprintCharacter(
+                    name='郑和/"那位大人"',
+                    role="对立与镜像",
+                    personality="疲惫而威严",
+                    appearance="朝服与十二面铜镜",
+                )
+            ],
+        ),
+    )
+
+
 def _rgba_png_bytes(size=(640, 360)) -> bytes:
     image = Image.new("RGBA", size=size, color=(32, 128, 255, 255))
     from io import BytesIO
@@ -184,6 +208,33 @@ def test_generation_state_prepares_character_and_scene_asset_lists_for_frozen_bl
     assert state["character_assets"]["char_Alice_normal"]["status"] == "empty"
     assert set(state["background_assets"]) == {"bg_scene_01_main"}
     assert state["background_assets"]["bg_scene_01_main"]["description"] == "wide street and cafe"
+
+
+def test_character_asset_upload_by_asset_id_handles_unicode_names_with_slash(client: TestClient, tmp_path: Path):
+    project_name = "stepwise_unicode_asset_upload"
+    _make_project(client, project_name)
+    _allow_stepwise_generation(tmp_path, project_name)
+    _seed_unicode_blueprint(project_name)
+
+    state_response = client.get(f"/api/projects/{project_name}/generation-state")
+    assert state_response.status_code == 200, state_response.text
+    state = state_response.json()
+    assert len(state["character_assets"]) == 1
+    asset_id, slot = next(iter(state["character_assets"].items()))
+    assert asset_id != "char_asset_normal"
+    assert slot["target"] == '郑和/"那位大人"'
+
+    upload = client.post(
+        f"/api/projects/{project_name}/generation/characters/assets/{asset_id}/upload",
+        files={"file": ("zhenghe.png", _rgba_png_bytes(), "image/png")},
+    )
+
+    assert upload.status_code == 200, upload.text
+    uploaded = upload.json()
+    assert uploaded["asset_id"] == asset_id
+    assert uploaded["target"] == '郑和/"那位大人"'
+    assert uploaded["display_name"] == '郑和/"那位大人"'
+    assert uploaded["status"] == "uploaded"
 
 
 def test_full_stepwise_happy_path_upload_char_and_background(client: TestClient, tmp_path: Path):

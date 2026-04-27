@@ -125,6 +125,45 @@ def _seed_blueprint_characters(pm, project_name: str) -> None:
     )
 
 
+def _seed_unicode_blueprint_characters(pm, project_name: str) -> None:
+    from renpy_mcp.blueprint.models import BlueprintCharacter, ProjectBlueprint
+
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(
+            title="Unicode Character Slot VN",
+            genre="mystery",
+            worldview="rainy city",
+            characters=[
+                BlueprintCharacter(
+                    name="阿蛮",
+                    role="主角",
+                    personality="谨慎善察",
+                    appearance="深褐色皮肤，左颊刺青",
+                ),
+                BlueprintCharacter(
+                    name='郑和/"那位大人"',
+                    role="对立与镜像",
+                    personality="疲惫而威严",
+                    appearance="朝服与十二面铜镜",
+                ),
+                BlueprintCharacter(
+                    name="匣中君",
+                    role="被囚之神",
+                    personality="非人逻辑",
+                    appearance="灰蓝眼球与半透明触须",
+                ),
+                BlueprintCharacter(
+                    name="老火长",
+                    role="信息枢纽",
+                    personality="嗜酒且知晓秘密",
+                    appearance="独眼，青铜义肢",
+                ),
+            ],
+        ),
+    )
+
+
 def _seed_brief_characters(pm, project_name: str) -> None:
     from renpy_mcp.blueprint.models import BriefCard, ProjectBrief
 
@@ -329,6 +368,24 @@ class TestStepwiseService:
         assert slot["appearance"] == "red coat, black notebook, tired eyes"
         assert slot["character_source"] == "blueprint"
         assert "red coat" in slot["prompt"]
+
+    def test_start_characters_keeps_unicode_blueprint_characters_distinct(self, service, project):
+        project_name, _ = project
+        _seed_unicode_blueprint_characters(service.pm, project_name)
+
+        state = service.start_characters(project_name)
+
+        slots = state["character_assets"]
+        assert len(slots) == 4
+        assert len(set(slots)) == 4
+        assert {slot["target"] for slot in slots.values()} == {
+            "阿蛮",
+            '郑和/"那位大人"',
+            "匣中君",
+            "老火长",
+        }
+        assert all(asset_id != "char_asset_normal" for asset_id in slots)
+        assert all(slot["display_name"] == slot["target"] for slot in slots.values())
 
     def test_start_characters_falls_back_to_brief_character_identity(self, service, project):
         project_name, _ = project

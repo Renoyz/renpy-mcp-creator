@@ -238,6 +238,61 @@ async def api_stepwise_characters_start(project_name: str):
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+def _character_slot_for_asset_id(service: StepwiseGenerationService, project_name: str, asset_id: str) -> dict[str, object]:
+    state = service.get_state(project_name)
+    slot = state.get("character_assets", {}).get(asset_id)
+    if not isinstance(slot, dict):
+        raise HTTPException(status_code=404, detail="Character asset slot not found")
+    return slot
+
+
+@router.post("/api/projects/{project_name}/generation/characters/assets/{asset_id}/upload")
+async def api_stepwise_character_upload_by_asset_id(
+    project_name: str,
+    asset_id: str,
+    file: UploadFile = File(...),
+):
+    _check_stepwise_generation_gate(project_name)
+    service = _make_stepwise_service(project_name)
+    slot = _character_slot_for_asset_id(service, project_name, asset_id)
+    try:
+        file_bytes = await _read_upload_bytes(file)
+        return service.upload_character_asset(
+            project_name=project_name,
+            character_id=str(slot.get("target", "")),
+            variant=str(slot.get("variant", "normal")),
+            filename=file.filename or f"{asset_id}.png",
+            file_bytes=file_bytes,
+        )
+    except ValueError as exc:
+        status = 400 if _is_upload_client_error(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+
+
+@router.post("/api/projects/{project_name}/generation/characters/assets/{asset_id}/generate")
+async def api_stepwise_character_generate_by_asset_id(
+    project_name: str,
+    asset_id: str,
+    payload: dict[str, object] | None = Body(default=None),
+):
+    _check_stepwise_generation_gate(project_name)
+    service = _make_stepwise_service(project_name)
+    slot = _character_slot_for_asset_id(service, project_name, asset_id)
+    prompt, replace, _description = _parse_generation_payload(payload)
+    try:
+        return await service.generate_character_asset(
+            project_name=project_name,
+            character_id=str(slot.get("target", "")),
+            variant=str(slot.get("variant", "normal")),
+            prompt=prompt,
+            replace=replace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @router.post("/api/projects/{project_name}/generation/characters/{character_id}/{variant}/upload")
 async def api_stepwise_character_upload(
     project_name: str,
