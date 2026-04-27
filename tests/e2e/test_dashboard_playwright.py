@@ -258,34 +258,146 @@ def test_project_workspace(page: Page, server_url: str) -> None:
     expect_new_project_intake_workspace(page)
 
 
-def test_generation_tab_exposes_ai_and_upload_asset_entries(page: Page, server_url: str) -> None:
+def _seed_ready_brief_and_outline(workspace: Path, project_name: str) -> None:
+    """Write confirmed brief and outline data so generation endpoints are enabled."""
+    meta_dir = workspace / project_name / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+
+    brief = {
+        "cards": {
+            "core_premise": {"content": "A tale about a curious detective in a neon city.", "confirmed": True},
+            "audience_genre": {"content": "Neo-noir visual novel.", "confirmed": True},
+            "tone_themes": {"content": "Moody, emotional, resilient.", "confirmed": True},
+            "visual_style": {"content": "Hand-painted backgrounds.", "confirmed": True},
+            "world_rules": {"content": "No magic systems.", "confirmed": True},
+            "core_cast": {"content": "Detective Aya and the Midnight City.", "confirmed": True},
+            "character_identity": {
+                "content": {
+                    "characters": [
+                        {
+                            "character_id": "aya",
+                            "name": "Aya",
+                            "story_role": "Detective",
+                            "core_motivation": "Solve the midnight theft.",
+                            "personality_anchors": ["curious", "determined"],
+                            "visual_identity_anchors": ["red coat", "notebook"],
+                            "forbidden_drift": ["no violence"],
+                        }
+                    ]
+                },
+                "confirmed": True,
+            },
+            "relationship_baselines": {
+                "content": {"relationships": [{"pair": ["aya", "client"], "baseline": "distant", "must_preserve": ["trust builds"]}]},
+                "confirmed": True,
+            },
+            "constraints": {"content": "Keep scenes within city alleys.", "confirmed": True},
+        },
+        "updated_at": "2026-04-27T00:00:00Z",
+    }
+    outline = {
+        "chapters": [
+            {
+                "chapter_id": "ch1",
+                "order": 1,
+                "chapter_name": "Arrival",
+                "chapter_goal": "Open the investigation.",
+                "key_conflict": "Missing lead and city blackout.",
+                "emotional_arc": "calm to urgency",
+                "reveals": "A shadowed figure left clues.",
+                "end_state": "Next lead is traced to a pier.",
+                "mood_or_pacing_bias": "nocturnal, tense",
+                "character_focus": ["aya"],
+                "relationship_shift": "Aya reaches out for help.",
+                "character_presentation_notes": "Aya wears coat, worried and alert.",
+                "confirmed": True,
+            }
+        ],
+        "updated_at": "2026-04-27T00:00:00Z",
+    }
+
+    (meta_dir / "project_brief.json").write_text(json.dumps(brief, indent=2), encoding="utf-8")
+    (meta_dir / "chapter_outline.json").write_text(json.dumps(outline, indent=2), encoding="utf-8")
+
+
+def _seed_generation_state_for_smoke(workspace: Path, project_name: str) -> None:
+    """Seed generation state with one character and one background slot."""
+    meta_dir = workspace / project_name / "meta"
+    state = {
+        "state": "background_assets_confirmed",
+        "round_id": "r0001",
+        "character_assets": {
+            "char_Alice_normal": {
+                "asset_id": "char_Alice_normal",
+                "kind": "character_sprite",
+                "target": "Alice",
+                "variant": "normal",
+                "generation_prompt": "ink vampire hunter sprite",
+                "source": "generated",
+                "status": "generated",
+                "path": "game/images/sprites/char_Alice_normal.png",
+                "staging_path": "game/__staging__/r0001/images/sprites/char_Alice_normal.png",
+                "preview_url": f"/api/projects/{project_name}/asset-file/__staging__/r0001/images/sprites/char_Alice_normal.png",
+                "placeholder": False,
+                "renderable": True,
+            }
+        },
+        "background_assets": {
+            "bg_scene_01_main": {
+                "asset_id": "bg_scene_01_main",
+                "kind": "background",
+                "target": "scene_01",
+                "variant": "main",
+                "generation_prompt": "wide alley in a cyberpunk city",
+                "description": "futuristic city avenue at night",
+                "source": "generated",
+                "status": "generated",
+                "path": "game/images/background/scene_01_main.png",
+                "staging_path": "game/__staging__/r0001/images/background/scene_01_main.png",
+                "preview_url": f"/api/projects/{project_name}/asset-file/__staging__/r0001/images/background/scene_01_main.png",
+                "placeholder": False,
+                "renderable": True,
+            }
+        },
+        "script_preview": None,
+    }
+    (meta_dir / "generation_state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def test_generation_tab_exposes_ai_and_upload_asset_entries(
+    page: Page, server_url: str, e2e_workspace: Path
+) -> None:
     """Generation UI must expose AI generation and manual upload as peer asset entry points."""
     assert wait_for_server(server_url), "Server not ready"
 
     project_name = f"playwright_generation_assets_{int(time.time())}"
     create_project_via_api(server_url, project_name)
+    _seed_ready_brief_and_outline(e2e_workspace, project_name)
+    _seed_generation_state_for_smoke(e2e_workspace, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
     open_generation_tab(page)
 
-    expect(page.get_by_text("Character Assets")).to_be_visible(timeout=10000)
-    expect(page.get_by_text("Background Assets")).to_be_visible(timeout=10000)
+    expect(page.get_by_role("heading", name="Character Assets", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("heading", name="Scene Backgrounds", exact=True)).to_be_visible(timeout=10000)
     expect(page.get_by_text("Generate with AI").first).to_be_visible(timeout=10000)
     expect(page.get_by_text("Upload Image").first).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Manual progression:")).to_be_visible(timeout=10000)
     expect(page.get_by_label("Prompt").first).to_be_visible(timeout=10000)
     expect(page.get_by_text(re.compile("fallback", re.IGNORECASE))).to_have_count(0)
 
-    page.get_by_role("button", name="Start Characters").click()
-    expect(page.get_by_text("Operation completed.")).to_be_visible(timeout=10000)
+    bg_slot = page.get_by_test_id("slot-card-bg_scene_01_main")
+    char_slot = page.get_by_test_id("slot-card-char_Alice_normal")
 
-    page.get_by_placeholder("character name/id").first.fill("Alice")
-    page.get_by_label("Prompt").first.fill("ink vampire hunter sprite")
-    page.get_by_role("button", name="Generate with AI").first.click()
-
-    slot = page.get_by_test_id("slot-card-char_Alice_normal")
-    expect(slot).to_be_visible(timeout=15000)
-    expect(slot).to_contain_text("Source: generated", timeout=15000)
-    expect(slot.get_by_label("Alice normal prompt")).to_have_value("ink vampire hunter sprite")
-    expect(slot.locator("img")).to_have_attribute("src", re.compile(r"/api/projects/.+/asset-file/__staging__/"))
+    expect(bg_slot).to_be_visible(timeout=10000)
+    expect(char_slot).to_be_visible(timeout=10000)
+    expect(char_slot).to_contain_text("Source: generated", timeout=10000)
+    expect(char_slot.get_by_label("Alice normal prompt")).to_have_value("ink vampire hunter sprite")
+    expect(bg_slot.get_by_label("scene_01 main description")).to_be_visible(timeout=10000)
+    expect(bg_slot.get_by_label("scene_01 main description")).to_have_value("futuristic city avenue at night")
+    expect(bg_slot.get_by_label("scene_01 main prompt")).to_have_value("wide alley in a cyberpunk city")
+    expect(char_slot.locator("img")).to_have_attribute("src", re.compile(r"/api/projects/.+/asset-file/__staging__/"))
+    expect(bg_slot.locator("img")).to_have_attribute("src", re.compile(r"/api/projects/.+/asset-file/__staging__/"))
+    expect(page.get_by_role("heading", name="Script Preview & Commit", exact=True)).to_be_visible(timeout=10000)
 
 
 def test_direct_workspace_url(page: Page, server_url: str) -> None:

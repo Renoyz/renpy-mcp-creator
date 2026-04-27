@@ -263,22 +263,139 @@ class StepwiseGenerationService:
                 if not safe_scene_id:
                     continue
                 bg_asset_id = self._slot_asset_id("background", safe_scene_id, "main")
-                state["background_assets"].setdefault(
-                    bg_asset_id,
-                    self._build_empty_slot(
+                existing = state["background_assets"].get(bg_asset_id)
+                if existing is None:
+                    slot = self._build_empty_slot(
                         kind="background",
                         target=safe_scene_id,
                         variant="main",
-                    ),
+                    )
+                    state["background_assets"][bg_asset_id] = self._apply_background_metadata(
+                        project_name=project_name,
+                        slot=slot,
+                        target=safe_scene_id,
+                        existing_slot=None,
+                    )
+                    continue
+
+                self._apply_background_metadata(
+                    project_name=project_name,
+                    slot=existing,
+                    target=safe_scene_id,
+                    existing_slot=existing,
                 )
+                state["background_assets"][bg_asset_id] = existing
+
+    def _background_description_from_scene_package(
+        self,
+        project_name: str,
+        target: str,
+    ) -> tuple[str, str] | None:
+        scene_packages = self.pm.read_scene_packages(project_name)
+        if scene_packages is None:
+            return None
+
+        target_key = self._normalized_slot_match_key(target)
+        for chapter in scene_packages.chapters:
+            for scene in chapter.scenes:
+                if self._normalized_slot_match_key(scene.scene_id) != target_key:
+                    continue
+                description = self._background_description_from_scene(scene)
+                if description:
+                    return description, "scene_package"
+        return None
+
+    def _background_description_for_target(
+        self,
+        project_name: str,
+        target: str,
+        existing_slot: dict[str, Any] | None = None,
+        override_description: str | None = None,
+    ) -> tuple[str, str]:
+        if isinstance(override_description, str) and override_description.strip():
+            return self._coerce_prompt_text(override_description), "user"
+
+        existing_description = None
+        existing_source = None
+        if isinstance(existing_slot, dict):
+            existing_description = existing_slot.get("description")
+            existing_source = existing_slot.get("description_source")
+        if (
+            isinstance(existing_description, str)
+            and existing_description.strip()
+            and self._coerce_prompt_text(existing_source) != "target"
+        ):
+            return self._coerce_prompt_text(existing_description), self._coerce_prompt_text(existing_source) or "user"
+
+        scene_description = self._background_description_from_scene_package(
+            project_name=project_name,
+            target=target,
+        )
+        if scene_description is not None:
+            return scene_description
+
+        if isinstance(existing_description, str) and existing_description.strip():
+            return self._coerce_prompt_text(existing_description), self._coerce_prompt_text(existing_source) or "target"
+
+        normalized_target = self._coerce_prompt_text(target)
+        if not normalized_target:
+            normalized_target = self._coerce_prompt_text(self._slot_target(existing_slot or {}))
+        return normalized_target or "", "target"
+
+    def _apply_background_metadata(
+        self,
+        *,
+        project_name: str,
+        slot: dict[str, Any],
+        target: str,
+        existing_slot: dict[str, Any] | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        description, description_source = self._background_description_for_target(
+            project_name=project_name,
+            target=target,
+            existing_slot=existing_slot,
+            override_description=description,
+        )
+        slot["description"] = self._coerce_prompt_text(description)
+        slot["description_source"] = self._coerce_prompt_text(description_source) or "target"
+        return slot
 
     def ensure_required_slots(self, project_name: str, state: dict[str, Any]) -> None:
         """Create required slots from scene packages when available."""
         self._ensure_required_character_slots(project_name, state)
         self._ensure_required_background_slots(project_name, state)
 
-    def _build_empty_slot(self, *, kind: str, target: str, variant: str) -> dict[str, Any]:
-        return {
+    @staticmethod
+    def _background_description_from_scene(scene: Any) -> str:
+        location_visual_brief = getattr(scene, "location_visual_brief", "")
+        if isinstance(location_visual_brief, str):
+            location_visual_brief = location_visual_brief.strip()
+            if location_visual_brief:
+                return location_visual_brief
+
+        summary = getattr(scene, "summary", "")
+        if not isinstance(summary, str):
+            summary = ""
+        location = getattr(scene, "location", "")
+        if not isinstance(location, str):
+            location = ""
+        mood = getattr(scene, "mood", "")
+        if not isinstance(mood, str):
+            mood = ""
+
+        return ", ".join(part.strip() for part in (summary, location, mood) if part and part.strip())
+
+    def _build_empty_slot(
+        self,
+        *,
+        kind: str,
+        target: str,
+        variant: str,
+        description: str | None = None,
+        description_source: str | None = None,
+    ) -> dict[str, Any]:
+        slot = {
             "asset_id": self._slot_asset_id(kind, self._normalize_target(target), variant),
             "kind": kind,
             "target": self._normalize_target(target),
@@ -288,6 +405,15 @@ class StepwiseGenerationService:
             "placeholder": False,
             "renderable": False,
         }
+        if kind == "background":
+            source = self._coerce_prompt_text(description_source) or "target"
+            resolved_target = self._normalize_target(target)
+            resolved_description = self._coerce_prompt_text(description)
+            if not resolved_description:
+                resolved_description = resolved_target
+            slot["description"] = resolved_description
+            slot["description_source"] = source
+        return slot
 
     @staticmethod
     def _default_character_prompt(target: str, variant: str) -> str:
@@ -297,20 +423,30 @@ class StepwiseGenerationService:
         )
 
     @staticmethod
-    def _default_background_prompt(target: str, variant: str) -> str:
+    def _default_background_prompt(target: str, variant: str, description: str = "") -> str:
+        context = f" Scene description: {description}." if description else ""
         return (
             f"Generate a visual novel background plate for {target}, variant {variant}. "
             "Use 16:9 composition, no characters or text."
+            f"{context}"
         )
 
-    def _default_generation_prompt(self, *, kind: str, target: str, variant: str, prompt: str) -> str:
+    def _default_generation_prompt(
+        self,
+        *,
+        kind: str,
+        target: str,
+        variant: str,
+        prompt: str,
+        description: str = "",
+    ) -> str:
         prompt = self._coerce_prompt_text(prompt)
         if prompt:
             return prompt
         if kind == "character_sprite":
             return self._default_character_prompt(target, variant)
         if kind == "background":
-            return self._default_background_prompt(target, variant)
+            return self._default_background_prompt(target, variant, description)
         raise ValueError(f"Unsupported asset kind: {kind!r}")
 
     @staticmethod
@@ -361,6 +497,8 @@ class StepwiseGenerationService:
         variant: str,
         generation_prompt: str,
         generated_file: Path,
+        description: str | None = None,
+        description_source: str | None = None,
     ) -> dict[str, Any]:
         width, height, has_alpha = self.imported_asset_service._decode(generated_file.read_bytes())
         normalized_kind = self.imported_asset_service._normalize_kind(kind)
@@ -392,7 +530,7 @@ class StepwiseGenerationService:
             asset_id=asset_id,
             extension=safe_extension,
         )
-        return {
+        slot = {
             "asset_id": asset_id,
             "kind": normalized_kind,
             "target": safe_target,
@@ -410,6 +548,14 @@ class StepwiseGenerationService:
             "validation": validation,
             "generation_prompt": generation_prompt,
         }
+        if normalized_kind == "background":
+            resolved_description = self._coerce_prompt_text(description)
+            resolved_source = self._coerce_prompt_text(description_source) or "target"
+            if not resolved_description and resolved_source == "target":
+                resolved_description = safe_target
+            slot["description"] = resolved_description
+            slot["description_source"] = resolved_source
+        return slot
 
     async def _generate_and_stage_image(
         self,
@@ -420,13 +566,21 @@ class StepwiseGenerationService:
         variant: str,
         prompt: str,
         round_id: str,
+        description: str = "",
+        description_source: str | None = None,
     ) -> tuple[dict[str, Any], Path]:
         generation_prompt = self._default_generation_prompt(
             kind=kind,
             target=target,
             variant=variant,
             prompt=prompt,
+            description=description,
         )
+        service_prompt = generation_prompt
+        prompt_text = self._coerce_prompt_text(prompt)
+        description_text = self._coerce_prompt_text(description)
+        if kind == "background" and prompt_text and description_text:
+            service_prompt = f"{prompt_text}\nScene description: {description_text}."
         normalized_target = self._normalize_target(target)
         normalized_variant = self._normalize_target(variant)
         image_type = "background" if kind == "background" else "character"
@@ -435,7 +589,7 @@ class StepwiseGenerationService:
         if os.environ.get("RENPY_MCP_MOCK_IMAGE_GEN"):
             result = self._mock_generate_image_file(
                 project_dir=project_dir,
-                prompt=generation_prompt,
+                prompt=service_prompt,
                 image_type=image_type,
                 base_name=base_name,
             )
@@ -444,7 +598,7 @@ class StepwiseGenerationService:
                 raise RuntimeError("Image generation service is not available")
             result = await self.image_service.generate_image(
                 project_dir=project_dir,
-                prompt=generation_prompt,
+                prompt=service_prompt,
                 image_type=image_type,
                 base_name=base_name,
             )
@@ -465,8 +619,10 @@ class StepwiseGenerationService:
             kind=kind,
             target=normalized_target,
             variant=normalized_variant,
-            generation_prompt=result.prompt or generation_prompt,
+            generation_prompt=generation_prompt,
             generated_file=generated_file,
+            description=description,
+            description_source=description_source,
         )
         destination = project_dir / cast(str, slot["staging_path"])
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -626,6 +782,8 @@ class StepwiseGenerationService:
             slot["kind"] = existing.get("kind", slot["kind"])
             slot["variant"] = existing.get("variant", slot["variant"])
             slot["placeholder"] = existing.get("placeholder", slot["placeholder"])
+            slot["description"] = existing.get("description", slot.get("description"))
+            slot["description_source"] = existing.get("description_source", slot.get("description_source"))
 
         state["character_assets"][target_slot_id] = slot
         if original_slot_id != target_slot_id:
@@ -674,6 +832,15 @@ class StepwiseGenerationService:
         existing_slot = state[collection].get(slot_id)
         if existing_slot is not None and existing_slot.get("status") == "accepted" and not replace:
             raise ValueError(f"Asset {slot_id} is already accepted")
+        description = ""
+        description_source: str | None = None
+        if existing_slot is not None:
+            description_value = existing_slot.get("description")
+            if isinstance(description_value, str):
+                description = description_value
+            source_value = existing_slot.get("description_source")
+            if isinstance(source_value, str):
+                description_source = source_value
 
         project_dir = self.pm._project_dir(project_name)
         slot, _ = await self._generate_and_stage_image(
@@ -684,6 +851,8 @@ class StepwiseGenerationService:
             variant=variant,
             prompt=self._coerce_prompt_text(prompt),
             round_id=round_id,
+            description=description,
+            description_source=description_source,
         )
         _ = self._persist_generated_slot(
             state=state,
@@ -709,6 +878,7 @@ class StepwiseGenerationService:
         filename: str,
         file_bytes: bytes,
         replace: bool = False,
+        description: str | None = None,
     ) -> dict[str, Any]:
         state = self.get_state(project_name)
         self._require_state(
@@ -753,6 +923,13 @@ class StepwiseGenerationService:
             slot["kind"] = existing.get("kind", slot["kind"])
             slot["variant"] = existing.get("variant", slot["variant"])
             slot["placeholder"] = existing.get("placeholder", slot["placeholder"])
+        slot = self._apply_background_metadata(
+            project_name=project_name,
+            slot=slot,
+            target=location_id,
+            existing_slot=existing,
+            description=description,
+        )
 
         state["background_assets"][target_slot_id] = slot
         if original_slot_id != target_slot_id:
@@ -773,6 +950,7 @@ class StepwiseGenerationService:
         variant: str,
         prompt: str,
         replace: bool = False,
+        description: str | None = None,
     ) -> dict[str, Any]:
         state = self.get_state(project_name)
         self._require_state(
@@ -801,6 +979,12 @@ class StepwiseGenerationService:
         if existing_slot is not None and existing_slot.get("status") == "accepted" and not replace:
             raise ValueError(f"Asset {slot_id} is already accepted")
 
+        description, description_source = self._background_description_for_target(
+            project_name=project_name,
+            target=location_id,
+            existing_slot=existing_slot,
+            override_description=description,
+        )
         project_dir = self.pm._project_dir(project_name)
         slot, _ = await self._generate_and_stage_image(
             project_name=project_name,
@@ -810,6 +994,8 @@ class StepwiseGenerationService:
             variant=variant,
             prompt=self._coerce_prompt_text(prompt),
             round_id=round_id,
+            description=description,
+            description_source=description_source,
         )
         _ = self._persist_generated_slot(
             state=state,
@@ -1046,7 +1232,6 @@ class StepwiseGenerationService:
         state = self.get_state(project_name)
         self._require_state(
             state,
-            "character_assets_confirmed",
             "background_assets_confirmed",
             "script_preview",
             action="generate preview",

@@ -419,6 +419,64 @@ class TestStepwiseService:
 
         assert slot_path.read_bytes() == original_staging_bytes
 
+    def test_required_background_slots_include_scene_description(self, service, project):
+        project_name, _ = project
+        _seed_scene_packages(service.pm, project_name)
+
+        service.start_characters(project_name)
+        state = service.start_backgrounds(project_name)
+
+        slot = state["background_assets"]["bg_scene_01_main"]
+        assert slot["description"] == "wide street and cafe"
+        assert slot["description_source"] == "scene_package"
+
+    def test_generated_background_default_prompt_uses_scene_description(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        _seed_scene_packages(pm, project_name)
+        fake_image_service = FakeImageService(size=(1280, 720))
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        service.start_backgrounds(project_name)
+
+        slot = asyncio.run(
+            service.generate_background_asset(
+                project_name=project_name,
+                location_id="scene_01",
+                variant="main",
+                prompt="",
+            )
+        )
+
+        assert slot["description"] == "wide street and cafe"
+        assert slot["description_source"] == "scene_package"
+        assert "wide street and cafe" in fake_image_service.calls[0]["prompt"]
+
+    def test_generated_background_can_use_user_description_override(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        _seed_scene_packages(pm, project_name)
+        fake_image_service = FakeImageService(size=(1280, 720))
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        service.start_backgrounds(project_name)
+
+        slot = asyncio.run(
+            service.generate_background_asset(
+                project_name=project_name,
+                location_id="scene_01",
+                variant="main",
+                prompt="",
+                description="neon alley at night",
+            )
+        )
+
+        assert slot["description"] == "neon alley at night"
+        assert slot["description_source"] == "user"
+        assert "neon alley at night" in fake_image_service.calls[0]["prompt"]
+
     def test_script_preview_does_not_write_final_game_script(self, service, project):
         project_name, project_dir = project
         script_file = project_dir / "game" / "script.rpy"
@@ -660,6 +718,81 @@ class TestStepwiseService:
         assert uploaded["asset_id"] == "bg_scene_01_main"
         assert set(state["background_assets"]) == {"bg_scene_01_main"}
         assert state["background_assets"]["bg_scene_01_main"]["status"] == "uploaded"
+
+    def test_upload_background_asset_keeps_existing_description(self, service, project):
+        project_name, _ = project
+        _seed_scene_packages(service.pm, project_name)
+
+        service.start_characters(project_name)
+        state = service.start_backgrounds(project_name)
+
+        assert state["background_assets"]["bg_scene_01_main"]["description"] == "wide street and cafe"
+        assert state["background_assets"]["bg_scene_01_main"]["description_source"] == "scene_package"
+
+        uploaded = service.upload_background_asset(
+            project_name=project_name,
+            location_id="scene_01",
+            variant="main",
+            filename="bg.png",
+            file_bytes=_rgba_png_bytes(size=(1280, 720)),
+        )
+
+        assert uploaded["description"] == "wide street and cafe"
+        assert uploaded["description_source"] == "scene_package"
+
+    def test_generate_background_preserves_existing_description(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        _seed_scene_packages(pm, project_name)
+        fake_image_service = FakeImageService(size=(1280, 720))
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        service.start_backgrounds(project_name)
+
+        service.upload_background_asset(
+            project_name=project_name,
+            location_id="scene_01",
+            variant="main",
+            filename="bg.png",
+            file_bytes=_rgba_png_bytes(size=(1280, 720)),
+        )
+
+        slot = asyncio.run(
+            service.generate_background_asset(
+                project_name=project_name,
+                location_id="scene_01",
+                variant="main",
+                prompt="moonlit city background",
+            )
+        )
+
+        assert slot["description"] == "wide street and cafe"
+        assert slot["description_source"] == "scene_package"
+        assert slot["generation_prompt"] == "moonlit city background"
+        assert "wide street and cafe" in fake_image_service.calls[0]["prompt"]
+
+    def test_generate_background_defaults_to_target_description_when_no_scene_package(self, pm, project):
+        from renpy_mcp.services.stepwise_generation_service import StepwiseGenerationService
+
+        project_name, _ = project
+        fake_image_service = FakeImageService(size=(1280, 720))
+        service = StepwiseGenerationService(pm, image_service=fake_image_service)
+        service.start_characters(project_name)
+        service.start_backgrounds(project_name)
+
+        slot = asyncio.run(
+            service.generate_background_asset(
+                project_name=project_name,
+                location_id="rooftop",
+                variant="main",
+                prompt="",
+            )
+        )
+
+        assert slot["description"] == "rooftop"
+        assert slot["description_source"] == "target"
+        assert "rooftop" in fake_image_service.calls[0]["prompt"]
 
     def test_accept_asset_rejects_non_renderable_characters_by_default(self, service, project):
         project_name, _ = project

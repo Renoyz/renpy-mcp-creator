@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, HTTPException
-from fastapi import Body, UploadFile, File
+from fastapi import Body, UploadFile, File, Form
 
 from ...blueprint.models import (
     BlueprintFreezeStatus,
@@ -112,6 +112,24 @@ def _make_stepwise_service(project_name: str) -> StepwiseGenerationService:
     return StepwiseGenerationService(ProjectManager(settings))
 
 
+def _check_stepwise_generation_gate(project_name: str) -> None:
+    settings = get_settings()
+    pm = ProjectManager(settings)
+    _check_generation_gate(pm, project_name)
+    try:
+        meta = pm.read_project_meta(project_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if meta.blueprint_freeze_status != BlueprintFreezeStatus.FROZEN:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Generation blocked: blueprint must be frozen before entering the "
+                "manual stepwise generation stage."
+            ),
+        )
+
+
 def _is_upload_client_error(exc: Exception) -> bool:
     detail = str(exc).lower()
     return any(
@@ -144,9 +162,9 @@ def _parse_accept_payload(payload: dict[str, object] | None) -> bool:
     return allow_non_renderable
 
 
-def _parse_generation_payload(payload: dict[str, object] | None) -> tuple[str, bool]:
+def _parse_generation_payload(payload: dict[str, object] | None) -> tuple[str, bool, str | None]:
     if payload is None:
-        return "", False
+        return "", False, None
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON body for generation request")
     prompt = payload.get("prompt", "")
@@ -159,7 +177,12 @@ def _parse_generation_payload(payload: dict[str, object] | None) -> tuple[str, b
         replace = False
     if not isinstance(replace, bool):
         raise HTTPException(status_code=400, detail="replace must be a boolean")
-    return prompt, replace
+    description = payload.get("description")
+    if description is None:
+        return prompt, replace, None
+    if not isinstance(description, str):
+        raise HTTPException(status_code=400, detail="description must be a string")
+    return prompt, replace, description
 
 
 async def _read_upload_bytes(file: UploadFile | None) -> bytes:
@@ -199,6 +222,7 @@ async def api_stepwise_scene_outline_confirm(project_name: str):
 
 @router.post("/api/projects/{project_name}/generation/characters/start")
 async def api_stepwise_characters_start(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.start_characters(project_name)
@@ -213,6 +237,7 @@ async def api_stepwise_character_upload(
     variant: str,
     file: UploadFile = File(...),
 ):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         file_bytes = await _read_upload_bytes(file)
@@ -235,8 +260,9 @@ async def api_stepwise_character_generate(
     variant: str,
     payload: dict[str, object] | None = Body(default=None),
 ):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
-    prompt, replace = _parse_generation_payload(payload)
+    prompt, replace, _description = _parse_generation_payload(payload)
     try:
         return await service.generate_character_asset(
             project_name=project_name,
@@ -257,6 +283,7 @@ async def api_stepwise_character_accept(
     asset_id: str,
     payload: dict[str, object] | None = Body(default=None),
 ):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     allow_non_renderable = _parse_accept_payload(payload)
     try:
@@ -267,6 +294,7 @@ async def api_stepwise_character_accept(
 
 @router.post("/api/projects/{project_name}/generation/characters/confirm")
 async def api_stepwise_characters_confirm(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.confirm_characters(project_name)
@@ -276,6 +304,7 @@ async def api_stepwise_characters_confirm(project_name: str):
 
 @router.post("/api/projects/{project_name}/generation/backgrounds/start")
 async def api_stepwise_backgrounds_start(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.start_backgrounds(project_name)
@@ -289,7 +318,9 @@ async def api_stepwise_background_upload(
     location_id: str,
     variant: str,
     file: UploadFile = File(...),
+    description: str | None = Form(default=None),
 ):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         file_bytes = await _read_upload_bytes(file)
@@ -299,6 +330,7 @@ async def api_stepwise_background_upload(
             variant=variant,
             filename=file.filename or f"{location_id}.{variant}",
             file_bytes=file_bytes,
+            description=description,
         )
     except ValueError as exc:
         status = 400 if _is_upload_client_error(exc) else 409
@@ -311,8 +343,9 @@ async def _generate_background_slot(
     variant: str,
     payload: dict[str, object] | None = Body(default=None),
 ) -> dict[str, object]:
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
-    prompt, replace = _parse_generation_payload(payload)
+    prompt, replace, description = _parse_generation_payload(payload)
     try:
         return await service.generate_background_asset(
             project_name=project_name,
@@ -320,6 +353,7 @@ async def _generate_background_slot(
             variant=variant,
             prompt=prompt,
             replace=replace,
+            description=description,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -351,6 +385,7 @@ async def api_stepwise_background_accept(
     project_name: str,
     asset_id: str,
 ):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.accept_asset(project_name, asset_id)
@@ -360,6 +395,7 @@ async def api_stepwise_background_accept(
 
 @router.post("/api/projects/{project_name}/generation/backgrounds/confirm")
 async def api_stepwise_backgrounds_confirm(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.confirm_backgrounds(project_name)
@@ -369,6 +405,7 @@ async def api_stepwise_backgrounds_confirm(project_name: str):
 
 @router.post("/api/projects/{project_name}/generation/script/preview")
 async def api_stepwise_script_preview(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.preview_script(project_name)
@@ -380,6 +417,7 @@ async def api_stepwise_script_preview(project_name: str):
 
 @router.post("/api/projects/{project_name}/generation/script/commit")
 async def api_stepwise_script_commit(project_name: str):
+    _check_stepwise_generation_gate(project_name)
     service = _make_stepwise_service(project_name)
     try:
         return service.commit(project_name)
