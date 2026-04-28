@@ -278,6 +278,61 @@ describe("ProjectWorkspacePage build controls", () => {
     expect(promoteBriefDraft).toHaveBeenCalledWith("demo")
   })
 
+  it("keeps refinement blockers inside the compact workflow header", async () => {
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      blueprint: null,
+      refinementIntake: {
+        phase: "project",
+        current_summary: "The agent is still collecting project requirements.",
+        missing_slots: ["core_premise"],
+        slots: {
+          core_premise: { value: null, complete: false },
+        },
+        brief_draft_ready: false,
+        chapter_draft: [],
+        outline_draft_ready: false,
+        updated_at: "2026-04-27T00:00:00",
+      },
+      refinementStatus: {
+        refinement_state: "intake",
+        brief_fully_confirmed: false,
+        outline_fully_confirmed: false,
+        blueprint_ready: false,
+        freeze_allowed: false,
+        blueprint_freeze_status: null,
+        generation_allowed: false,
+      },
+    } as never)
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByTestId("workflow-status-header")
+    const blocker = within(header).getByTestId("workflow-blocker-chip")
+    expect(blocker).toHaveTextContent("Complete all Project Brief cards first")
+    expect(screen.queryByTestId("refinement-status-panel")).not.toBeInTheDocument()
+  })
+
   it("shows freeze blueprint as the primary action when the outline is confirmed", async () => {
     vi.mocked(useProject).mockReturnValue({
       ...baseContext,

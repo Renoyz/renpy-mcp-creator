@@ -49,6 +49,7 @@ export async function runFreezeAutoGenerationChain({
     message: "Freezing blueprint...",
   })
   await freezeBlueprint(projectName)
+  await refreshProjectData(projectName)
 
   onProgress?.({
     status: "running",

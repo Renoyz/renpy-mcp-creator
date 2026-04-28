@@ -45,7 +45,7 @@ describe("runFreezeAutoGenerationChain", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
-    expect(refresh).toHaveBeenCalledTimes(3)
+    expect(refresh).toHaveBeenCalledTimes(4)
     expect(events).toEqual([
       "running:freezing",
       "running:scene_packages",
@@ -72,6 +72,7 @@ describe("runFreezeAutoGenerationChain", () => {
         request,
       })
     ).rejects.toThrow("Scene package generation failed: LLM provider unavailable")
+    expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   it("keeps advancing scene packages until every chapter is complete", async () => {
@@ -127,7 +128,7 @@ describe("runFreezeAutoGenerationChain", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     })
-    expect(refresh).toHaveBeenCalledTimes(4)
+    expect(refresh).toHaveBeenCalledTimes(5)
   })
 })
 

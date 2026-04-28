@@ -1,5 +1,5 @@
 import type { RefinementIntake } from "@/context/ProjectContext";
-import { AlertCircle, Bot, CheckCircle2, MessageSquarePlus } from "lucide-react";
+import { AlertCircle, Bot, CheckCircle2, ClipboardList, MessageCircle, MessageSquarePlus } from "lucide-react";
 
 interface Props {
   intake: RefinementIntake | null;
@@ -15,6 +15,24 @@ function formatSlotLabel(key: string): string {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+const PROJECT_SLOT_KEYS = [
+  "core_premise",
+  "audience_genre",
+  "tone_themes",
+  "visual_style",
+  "world_rules",
+  "core_cast",
+  "character_identity",
+  "relationship_baselines",
+  "constraints",
+];
+
+function formatSlotValue(value: unknown): string {
+  if (value == null || value === "") return "No value collected yet.";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
 }
 
 export function IntakeWorkspaceView({
@@ -69,24 +87,41 @@ export function IntakeWorkspaceView({
   }
 
   const isChapterPhase = intake.phase === "chapter" || intake.phase === "outline_ready";
+  const slotKeys = Array.from(new Set([...PROJECT_SLOT_KEYS, ...Object.keys(intake.slots)]));
+  const completedSlots = slotKeys.filter((key) => intake.slots[key]?.complete).length;
+  const totalSlots = slotKeys.length;
+  const remainingSlots = Math.max(0, totalSlots - completedSlots);
+  const progressPercent = totalSlots > 0 ? Math.round((completedSlots / totalSlots) * 100) : 0;
+  const nextStep = !isChapterPhase && intake.brief_draft_ready
+    ? "Next: enter Brief Review"
+    : isChapterPhase && intake.outline_draft_ready
+    ? "Next: enter Outline Review"
+    : "Next: keep chatting with AI";
 
   return (
-    <div className="h-full overflow-auto p-6">
-      <div className="max-w-4xl space-y-6">
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
+    <div className="h-full overflow-auto bg-slate-50 p-6">
+      <div className="max-w-7xl space-y-6">
+        <div
+          data-testid="intake-progress-panel"
+          className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+        >
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Agent Intake</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Phase: <span className="font-medium text-gray-700">{intake.phase}</span>
-              </p>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                <ClipboardList className="h-4 w-4" />
+                <span>Intake / {intake.phase}</span>
+              </div>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                {isChapterPhase ? "Chapter intake progress" : "Project intake progress"}
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">{nextStep}</p>
             </div>
             {!isChapterPhase && intake.brief_draft_ready && (
               <button
                 type="button"
                 onClick={() => void onPromoteBriefDraft(projectName)}
                 data-testid="promote-brief-draft"
-                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Enter Brief Review
@@ -97,16 +132,48 @@ export function IntakeWorkspaceView({
                 type="button"
                 onClick={() => void onPromoteOutlineDraft(projectName)}
                 data-testid="promote-outline-draft"
-                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
               >
                 <CheckCircle2 className="h-4 w-4" />
                 Enter Outline Review
               </button>
             )}
           </div>
-          <div className="mt-4 rounded-md bg-gray-50 p-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Current understanding</div>
-            <p className="mt-2 text-sm text-gray-700">
+
+          {!isChapterPhase && (
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="text-xs font-medium text-slate-500">Collected</div>
+                <div className="mt-1 text-lg font-semibold text-slate-950">
+                  {completedSlots} / {totalSlots} slots collected
+                </div>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="text-xs font-medium text-amber-700">Open work</div>
+                <div className="mt-1 text-lg font-semibold text-amber-950">{remainingSlots} remaining</div>
+              </div>
+              <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
+                <div className="text-xs font-medium text-blue-700">Next action</div>
+                <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-blue-950">
+                  <MessageCircle className="h-4 w-4" />
+                  {intake.brief_draft_ready ? "Review brief" : "Answer AI prompts"}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!isChapterPhase && (
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          )}
+
+          <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current understanding</div>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
               {intake.current_summary || "The agent has started intake but has not assembled a usable summary yet."}
             </p>
           </div>
@@ -158,52 +225,48 @@ export function IntakeWorkspaceView({
         )}
 
         {!isChapterPhase && (
-          <>
-            <div className="rounded-lg border border-gray-200 bg-white p-5">
-              <h3 className="text-sm font-semibold text-gray-900">Missing slots</h3>
-              {intake.missing_slots.length === 0 ? (
-                <p className="mt-2 text-sm text-green-700">No required slots are currently missing.</p>
-              ) : (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {intake.missing_slots.map((slot) => (
-                    <span
-                      key={slot}
-                      className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
-                    >
-                      {formatSlotLabel(slot)}
-                    </span>
-                  ))}
-                </div>
-              )}
+          <section data-testid="intake-requirements-grid" className="space-y-4">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h3 className="text-base font-semibold text-slate-950">Requirements</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Track the brief ingredients the AI has collected before structured review.
+                </p>
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200">
+                {remainingSlots === 0 ? "Ready for review" : `${remainingSlots} missing`}
+              </span>
             </div>
 
-            <div className="rounded-lg border border-gray-200 bg-white p-5">
-              <h3 className="text-sm font-semibold text-gray-900">Draft slots</h3>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {Object.entries(intake.slots).map(([key, slot]) => (
-                  <div key={key} className="rounded-md border border-gray-200 p-3">
+            <div className="grid gap-3 2xl:grid-cols-4 xl:grid-cols-3 md:grid-cols-2">
+              {slotKeys.map((key) => {
+                const slot = intake.slots[key];
+                const complete = !!slot?.complete;
+                return (
+                  <div
+                    key={key}
+                    className={`rounded-lg border bg-white p-4 shadow-sm ${
+                      complete ? "border-emerald-200" : "border-slate-200"
+                    }`}
+                  >
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-medium text-gray-900">{formatSlotLabel(key)}</div>
+                      <div className="text-sm font-semibold text-slate-950">{formatSlotLabel(key)}</div>
                       <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                          slot.complete ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          complete ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
                         }`}
                       >
-                        {slot.complete ? "Complete" : "Missing"}
+                        {complete ? "Complete" : "Missing"}
                       </span>
                     </div>
-                    <div className="mt-2 text-sm text-gray-600 break-words">
-                      {slot.value == null || slot.value === ""
-                        ? "No value collected yet."
-                        : typeof slot.value === "string"
-                        ? slot.value
-                        : JSON.stringify(slot.value)}
+                    <div className="mt-3 line-clamp-4 break-words text-sm leading-6 text-slate-600">
+                      {formatSlotValue(slot?.value)}
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
-          </>
+          </section>
         )}
       </div>
     </div>

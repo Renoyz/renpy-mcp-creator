@@ -6,6 +6,7 @@ interface Props {
   workflow: WorkflowDashboardState
   projectName: string
   metaLine?: React.ReactNode
+  statusNote?: React.ReactNode
   secondaryActions?: React.ReactNode
   onAction: (action: WorkflowAction) => void
 }
@@ -25,13 +26,20 @@ function StatusIcon({ status }: { status: WorkflowDashboardState["status"] }) {
   return <CheckCircle2 className="h-5 w-5" />
 }
 
-export function WorkflowStatusHeader({ workflow, projectName, metaLine, secondaryActions, onAction }: Props) {
+export function WorkflowStatusHeader({
+  workflow,
+  projectName,
+  metaLine,
+  statusNote,
+  secondaryActions,
+  onAction,
+}: Props) {
   return (
     <section
       data-testid="workflow-status-header"
-      className={cn("rounded-lg border p-4", statusTone[workflow.status])}
+      className={cn("rounded-lg border px-4 py-3", statusTone[workflow.status])}
     >
-      <div className="flex items-start justify-between gap-5">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide opacity-70">
             <span>
@@ -40,14 +48,19 @@ export function WorkflowStatusHeader({ workflow, projectName, metaLine, secondar
             <span>/</span>
             <span>{projectName}</span>
           </div>
-          <div className="mt-2 flex items-start gap-3">
-            <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-md bg-white/70">
+          <div className="mt-2 flex items-start gap-2.5">
+            <span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-white/75">
               <StatusIcon status={workflow.status} />
             </span>
             <div className="min-w-0">
               <h2 className="text-lg font-semibold tracking-tight">{workflow.title}</h2>
               <p className="mt-1 max-w-3xl text-sm opacity-80">{workflow.subtitle}</p>
-              {metaLine && <div className="mt-2 text-xs opacity-75">{metaLine}</div>}
+              {(metaLine || statusNote) && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs opacity-85">
+                  {statusNote}
+                  {metaLine && <span>{metaLine}</span>}
+                </div>
+              )}
             </div>
           </div>
         </div>

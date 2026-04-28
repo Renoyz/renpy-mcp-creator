@@ -21,21 +21,21 @@ const statusIcon: Record<WorkflowStageStatus, React.ReactNode> = {
 }
 
 const stageTone: Record<WorkflowStageStatus, string> = {
-  locked: "text-gray-400",
-  ready: "bg-indigo-50 text-indigo-700",
-  running: "bg-blue-50 text-blue-700",
-  needs_review: "bg-amber-50 text-amber-800",
-  done: "text-gray-700",
-  failed: "bg-red-50 text-red-700",
+  locked: "text-slate-500 hover:bg-white",
+  ready: "bg-indigo-50 text-indigo-800 ring-1 ring-indigo-100",
+  running: "bg-blue-50 text-blue-800 ring-1 ring-blue-100",
+  needs_review: "bg-amber-50 text-amber-900 ring-1 ring-amber-100",
+  done: "text-slate-700 hover:bg-white",
+  failed: "bg-red-50 text-red-700 ring-1 ring-red-100",
 }
 
 export function WorkflowRail({ stages, chapters, selectedSceneId, onSelectScene }: Props) {
   return (
-    <aside data-testid="workflow-rail" className="flex h-full w-full flex-col bg-gray-50/80">
-      <div className="border-b border-gray-200 p-4">
+    <aside data-testid="workflow-rail" className="flex h-full w-full flex-col bg-slate-50">
+      <div className="border-b border-slate-200 p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Production Flow</h3>
-          <Circle className="h-3 w-3 text-gray-300" />
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Production Flow</h3>
+          <Circle className="h-3 w-3 text-blue-500" />
         </div>
         <div className="space-y-1.5">
           {stages.map((stage) => (

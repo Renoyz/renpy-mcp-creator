@@ -345,7 +345,7 @@ def test_workspace_intake_view_shows_agent_summary_and_missing_slots(
     intake_tab = page.get_by_role("button", name="Intake", exact=True)
     intake_tab.click()
 
-    expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Project intake progress")).to_be_visible(timeout=10000)
     expect(page.get_by_text("A YA sci-fi mystery about Elena searching for her missing brother.", exact=True).first).to_be_visible(timeout=10000)
     expect(page.get_by_text("Relationship Baselines", exact=True).first).to_be_visible(timeout=10000)
     expect(page.get_by_text("Constraints", exact=True).first).to_be_visible(timeout=10000)
@@ -489,7 +489,7 @@ def test_workspace_refinement_status_shows_blocked_reason_before_blueprint_ready
 
     # Refinement status panel should show blocked reason
     expect(page.locator("text=Complete all Project Brief cards first")).to_be_visible(timeout=10000)
-    expect(page.get_by_text("Planning", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_text("Project intake", exact=True)).to_be_visible(timeout=10000)
 
 
 def test_workspace_brief_view_renders_relationship_baselines_card(
@@ -747,7 +747,7 @@ def test_workspace_start_intake_uses_brief_language_and_refreshes_intake_panel(
     expect(chat_panel).not_to_contain_text("更准确的蓝图")
     expect(chat_panel).not_to_contain_text("blueprint", ignore_case=True)
 
-    expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)
+    expect(page.locator("text=Project intake progress")).to_be_visible(timeout=10000)
     expect(page.locator("text=Start Project Intake")).not_to_be_visible(timeout=10000)
 
 
@@ -842,7 +842,7 @@ def test_workspace_shows_freeze_action_when_refinement_ready(
     _confirm_refinement_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    expect(page.get_by_role("button", name="Freeze Blueprint", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Primary action: Freeze Blueprint", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("text=Freeze the blueprint to unlock generation")).to_be_visible(timeout=10000)
 
 
@@ -857,11 +857,11 @@ def test_workspace_freeze_action_creates_frozen_blueprint(
     _confirm_refinement_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    freeze_btn = page.get_by_role("button", name="Freeze Blueprint")
+    freeze_btn = page.get_by_role("button", name="Primary action: Freeze Blueprint")
     expect(freeze_btn).to_be_visible(timeout=10000)
     freeze_btn.click()
 
-    expect(page.locator("text=Ready for generation")).to_be_visible(timeout=10000)
+    expect(page.locator("[data-testid='post-freeze-status']")).to_be_visible(timeout=10000)
     expect(page.locator("text=Freeze the blueprint to unlock generation")).not_to_be_visible()
 
     bp = httpx.get(f"{server_url}/api/projects/{project_name}/blueprint", timeout=5.0)
@@ -1248,7 +1248,7 @@ def test_workspace_freeze_auto_generation_chain_shows_progress_and_completion(
 
     open_workspace_from_project_list(page, server_url, project_name)
 
-    freeze_btn = page.get_by_role("button", name="Freeze Blueprint")
+    freeze_btn = page.get_by_role("button", name="Primary action: Freeze Blueprint")
     expect(freeze_btn).to_be_visible(timeout=10000)
     freeze_btn.click()
 
@@ -1258,8 +1258,8 @@ def test_workspace_freeze_auto_generation_chain_shows_progress_and_completion(
         "Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.",
         timeout=10000,
     )
-    expect(page.get_by_role("button", name="Build")).to_be_visible(timeout=10000)
-    expect(page.get_by_role("button", name="Preview")).to_be_disabled(timeout=10000)
+    expect(page.get_by_role("button", name="Build Web Preview", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Preview", exact=True)).to_be_disabled(timeout=10000)
 
 
 def test_workspace_build_uses_scoped_build_when_prototype_is_only_candidate(

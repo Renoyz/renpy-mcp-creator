@@ -8,7 +8,6 @@ import { SceneWorkspaceView } from "../components/workspace/SceneWorkspaceView";
 import { WorkspaceOnboardingView } from "../components/workspace/WorkspaceOnboardingView";
 import { BriefWorkspaceView } from "../components/workspace/BriefWorkspaceView";
 import { ChapterOutlineWorkspaceView } from "../components/workspace/ChapterOutlineWorkspaceView";
-import { RefinementStatusPanel } from "../components/workspace/RefinementStatusPanel";
 import { IntakeWorkspaceView } from "../components/workspace/IntakeWorkspaceView";
 import { StepwiseGenerationView } from "../components/workspace/StepwiseGenerationView";
 import { GameShellWorkspaceView } from "../components/workspace/GameShellWorkspaceView";
@@ -406,6 +405,50 @@ export function ProjectWorkspacePage() {
     postFreezeRunning: postFreezeFlow.status === "running",
   });
 
+  const refinementStatusNote = (() => {
+    if (refinementStatusError) {
+      return {
+        tone: "border-red-200 bg-red-50 text-red-700",
+        message: "Failed to load refinement status",
+      };
+    }
+    if (!refinementStatus) return null;
+    if (refinementStatus.blueprint_freeze_status === "stale") {
+      return {
+        tone: "border-amber-200 bg-amber-50 text-amber-800",
+        message: "Project Brief or Chapter Outline changed. Freeze Blueprint again.",
+      };
+    }
+    if (refinementStatus.blueprint_ready && refinementStatus.blueprint_freeze_status !== "frozen") {
+      return {
+        tone: "border-blue-200 bg-blue-50 text-blue-700",
+        message: "Freeze the blueprint to unlock generation",
+      };
+    }
+    if (
+      refinementStatus.generation_allowed ||
+      (refinementStatus.blueprint_ready && refinementStatus.blueprint_freeze_status === "frozen")
+    ) {
+      return {
+        tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        message: "Ready for generation",
+      };
+    }
+    if (!refinementStatus.brief_fully_confirmed) {
+      return {
+        tone: "border-amber-200 bg-amber-50 text-amber-800",
+        message: "Complete all Project Brief cards first",
+      };
+    }
+    if (!refinementStatus.outline_fully_confirmed) {
+      return {
+        tone: "border-amber-200 bg-amber-50 text-amber-800",
+        message: "Complete all Chapter Outline cards first",
+      };
+    }
+    return null;
+  })();
+
   const handleWorkflowAction = (action: WorkflowAction) => {
     if (action === "open_intake") {
       setActiveTab("intake");
@@ -467,10 +510,10 @@ export function ProjectWorkspacePage() {
   return (
     <div className="h-full flex flex-col">
       {/* Top header */}
-      <div className="shrink-0 border-b bg-white px-4 py-4">
+      <div className="shrink-0 border-b bg-white px-4 py-3">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 data-testid="workspace-project-title" className="text-xl font-bold tracking-tight text-gray-900">{activeProjectName}</h1>
+            <h1 data-testid="workspace-project-title" className="text-lg font-bold tracking-tight text-gray-900">{activeProjectName}</h1>
             {meta && (
               <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
                 <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-medium">
@@ -485,11 +528,19 @@ export function ProjectWorkspacePage() {
           </div>
         </div>
 
-        <div className="mt-4">
+        <div className="mt-3">
           <WorkflowStatusHeader
             workflow={workflow}
             projectName={activeProjectName}
             onAction={handleWorkflowAction}
+            statusNote={refinementStatusNote ? (
+              <span
+                data-testid="workflow-blocker-chip"
+                className={`inline-flex items-center rounded-full border px-2.5 py-1 font-semibold ${refinementStatusNote.tone}`}
+              >
+                {refinementStatusNote.message}
+              </span>
+            ) : null}
             metaLine={meta ? (
               <span>
                 {meta.status} · {meta.pipeline_stage}
@@ -543,13 +594,6 @@ export function ProjectWorkspacePage() {
           />
         </div>
 
-        <div className="mt-3">
-          <RefinementStatusPanel
-            status={refinementStatus}
-            error={refinementStatusError}
-            onFreeze={handleFreezeBlueprint}
-          />
-        </div>
         {postFreezeFlow.status !== "idle" && (
           <div
             data-testid="post-freeze-status"

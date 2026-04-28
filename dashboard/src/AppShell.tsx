@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Menu, X, Sparkles, MessageSquare } from "lucide-react";
+import { Menu, MessageSquare, PanelRightClose, PanelRightOpen, Sparkles, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { ChatDrawer } from "./components/ChatDrawer";
@@ -12,6 +12,7 @@ interface AppShellProps {
 export function AppShell({ children, className }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatDockCollapsed, setChatDockCollapsed] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window !== "undefined") {
       return window.innerWidth >= 1024;
@@ -131,8 +132,37 @@ export function AppShell({ children, className }: AppShellProps) {
 
       {/* Desktop persistent AI panel for workspace routes only */}
       {isWorkspaceRoute && isDesktop && (
-        <div className="h-full w-[360px] flex-shrink-0 flex-col border-l bg-card">
-          <ChatDrawer mode="docked" />
+        <div
+          data-testid="workspace-chat-dock"
+          className={cn(
+            "relative h-full flex-shrink-0 border-l bg-slate-50/70 transition-[width] duration-200",
+            chatDockCollapsed ? "w-12" : "w-[320px]"
+          )}
+        >
+          {chatDockCollapsed ? (
+            <button
+              type="button"
+              aria-label="Expand AI assistant"
+              title="Expand AI assistant"
+              onClick={() => setChatDockCollapsed(false)}
+              className="flex h-14 w-full items-center justify-center border-b text-slate-700 hover:bg-white"
+            >
+              <PanelRightOpen className="h-4 w-4" />
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                aria-label="Collapse AI assistant"
+                title="Collapse AI assistant"
+                onClick={() => setChatDockCollapsed(true)}
+                className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </button>
+              <ChatDrawer mode="docked" />
+            </>
+          )}
         </div>
       )}
 
