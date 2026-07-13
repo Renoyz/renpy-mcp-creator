@@ -1,6 +1,18 @@
 # Changelog
 
-## [0.2.0] - 2026-04-15
+## [Unreleased]
+
+### 2026-07-13 — Repository maintenance
+
+- Removed reproducible dependency directories, build output, caches, logs, screenshots, and the obsolete UI prototype.
+- Added the Electron/PyInstaller desktop packaging source, frozen Dashboard-path handling, and tested startup-failure reporting.
+- Added `.env.example`, the MIT `LICENSE`, and tracked `uv.lock` for reproducible setup.
+- Made the environment template safe to copy, switched packaging scripts to lockfile-driven installs, and corrected current SDK setup guidance.
+- Allowed API startup from a clean source checkout before `dashboard/dist` has been built.
+- Consolidated active documentation around `docs/README.md` and `docs/ROADMAP.md`; moved completed, partial, and superseded material to `docs/archive/`.
+- Updated project status to report current known integration failures instead of stale all-green counts.
+
+### 2026-04-15 — Initial unified creator milestone
 
 ### 新增
 
@@ -36,7 +48,7 @@
 
 - **测试**
   - 新增 21 个测试，覆盖对话引擎、WebSocket、SDK 下载
-  - 当前全量测试：**103/103 通过**
+  - 该里程碑当时的测试结果：**103/103 通过**
 
 ### 变更
 

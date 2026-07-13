@@ -10,33 +10,29 @@ This file is for AI coding agents working in this repository.
 
 ## Current Product State
 
-- The core pipeline is **operational**: create project → AI intake → brief confirmation → outline confirmation → blueprint freeze → scene generation → asset generation → build → preview. Verified by full real-LLM E2E (14/14 stages, ~132s).
-- The active product loop is:
-  - confirmed blueprint
-  - prototype scene generation (multi-chapter, with position-aware chapter outline derivation)
-  - background / sprite / font asset generation
-  - script writeback
-  - build / preview
-- **Completed (Phase 6–7)**: multi-chapter generation, staged requirements refinement (brief/outline/freeze), narrative completeness improvements, E2E diagnostic harness (27/27 tests pass).
-- **In progress**: P1 issue fixes (silent exception swallows, sync I/O, duplicate code, Windows compatibility).
-- **Future (Phase 8+)**: dual-agent audit (Creator/Auditor quality gate), adaptive refinement interview, stepwise generation, dashboard UI redesign.
-- The authoritative status document is:
-  - [`docs/ROADMAP.md`](docs/ROADMAP.md)
-- Key design specs:
-  - [`docs/dual-agent-design.md`](docs/dual-agent-design.md)
-  - [`docs/refinement-interview-redesign.md`](docs/refinement-interview-redesign.md)
-  - [`docs/stepwise-generation-design.md`](docs/stepwise-generation-design.md)
+- The core pipeline is operational: create project → AI intake → brief → outline → blueprint freeze → multi-chapter scenes → asset review → script commit/rollback → build/preview.
+- Historical evidence includes one real-LLM E2E run covering 14/14 stages in about 132 seconds. Real-LLM tests remain manual and are not a per-commit guarantee.
+- Completed capabilities include adaptive refinement, position-aware narrative guidance, stepwise generation/import, derived asset slots, Game Shell, and the workflow Dashboard redesign.
+- Current priority is release hygiene and real-user validation, followed by the four known integration failures and preview-process cleanup.
+- Product differentiation work is ordered as GameIR v1 → Asset Manifest Protocol → generated/user ownership → compiler diagnostics.
+- Dual-agent audit, another broad UI redesign, more providers, and hosted SaaS work are deferred until user validation succeeds.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) is the authoritative current-status document.
+- [`docs/README.md`](docs/README.md) indexes active and archived documentation.
+- [`docs/vn-engineering-middleware-gap-analysis.md`](docs/vn-engineering-middleware-gap-analysis.md) records the active product direction.
+- [`docs/dual-agent-design.md`](docs/dual-agent-design.md) is a future design, not an active phase.
 
 ## Repo Map
 
 - `src/renpy_mcp/`: Python backend, services, chat orchestration, FastAPI, asset pipeline
 - `dashboard/`: React frontend
+- `desktop/`: Electron desktop shell
+- `packaging/`: PyInstaller configuration and Windows build scripts
 - `tests/`: unit, integration, and E2E coverage
 - `workspace/`: local generated projects and debug artifacts
-- `docs/`: plans, design specs, ROADMAP.md (authoritative status)
-  - `docs/archive/`: completed or superseded plans
-  - `docs/prompts/`: Kimi execution prompts (TDD format)
-  - `docs/superpowers/specs/`: detailed design specifications
+- `docs/`: current roadmap, design documents, and documentation index
+  - `docs/archive/`: completed, partial, or superseded plans and prompts
+  - `docs/superpowers/specs/`: approved active design specifications
+  - `docs/superpowers/plans/`: active implementation plans
 
 ## Non-Negotiable Rules
 
@@ -47,7 +43,7 @@ This file is for AI coding agents working in this repository.
 - Do not break rollback or staged-replacement guarantees for prototype generation.
 - Do not fix only the success path; failure and rollback behavior must be considered for any pipeline change.
 - Do not introduce mock or simulate-only frontend flows into production codepaths.
-- Do not pull audit work, preview evidence capture, or audit UI forward into Phase 6 unless explicitly requested.
+- Do not pull deferred dual-agent audit, preview evidence capture, or audit UI forward unless explicitly requested.
 - Do not let automated tests call real LLM or image-generation services by default.
 
 ## Prototype Pipeline Guardrails
@@ -103,27 +99,17 @@ For any test that touches generation paths:
 
 Do not claim a fix is complete without naming the tests run and their results.
 
-## Kimi Collaboration
+## Historical Kimi Collaboration
 
-This project uses a design/execute split:
+Earlier phases used a design/execute split with external Kimi TDD prompts. Those completed prompts now live in `docs/archive/prompts/` and are historical evidence, not current implementation instructions.
 
-- **Claude/DeepSeek** (this agent): design, planning, code review, E2E verification
-- **Kimi** (external agent): code execution following TDD prompts
+If this workflow is reactivated:
 
-Kimi execution prompts live in `docs/prompts/kimi-*.md`. Each prompt is self-contained with:
-- Exact file paths and line numbers
-- Complete test code (RED phase)
-- Minimal implementation code (GREEN phase)
-- Verification commands per step
-- FAQ section for anticipated obstacles
-- Structured report template
-
-After Kimi executes a prompt, Claude/DeepSeek reviews the result:
-1. Read all modified files
-2. Verify `git diff` matches the intended changes
-3. Run the full test suite
-4. Run the real-LLM E2E test
-5. Provide a structured review (pass/fail/needs-fix)
+1. Write a new current design and implementation plan.
+2. Keep automated tests isolated from real model and image credentials.
+3. Review every modified file and the complete diff.
+4. Run targeted and relevant regression tests.
+5. Trigger the real-LLM E2E only with explicit manual authorization.
 
 ## Preferred Workflow
 
@@ -146,4 +132,8 @@ After Kimi executes a prompt, Claude/DeepSeek reviews the result:
 - sprite renderability and suppression rules
 - runtime CJK font correctness in web preview
 - path normalization between script, index, and API layers
+- blueprint precondition consistency across stepwise upload APIs and tests
+- mock build output paths remaining project-scoped and absolute-path safe
+- preview subprocess cleanup after tests and application shutdown
+- frozen Dashboard path resolution in PyInstaller/Electron builds
 - accidental use of real external AI credentials during tests

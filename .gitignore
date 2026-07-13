@@ -10,10 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-!dashboard/src/lib/
-!dashboard/src/lib/**
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -31,6 +29,8 @@ env/
 # IDE
 .vscode/
 .idea/
+.claude/settings.local.json
+.codex/
 *.swp
 *.swo
 *~
@@ -40,6 +40,9 @@ env/
 .coverage
 htmlcov/
 .tox/
+test-results/
+playwright-report/
+.cache/
 
 # Project specific
 .mypy_cache/
@@ -49,6 +52,13 @@ htmlcov/
 node_modules/
 dashboard/dist/
 dashboard/.vite/
+
+# Desktop packaging
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+packaging/build/
+packaging/dist/
 
 # Workspace data
 workspace/
@@ -61,11 +71,15 @@ builds/
 debug_*.png
 debug_*.html
 leak_*.png
+ui-*.png
 .tmp-rembg-check/
 scripts/verify_real_flow.py
-uv.lock
 
 # Secrets
 .env
+.env.*
+!.env.example
+.npmrc
+.pypirc
 
 .worktrees/

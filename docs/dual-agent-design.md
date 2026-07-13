@@ -2,7 +2,7 @@
 
 **版本**: 1.0  
 **日期**: 2026-04-16  
-**状态**: 设计提案  
+**状态**: 未来设计（已延期；以 `docs/ROADMAP.md` 为准）
 
 ---
 
@@ -1203,11 +1203,12 @@ class Orchestrator:
 
 ### 24.1 相关文档索引
 
+- 当前状态与实施优先级：`docs/ROADMAP.md`
 - 本设计稿完整版本：`docs/dual-agent-design.md`
-- 配套 UI 重构分析报告：`docs/ui-redesign-analysis.md`
-- 产品设计方案（Creator 聚焦版）：`product-design-proposal.md`
-- 原始设计规格书：`design-specification.md`
-- 用户流程分析：`user-workflow-analysis.md`
+- 配套 UI 重构分析报告：`docs/archive/[COMPLETED]-2026-04-28-ui-redesign-analysis.md`
+- 产品设计方案（Creator 聚焦版）：`docs/archive/[SUPERSEDED]-2026-04-14-product-design-proposal.md`
+- 原始设计规格书：`docs/archive/[SUPERSEDED]-2026-04-14-design-specification.md`
+- 用户流程分析：`docs/archive/[SUPERSEDED]-2026-04-14-user-workflow-analysis.md`
 
 ### 24.2 关键术语表
 
@@ -1233,7 +1234,7 @@ class Orchestrator:
 
 三者缺一不可。如果只有 Spec 而无双 Agent，Blueprint 容易沦为形式；如果只有双 Agent 而无新 UI，审计结果无法被用户有效消费；如果只有 UI 而无底层架构支撑，则只是空壳。
 
-下一阶段，建议团队以 **ProjectBlueprint 的数据模型定稿** 和 **ProjectWorkspacePage 的驾驶舱骨架** 为双轨并行切入点，尽快验证"大纲确认 → Scene 生成 → 审计反馈 → 试玩"的完整闭环。
+本方案当前延期。只有在真实用户验证通过、GameIR/资产协议/人工修改保护稳定后，才重新评估 Creator/Auditor 质量门；恢复实施时必须先依据 `docs/ROADMAP.md` 重写当前计划。
 
 ---
 

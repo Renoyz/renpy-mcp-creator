@@ -4,7 +4,6 @@ import asyncio
 import os
 import sys
 import webbrowser
-from pathlib import Path
 
 import click
 from rich.console import Console
@@ -59,7 +58,7 @@ def doctor():
 
     # Python version
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if sys.version_info >= (3, 11):
+    if sys.version_info >= (3, 11):  # noqa: UP036 - doctor reports the runtime explicitly
         table.add_row("Python version", "[green]PASS", py_version)
     else:
         table.add_row("Python version", "[red]FAIL", f"{py_version} (need >= 3.11)")
@@ -70,7 +69,11 @@ def doctor():
     if provisioner.is_sdk_ready(sdk_path):
         table.add_row("RenPy SDK", "[green]PASS", str(sdk_path))
     else:
-        table.add_row("RenPy SDK", "[yellow]MISSING", "Not found. Run `vn-creator start` to auto-download.")
+        table.add_row(
+            "RenPy SDK",
+            "[yellow]MISSING",
+            "Install Ren'Py 8.x and set RENPY_SDK_PATH.",
+        )
 
     # API keys
     keys = {

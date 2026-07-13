@@ -10,12 +10,12 @@ After the P2-2 router extraction, this module retains only:
 import json
 import logging
 import os
+import sys
 import threading
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +25,16 @@ from ..config import RenPyConfig, _current_project_path, get_settings, resolve_p
 from ..services.preview_manager import PreviewManager
 
 STATIC_DIR = Path(__file__).parent / "static"
-DASHBOARD_DIR = Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
+
+
+def _resolve_dashboard_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        return bundle_root / "dashboard" / "dist"
+    return Path(__file__).parent.parent.parent.parent / "dashboard" / "dist"
+
+
+DASHBOARD_DIR = _resolve_dashboard_dir()
 
 _preview_manager = PreviewManager()
 _last_build_results: dict[str, Path] = {}
@@ -223,7 +232,9 @@ def _resolve_preview_build_dir(project_name: str) -> Path | None:
             web_entry = targets.get("web")
             if isinstance(web_entry, dict):
                 return _status_output_to_path(web_entry.get("output_path"))
-        return _status_output_to_path(persisted.get("preview_output_path") or persisted.get("output_path"))
+        return _status_output_to_path(
+            persisted.get("preview_output_path") or persisted.get("output_path")
+        )
     return None
 
 
@@ -243,12 +254,12 @@ def create_app() -> FastAPI:
     app.add_middleware(SessionMiddleware, secret_key=secret_key)
 
     # Include routers
+    from .routers.game_shell import router as game_shell_router
+    from .routers.generation import router as generation_router
     from .routers.pages import router as pages_router
+    from .routers.preview_build import router as preview_build_router
     from .routers.projects import router as projects_router
     from .routers.refinement import router as refinement_router
-    from .routers.generation import router as generation_router
-    from .routers.game_shell import router as game_shell_router
-    from .routers.preview_build import router as preview_build_router
     from .routers.scripts_assets import router as scripts_assets_router
 
     app.include_router(pages_router)
@@ -259,8 +270,12 @@ def create_app() -> FastAPI:
     app.include_router(preview_build_router)
     app.include_router(scripts_assets_router)
 
-    # Dashboard static assets (React build output)
-    app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+    # Dashboard static assets (React build output). A source checkout can run
+    # the API and unit tests before the Dashboard has been built.
+    if DASHBOARD_DIR.is_dir():
+        app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+    else:
+        logger.warning("Dashboard build is missing; /dashboard is unavailable")
 
     # Chat WebSocket
     from .chat_ws import router as chat_router

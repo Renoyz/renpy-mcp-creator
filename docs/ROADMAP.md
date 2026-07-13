@@ -1,168 +1,80 @@
-# RenPy MCP Unified Design — 项目路线图
+# RenPy MCP Creator 路线图
 
-更新日期：2026-04-27
+更新日期：2026-07-13
 
----
-
-## 当前状态总览
+## 当前状态
 
 | 维度 | 状态 |
-|------|------|
-| 核心流水线 | ✅ 全链路跑通：全自动链路可用；新增 Tier 4 v1 已纳入同一项目级流水线，并在失败场景具备回滚行为 |
-| E2E 测试 | ✅ non-real E2E: 102 passed / 14 skipped；real-LLM E2E: 1 passed（当前会话验证，未展开任何未验证数字） |
-| 代码质量 | ✅ P0-P3 全部解决，3 轮扫描验证 |
-| 前端 Dashboard | ✅ React SPA 可用，workspace + chat panel + brief/outline 审核 + build/preview |
-| 后端 API | ✅ FastAPI + WebSocket，REST 快照 API，Bridge IPC |
-| 叙事质量 | 🔴 每章相同 emotional_arc，每场景仅 2 段对话，跨章重复"到达场景" |
-| 已知 P1 问题 | 🟡 16 项已记录，未修复 |
+|---|---|
+| 核心流水线 | 可运行：项目创建 → intake → brief → outline → blueprint freeze → 多章节场景 → 资产 → 脚本 → build/preview |
+| 历史真实 E2E | 2026-04 已完成一次真实模型全流程验证：14/14 阶段，约 132 秒；这不是当前每次提交的自动保证 |
+| 当前本地验证 | 2026-07-13 清理后：unit 466 passed / 1 skipped；chat_engine 14 passed；integration 413 passed / 4 failed；Dashboard build + 12 files / 46 tests；Desktop build + 3 files / 6 tests |
+| 桌面交付 | Electron/PyInstaller 源码已存在；稳定 NSIS 安装包和安装后 smoke test 尚未完成 |
+| 产品验证 | 尚无可核验的外部用户完成率、复用率或付费意愿数据 |
+| 版本 | 0.1.0 development preview |
 
----
+## 当前决策
 
-## 文档结构
+项目继续方式从“扩展更多 AI 功能”调整为“先完成可发布、可维护、可验证的 Ren'Py 工程工具”。
 
-```
-docs/
-├── ROADMAP.md                    ← 你在这里
-├── p1-remaining-issues.md        ← 待修复：16 个 P1 问题
-├── narrative-improvement-plan.md ← 待执行：叙事完整性改进计划
-│
-├── plans/                        ← 实施计划
-│   └── 2026-04-17-dashboard-backend-refactor-plan.md  (架构参考)
-│
-├── superpowers/specs/            ← 设计规格说明
-│   ├── 2026-04-21-multi-chapter-style-consistency-design.md
-│   ├── 2026-04-22-staged-requirements-refinement-design.md
-│   └── 2026-04-23-agent-led-refinement-intake-design.md
-│
-├── <design-proposals>            ← 设计方案(待转化为实施计划)
-│   ├── dual-agent-design.md
-│   ├── refinement-interview-redesign.md
-│   ├── stepwise-generation-design.md
-│   └── ui-redesign-analysis.md
-│
-└── archive/                      ← 已完成的计划文档
-    ├── [COMPLETED]-code-quality-convergence-plan.md
-    ├── [COMPLETED]-e2e-diagnostic-repair-plan.md
-    ├── [COMPLETED]-2026-04-24-e2e-diagnostic-tool.md
-    ├── [PARTIAL]-2026-04-16-chat-image-build-persistence.md
-    ├── [SUPERSEDED]-2026-04-15-core-feature-loop.md
-    ├── [SUPERSEDED]-2026-04-23-phase7-round3-blueprint-freeze.md
-    └── [SUPERSEDED]-2026-04-23-phase7-round4a-project-brief-intake.md
-```
+近期不以一次生成更多文本、增加更多模型供应商或继续扩大 Dashboard 为目标。优先证明用户能独立完成一次真实项目，并能在人工精修后安全地继续增量生成。
 
----
+## 优先级
 
-## 优先级排序的下一步行动
+### P0：发布卫生与真实用户验证
 
-### 🔴 Tier 1 — 叙事完整性 (本周，投入~4h)
+- 保持仓库、依赖锁、许可证、环境模板和文档一致。
+- 完成 Windows 安装包及全新机器 smoke test。
+- 找到 8–10 名真实 Ren'Py 创作者，验证端到端完成率、二次使用率和支持成本。
+- 保持本地优先、BYOK/self-hosted，避免把模型成本和私有素材强制放到托管服务。
 
-**目标**: 解决"生成的游戏为什么不好玩"
+### P1：修复当前可靠性缺口
 
-| Step | 内容 | 文件 | 预估 |
-|------|------|------|------|
-| 1 | 章节大纲字段按故事位置变化 (early/mid/late) | `chat_ws.py`, `fastapi_app.py` | 1h |
-| 2 | 场景生成 prompt 注入章节大纲 + 连续性上下文 | `prototype_generation_service.py` | 2h |
-| 3 | 每场景 4-8 段对话 + 软校验 | `prototype_generation_service.py` | 1h |
+当前 integration suite 有两个失败簇：
 
-**预期效果**: 每章有不同的情感弧线 → 场景有完整的对话交换 → 跨章节不再重复
+1. **test_stepwise_generation_import_upload.py** 的 3 个测试与当前 blueprint 前置条件不一致。
+2. **test_ws_chat_blueprint.py::test_auto_build_mock_output_path_matches_api_endpoint** 的 mock build 相对路径解析不一致。
 
-详见: `narrative-improvement-plan.md`
+集成测试还可能遗留测试专用 **python -m http.server** 预览子进程。修复时必须保留项目级路径隔离和 rollback 行为。
 
----
+### P2：建立真正的工程差异化
 
-### 🟡 Tier 2 — P1 问题修复 (本周~下周，投入~5h)
+用户验证成立后，按以下顺序推进：
 
-**目标**: 消除静默失败、阻塞 I/O、重复代码
+1. GameIR v1：结构化权威源、schema version 和 validator。
+2. Asset Manifest Protocol：统一 required/candidate/accepted 生命周期及本地 provider hook。
+3. Generated/User Ownership：generated/custom 边界、dirty detection、preview diff 和 no-overwrite policy。
+4. Ren'Py compiler/diagnostics：label、jump、choice、变量和资产引用校验。
 
-| 轮次 | 内容 | 预估 |
-|------|------|------|
-| 第1轮 | 写入失败吞没 + 重复 `_write_build_status` 统一 + `self.draft = None` 加日志 | 2h |
-| 第2轮 | 同步 I/O 异步化 + Windows `SystemRoot` 动态获取 | 1h |
-| 第3轮 | 其余 13 处 `except Exception: pass` + logger.warning | 2h |
+详见 [视觉小说工程中间件目标差距分析](vn-engineering-middleware-gap-analysis.md)。
 
-**预期效果**: 线上问题可定位、高并发无阻塞、非 C: 盘 Windows 正常工作
+## 明确延期
 
-详见: `p1-remaining-issues.md`
+- 双 Agent Creator/Auditor 质量门。
+- 新一轮大规模 Dashboard 重构。
+- 更多 LLM 或图像供应商。
+- 完整分支图编辑器、语音和 BGM 自动生成。
+- 托管 SaaS 与计费系统。
 
----
+这些工作只有在真实用户验证通过、核心工程边界稳定后才能重新排期。双 Agent 方案保留为[未来设计](dual-agent-design.md)，不是当前实施阶段。
 
-### 🟠 Tier 3 — 自适应摄入对话 (下周~下下周，投入~3-5天)
+## 4–6 周继续/停止标准
 
-**目标**: 用 LLM 驱动的自适应对话替代硬编码 2 轮固定问题
+继续投入至少需要满足：
 
-**核心改动**:
-- Propose-then-converge 行为规则
-- "我不知道" → AI 提供备选方案
-- 跨卡片一致性检查
-- `proposal_history` 追踪
+- 至少 5 名测试用户能在不依赖开发者代操作的情况下完成全流程。
+- 至少 3 名用户在两周内创建第二个项目。
+- 至少 2 名用户愿意进入付费试点或持续赞助。
+- 人工修改后的再次生成没有覆盖事故。
+- 单名用户的支持成本低于 1 小时。
 
-**预期效果**: AI 像创意伙伴一样工作，不再被固定问题框住
+若其中两项未达到，停止商业化扩张，将项目收缩为开源 Ren'Py MCP/工程工具包。
 
-详见: `refinement-interview-redesign.md`
+## 文档状态
 
----
-
-### 🟠 Tier 4 — 分步生成 (v1 已完成，后续 hardening/v1.1)
-
-**状态**: 已完成 v1（commit f5a980b）。后续任务聚焦 v1.1 hardening 与边界稳定性。
-
-**v1 已实现能力**:
-1. `generation-state` 持久化与恢复
-2. scene outline start / confirm
-3. 角色与背景：upload / accept / confirm
-4. script preview / commit
-5. staging 写入与回滚
-6. 用户导入路径（uploaded slot）完整入链路（同一资产生命周期）
-
-**v1.1（可选 hardening）**:
-- 同路径重入时与历史稳定资产覆盖策略的边界加固
-- 上传校验失败与恢复链路的可观测性增强
-- 非法文件/恶意路径场景的更细粒度错误提示与度量
-
-详见: `stepwise-generation-design.md`
-
----
-
-### 🔵 Tier 5 — 双代理质量门 (下月，投入~2-3周)
-
-**目标**: 每个生成内容都经过系统性质检
-
-**五维审计**: 连续性、蓝图保真度、资源覆盖、基调对齐、可玩性
-
-**预期效果**: 质量可量化——"第 3 章角色 A 性格锚点漂移了"不是感觉，是数据
-
-详见: `dual-agent-design.md`
-
----
-
-### 🔵 Tier 6 — Dashboard UI 重构 (下月+，投入~3-5周)
-
-**目标**: UI 从 IDE 风格改为 AI 驱动的"进度驾驶舱"
-
-**6 个问题**: P1 角色编辑器持久化、P2 角色引用一致性、P3 多章节视觉隔离、P4 sidebar 场景总数、P5 build/preview 按章节 scoped、P6 StoryMap 用 React Flow 替代 iframe
-
-详见: `ui-redesign-analysis.md`
-
----
-
-## 完成的历史（已归档至 archive/）
-
-| 计划 | 完成日期 | 成果 |
-|------|---------|------|
-| 代码质量收敛 | 2026-04-26 | P0-P3 全部解决，3 轮扫描验证 |
-| E2E 诊断工具 | 2026-04-26 | 27/27 测试通过，全链路 104s PASS |
-| E2E 修复 (R1-R6) | 2026-04-26 | 所有 6 个盲点修复 |
-| 聊天图片 & Build 持久化 | 2026-04-26 | 图片渲染 ✓, build 状态持久化 ✓ |
-| 核心功能循环 | 2026-04-26 | 全链路可用 (被后续计划取代) |
-| Blueprint Freeze | 2026-04-26 | 功能可用 (被后续计划取代) |
-| Project Brief Intake | 2026-04-26 | 功能可用 (被后续计划取代) |
-
----
-
-## 维护规则
-
-1. **新设计** → 放入 `docs/` 或 `docs/superpowers/specs/`
-2. **实施计划** → 放入 `docs/plans/`
-3. **完成后** → 移到 `docs/archive/`，前缀 `[COMPLETED]-`
-4. **被取代** → 移到 `docs/archive/`，前缀 `[SUPERSEDED]-`
-5. **每次迭代后更新本文件**
+- [文档索引](README.md)
+- [当前产品方向](vn-engineering-middleware-gap-analysis.md)
+- [未来双 Agent 设计](dual-agent-design.md)
+- [历史归档](archive/)
+- [本次仓库清理规格](superpowers/specs/2026-07-12-repository-cleanup-design.md)
+- [本次仓库清理计划](superpowers/plans/2026-07-12-repository-cleanup-plan.md)

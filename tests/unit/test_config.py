@@ -1,6 +1,5 @@
 """Tests for config module."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -39,3 +38,21 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.port == 9000
     assert settings.renpy_sdk_path == Path("/tmp/renpy-sdk")
     assert settings.deepseek_api_key == "sk-test-deepseek"
+
+
+def test_env_example_preserves_safe_path_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Copying the example env must not redirect data into the repository root."""
+    from dotenv import dotenv_values
+
+    from renpy_mcp.config import Settings
+
+    monkeypatch.delenv("RENPY_MCP_WORKSPACE", raising=False)
+    monkeypatch.delenv("RENPY_SDK_PATH", raising=False)
+    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    for name, value in dotenv_values(env_example).items():
+        monkeypatch.setenv(name, value or "")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.workspace == Path.home() / ".renpy-mcp" / "workspace"
+    assert settings.renpy_sdk_path is None

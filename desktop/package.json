@@ -1,0 +1,20 @@
+{
+  "name": "renpy-mcp-creator-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "electron": "41.3.0",
+    "electron-builder": "26.8.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.5"
+  }
+}
