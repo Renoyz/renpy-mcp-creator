@@ -36,9 +36,9 @@ describe('BriefWorkspaceView next-step CTA', () => {
 
     const header = screen.getByTestId('brief-review-header')
 
-    expect(header).toHaveTextContent('Review progress')
-    expect(header).toHaveTextContent('8 / 9 confirmed')
-    expect(header).toHaveTextContent('1 remaining')
+    expect(header).toHaveTextContent('确认进度')
+    expect(header).toHaveTextContent('8 / 9 已确认')
+    expect(header).toHaveTextContent('剩余 1 张')
   })
 
   it('should show the outline review CTA when all cards are confirmed and outline draft is ready', () => {
@@ -54,7 +54,7 @@ describe('BriefWorkspaceView next-step CTA', () => {
     )
 
     expect(
-      screen.getByRole('button', { name: /enter chapter outline review/i })
+      screen.getByRole('button', { name: /进入章节大纲审阅/ })
     ).toBeInTheDocument()
   })
 
@@ -73,7 +73,7 @@ describe('BriefWorkspaceView next-step CTA', () => {
     )
 
     expect(
-      screen.queryByRole('button', { name: /enter chapter outline review/i })
+      screen.queryByRole('button', { name: /进入章节大纲审阅/ })
     ).not.toBeInTheDocument()
   })
 
@@ -91,11 +91,11 @@ describe('BriefWorkspaceView next-step CTA', () => {
     )
 
     expect(
-      screen.queryByRole('button', { name: /enter chapter outline review/i })
+      screen.queryByRole('button', { name: /进入章节大纲审阅/ })
     ).not.toBeInTheDocument()
-    expect(screen.getByText(/chapter intake in progress/i)).toBeInTheDocument()
+    expect(screen.getByText(/章节采集进行中/)).toBeInTheDocument()
     expect(screen.getByTestId('outline-draft-progress')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /continue chapter intake/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /继续章节采集/ })).toBeInTheDocument()
   })
 
   it('should call onProceedToOutline when the outline review CTA is clicked', async () => {
@@ -113,7 +113,7 @@ describe('BriefWorkspaceView next-step CTA', () => {
       />
     )
 
-    const btn = screen.getByRole('button', { name: /enter chapter outline review/i })
+    const btn = screen.getByRole('button', { name: /进入章节大纲审阅/ })
     await user.click(btn)
 
     expect(onProceedToOutline).toHaveBeenCalledTimes(1)
@@ -134,16 +134,16 @@ describe('BriefWorkspaceView action error handling', () => {
       />
     )
 
-    await user.click(screen.getByRole('button', { name: /^edit$/i }))
-    const premiseBox = screen.getByPlaceholderText('Enter Core Premise...')
+    await user.click(screen.getByRole('button', { name: /^编辑$/ }))
+    const premiseBox = screen.getByPlaceholderText('填写核心设定...')
     await user.clear(premiseBox)
     await user.type(premiseBox, 'edited premise draft')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.click(screen.getByRole('button', { name: /保存/ }))
 
     const errorBox = await screen.findByTestId('brief-action-error')
     expect(errorBox).toHaveTextContent('save failed: server exploded')
-    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Enter Core Premise...')).toHaveValue('edited premise draft')
+    expect(screen.getByRole('button', { name: /保存/ })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('填写核心设定...')).toHaveValue('edited premise draft')
   })
 
   it('should show an inline error and re-enable the card when confirming fails', async () => {
@@ -159,7 +159,7 @@ describe('BriefWorkspaceView action error handling', () => {
       />
     )
 
-    const confirmButtons = screen.getAllByRole('button', { name: /^confirm$/i })
+    const confirmButtons = screen.getAllByRole('button', { name: /^确认$/ })
     await user.click(confirmButtons[0])
 
     const errorBox = await screen.findByTestId('brief-action-error')

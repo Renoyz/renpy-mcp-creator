@@ -35,11 +35,11 @@ export function BlueprintWorkspaceView({ blueprint, chapters = [], refinementSta
 
   if (!blueprint) {
     if (showFreezePrompt) {
-      const title = freezeStatus === "stale" ? "Frozen blueprint is stale" : "Ready to freeze blueprint";
+      const title = freezeStatus === "stale" ? "已冻结的蓝图已过期" : "可以冻结蓝图";
       const message =
         freezeStatus === "stale"
-          ? "Project Brief or Chapter Outline changed after the last freeze. Freeze again to refresh the authoritative blueprint."
-          : "Project Brief and Chapter Outline are fully confirmed. Freeze Blueprint to create the authoritative downstream input.";
+          ? "项目简报或章节大纲在上次冻结后已变更，请重新冻结以刷新权威蓝图。"
+          : "项目简报与章节大纲已全部确认，冻结蓝图以生成下游权威输入。";
       return (
         <div className="h-full flex items-center justify-center bg-gray-50 p-8">
           <div className="max-w-lg rounded-2xl border border-blue-200 bg-white p-8 text-center shadow-sm">
@@ -62,7 +62,7 @@ export function BlueprintWorkspaceView({ blueprint, chapters = [], refinementSta
                 disabled={freezePending}
                 className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
               >
-                {freezePending ? "Freezing..." : "Freeze Blueprint"}
+                {freezePending ? "正在冻结..." : "冻结蓝图"}
               </button>
             )}
           </div>

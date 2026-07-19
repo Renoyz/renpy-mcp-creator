@@ -15,7 +15,7 @@ interface Props {
 const EMPTY_CHAPTER = (): ChapterOutlineEntry => ({
   chapter_id: `ch_${Date.now()}`,
   order: 1,
-  chapter_name: "New Chapter",
+  chapter_name: "新章节",
   chapter_goal: "",
   key_conflict: "",
   emotional_arc: "",
@@ -54,7 +54,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
       setEditing(false);
       setDraft(null);
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Failed to save Chapter Outline.");
+      setActionError(e instanceof Error ? e.message : "保存章节大纲失败。");
     } finally {
       setSaving(false);
     }
@@ -67,7 +67,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
       try {
         await onConfirmChapter(projectName, chapterId);
       } catch (e) {
-        setActionError(e instanceof Error ? e.message : "Failed to confirm chapter.");
+        setActionError(e instanceof Error ? e.message : "确认章节失败。");
       } finally {
         setConfirming(null);
       }
@@ -132,7 +132,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
           <div className="w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center mx-auto mb-4">
             <AlertTriangle className="w-8 h-8 text-red-500" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Failed to load Chapter Outline</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">加载章节大纲失败</h3>
           <p className="text-sm text-red-600 max-w-xs mx-auto">{error}</p>
         </div>
       </div>
@@ -146,9 +146,9 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
           <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
             <Edit3 className="w-8 h-8 text-gray-400" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No Chapter Outline yet</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">还没有章节大纲</h3>
           <p className="text-sm text-gray-500 max-w-xs mx-auto">
-            Chapter outline will be available after the Project Brief is confirmed.
+            项目简报确认后，即可查看章节大纲。
           </p>
           {!editing && (
             <button
@@ -156,7 +156,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
               className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-4 py-2 text-xs font-medium text-white hover:bg-gray-800"
             >
               <Edit3 className="w-3.5 h-3.5" />
-              Create Outline
+              创建大纲
             </button>
           )}
         </div>
@@ -170,9 +170,9 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
       <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200 px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">Chapter Outline</h2>
+            <h2 className="text-xl font-bold text-gray-900">章节大纲</h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              {working.chapters.length} chapter{working.chapters.length !== 1 ? "s" : ""}
+              {working.chapters.length} 个章节
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -183,7 +183,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
                   disabled={saving}
                   className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  Cancel
+                  取消
                 </button>
                 <button
                   onClick={handleSave}
@@ -195,7 +195,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
                   ) : (
                     <Save className="w-3.5 h-3.5" />
                   )}
-                  Save
+                  保存
                 </button>
               </>
             ) : (
@@ -204,7 +204,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
                 className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800"
               >
                 <Edit3 className="w-3.5 h-3.5" />
-                Edit
+                编辑
               </button>
             )}
           </div>
@@ -212,7 +212,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
         {editing && (
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-            <span>Saving will reset all chapter confirmation flags. You will need to re-confirm each chapter.</span>
+            <span>保存将重置所有章节确认标记，你需要重新确认每个章节。</span>
           </div>
         )}
         {actionError && (
@@ -226,14 +226,14 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
           className="mt-4 grid gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_220px_160px]"
         >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Review progress</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">确认进度</p>
             <p className="mt-1 text-sm text-gray-700">
-              Confirm every chapter before freezing the blueprint for generation.
+              冻结蓝图并开始生成前，请先确认每个章节。
             </p>
           </div>
           <div>
             <p className="text-lg font-semibold text-gray-900">
-              {confirmedCount} / {totalCount} chapters confirmed
+              {confirmedCount} / {totalCount} 个章节已确认
             </p>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
               <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progressPercent}%` }} />
@@ -241,7 +241,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
           </div>
           <div className="flex items-center justify-start lg:justify-end">
             <span className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700">
-              {remainingCount} remaining
+              剩余 {remainingCount} 章
             </span>
           </div>
         </div>
@@ -270,20 +270,20 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
             className="w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 px-3 py-3 text-xs font-medium text-gray-600 hover:border-gray-400 hover:text-gray-800"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Chapter
+            添加章节
           </button>
         )}
         {!editing && onFreezeBlueprint && working.chapters.length > 0 && working.chapters.every((ch) => ch.confirmed) && (
           <div className="rounded-xl border border-green-200 bg-green-50 p-5 text-center">
             <p className="text-sm font-medium text-green-800 mb-3">
-              All chapters confirmed. Ready to freeze blueprint and start generation.
+              所有章节已确认，可以冻结蓝图并开始生成。
             </p>
             <button
               onClick={onFreezeBlueprint}
               className="inline-flex items-center gap-1.5 rounded-md bg-green-700 px-4 py-2 text-xs font-medium text-white hover:bg-green-800"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              Freeze Blueprint
+              冻结蓝图
             </button>
           </div>
         )}
@@ -352,7 +352,7 @@ function ChapterCard({
                 onClick={onMoveUp}
                 disabled={index === 0}
                 className="rounded-md p-1 text-gray-500 hover:bg-gray-200 disabled:opacity-30"
-                title="Move up"
+                title="上移"
               >
                 <ArrowUp className="h-3.5 w-3.5" />
               </button>
@@ -360,14 +360,14 @@ function ChapterCard({
                 onClick={onMoveDown}
                 disabled={index === total - 1}
                 className="rounded-md p-1 text-gray-500 hover:bg-gray-200 disabled:opacity-30"
-                title="Move down"
+                title="下移"
               >
                 <ArrowDown className="h-3.5 w-3.5" />
               </button>
               <button
                 onClick={onRemove}
                 className="rounded-md p-1 text-red-500 hover:bg-red-50"
-                title="Remove"
+                title="移除"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -384,22 +384,22 @@ function ChapterCard({
                   : "bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
               )}
             >
-              {confirming ? "..." : chapter.confirmed ? "Confirmed" : "Confirm"}
+              {confirming ? "..." : chapter.confirmed ? "已确认" : "确认"}
             </button>
           )}
         </div>
       </div>
       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <TextField label="Chapter Goal" value={chapter.chapter_goal} editing={editing} onChange={(v) => updateField("chapter_goal", v)} />
-        <TextField label="Key Conflict" value={chapter.key_conflict} editing={editing} onChange={(v) => updateField("key_conflict", v)} />
-        <TextField label="Emotional Arc" value={chapter.emotional_arc} editing={editing} onChange={(v) => updateField("emotional_arc", v)} />
-        <TextField label="Reveals" value={chapter.reveals} editing={editing} onChange={(v) => updateField("reveals", v)} />
-        <TextField label="End State" value={chapter.end_state} editing={editing} onChange={(v) => updateField("end_state", v)} />
-        <TextField label="Mood / Pacing Bias" value={chapter.mood_or_pacing_bias} editing={editing} onChange={(v) => updateField("mood_or_pacing_bias", v)} />
-        <TextField label="Relationship Shift" value={chapter.relationship_shift} editing={editing} onChange={(v) => updateField("relationship_shift", v)} />
-        <TextField label="Character Presentation Notes" value={chapter.character_presentation_notes} editing={editing} onChange={(v) => updateField("character_presentation_notes", v)} />
+        <TextField label="章节目标" value={chapter.chapter_goal} editing={editing} onChange={(v) => updateField("chapter_goal", v)} />
+        <TextField label="核心冲突" value={chapter.key_conflict} editing={editing} onChange={(v) => updateField("key_conflict", v)} />
+        <TextField label="情感弧线" value={chapter.emotional_arc} editing={editing} onChange={(v) => updateField("emotional_arc", v)} />
+        <TextField label="揭示信息" value={chapter.reveals} editing={editing} onChange={(v) => updateField("reveals", v)} />
+        <TextField label="结束状态" value={chapter.end_state} editing={editing} onChange={(v) => updateField("end_state", v)} />
+        <TextField label="情绪 / 节奏偏好" value={chapter.mood_or_pacing_bias} editing={editing} onChange={(v) => updateField("mood_or_pacing_bias", v)} />
+        <TextField label="关系变化" value={chapter.relationship_shift} editing={editing} onChange={(v) => updateField("relationship_shift", v)} />
+        <TextField label="角色呈现备注" value={chapter.character_presentation_notes} editing={editing} onChange={(v) => updateField("character_presentation_notes", v)} />
         <div className="md:col-span-2">
-          <TagField label="Character Focus" tags={chapter.character_focus} editing={editing} onChange={(v) => updateField("character_focus", v)} />
+          <TagField label="角色焦点" tags={chapter.character_focus} editing={editing} onChange={(v) => updateField("character_focus", v)} />
         </div>
       </div>
     </div>
@@ -428,7 +428,7 @@ function TextField({
           className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
         />
       ) : (
-        <p className="text-sm text-gray-700">{value || <span className="text-gray-400 italic">Not set</span>}</p>
+        <p className="text-sm text-gray-700">{value || <span className="text-gray-400 italic">未填写</span>}</p>
       )}
     </div>
   );
@@ -472,7 +472,7 @@ function TagField({
                 setInput("");
               }
             }}
-            placeholder="+ Add"
+            placeholder="+ 添加"
             className="w-20 rounded-md border border-gray-300 px-2 py-0.5 text-xs text-gray-900 focus:border-blue-500 outline-none"
           />
         )}

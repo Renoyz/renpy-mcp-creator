@@ -36,15 +36,15 @@ const ALL_CARD_KEYS = [
 ];
 
 const CARD_LABELS: Record<string, string> = {
-  core_premise: "Core Premise",
-  audience_genre: "Audience / Genre",
-  tone_themes: "Tone / Themes",
-  visual_style: "Visual Style",
-  world_rules: "World Rules",
-  core_cast: "Core Cast",
-  character_identity: "Character Identity",
-  relationship_baselines: "Relationship Baselines",
-  constraints: "Constraints",
+  core_premise: "核心设定",
+  audience_genre: "受众 / 类型",
+  tone_themes: "基调 / 主题",
+  visual_style: "视觉风格",
+  world_rules: "世界规则",
+  core_cast: "核心角色",
+  character_identity: "角色身份",
+  relationship_baselines: "关系基线",
+  constraints: "约束条件",
 };
 
 function isCharacterIdentityContent(
@@ -104,7 +104,7 @@ export function BriefWorkspaceView({
       setEditing(false);
       setDraft(null);
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Failed to save Project Brief.");
+      setActionError(e instanceof Error ? e.message : "保存项目简报失败。");
     } finally {
       setSaving(false);
     }
@@ -117,7 +117,7 @@ export function BriefWorkspaceView({
       try {
         await onConfirmCard(projectName, cardKey);
       } catch (e) {
-        setActionError(e instanceof Error ? e.message : "Failed to confirm card.");
+        setActionError(e instanceof Error ? e.message : "确认卡片失败。");
       } finally {
         setConfirming(null);
       }
@@ -183,7 +183,7 @@ export function BriefWorkspaceView({
           <div className="w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center mx-auto mb-4">
             <AlertTriangle className="w-8 h-8 text-red-500" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Failed to load Project Brief</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">加载项目简报失败</h3>
           <p className="text-sm text-red-600 max-w-xs mx-auto">{error}</p>
         </div>
       </div>
@@ -197,9 +197,9 @@ export function BriefWorkspaceView({
           <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
             <Edit3 className="w-8 h-8 text-gray-400" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No Project Brief yet</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">还没有项目简报</h3>
           <p className="text-sm text-gray-500 max-w-xs mx-auto">
-            Start by editing and saving your first project brief.
+            从编辑并保存你的第一份项目简报开始。
           </p>
           {!editing && (
             <button
@@ -207,7 +207,7 @@ export function BriefWorkspaceView({
               className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-4 py-2 text-xs font-medium text-white hover:bg-gray-800"
             >
               <Edit3 className="w-3.5 h-3.5" />
-              Create Brief
+              创建简报
             </button>
           )}
         </div>
@@ -221,9 +221,9 @@ export function BriefWorkspaceView({
       <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b border-gray-200 px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">Project Brief</h2>
+            <h2 className="text-xl font-bold text-gray-900">项目简报</h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              Define project-level requirements before chapter planning.
+              在章节规划前定义项目级需求。
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -234,7 +234,7 @@ export function BriefWorkspaceView({
                   disabled={saving}
                   className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  Cancel
+                  取消
                 </button>
                 <button
                   onClick={handleSave}
@@ -246,7 +246,7 @@ export function BriefWorkspaceView({
                   ) : (
                     <Save className="w-3.5 h-3.5" />
                   )}
-                  Save
+                  保存
                 </button>
               </>
             ) : (
@@ -255,7 +255,7 @@ export function BriefWorkspaceView({
                 className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-800"
               >
                 <Edit3 className="w-3.5 h-3.5" />
-                Edit
+                编辑
               </button>
             )}
           </div>
@@ -263,7 +263,7 @@ export function BriefWorkspaceView({
         {editing && (
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-            <span>Saving will reset all confirmation flags. You will need to re-confirm each card.</span>
+            <span>保存将重置所有确认标记，你需要重新确认每张卡片。</span>
           </div>
         )}
         {actionError && (
@@ -277,14 +277,14 @@ export function BriefWorkspaceView({
           className="mt-4 grid gap-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_180px_160px]"
         >
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Review progress</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">确认进度</p>
             <p className="mt-1 text-sm text-gray-700">
-              Confirm the stable requirements before chapter outline review.
+              在章节大纲审阅前，先确认已稳定的需求。
             </p>
           </div>
           <div>
             <p className="text-lg font-semibold text-gray-900">
-              {confirmedCount} / {totalCount} confirmed
+              {confirmedCount} / {totalCount} 已确认
             </p>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
               <div className="h-full rounded-full bg-emerald-500" style={{ width: `${progressPercent}%` }} />
@@ -292,7 +292,7 @@ export function BriefWorkspaceView({
           </div>
           <div className="flex items-center justify-start lg:justify-end">
             <span className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700">
-              {remainingCount} remaining
+              剩余 {remainingCount} 张
             </span>
           </div>
         </div>
@@ -320,11 +320,11 @@ export function BriefWorkspaceView({
                   onChange={(e) => updateTextCard(key, e.target.value)}
                   rows={4}
                   className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-y"
-                  placeholder={`Enter ${CARD_LABELS[key] || key}...`}
+                  placeholder={`填写${CARD_LABELS[key] || key}...`}
                 />
               ) : (
                 <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                  {content || <span className="text-gray-400 italic">Not set</span>}
+                  {content || <span className="text-gray-400 italic">未填写</span>}
                 </p>
               )}
             </CardSection>
@@ -356,28 +356,28 @@ export function BriefWorkspaceView({
             <div className="flex items-center justify-center gap-2 mb-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" />
               <h3 className="text-sm font-semibold text-green-800">
-                Project Brief 已全部确认
+                项目简报已全部确认
               </h3>
             </div>
             <p className="text-xs text-green-700 mb-3">
-              接下来请进入 Chapter Outline Review 确认章节大纲
+              接下来请进入章节大纲审阅，确认各章节大纲
             </p>
             <button
               onClick={onProceedToOutline}
               className="inline-flex items-center gap-1.5 rounded-md bg-green-700 px-4 py-2 text-xs font-medium text-white hover:bg-green-800"
             >
               <ArrowRight className="w-3.5 h-3.5" />
-              Enter Chapter Outline Review
+              进入章节大纲审阅
             </button>
           </div>
           ) : (
             <div className="rounded-lg border border-blue-200 bg-blue-50 p-5 text-center">
               <div className="flex items-center justify-center gap-2 mb-2">
                 <CheckCircle2 className="h-5 w-5 text-blue-600" />
-                <h3 className="text-sm font-semibold text-blue-800">Chapter Intake in progress</h3>
+                <h3 className="text-sm font-semibold text-blue-800">章节采集进行中</h3>
               </div>
               <p className="text-xs text-blue-700 mb-3">
-                The Chapter Outline draft is not ready yet. Continue chapter intake until review can begin.
+                章节大纲草稿尚未就绪。请继续章节采集，直到可以开始审阅。
               </p>
               <div
                 data-testid="outline-draft-progress"
@@ -391,7 +391,7 @@ export function BriefWorkspaceView({
                   className="inline-flex items-center gap-1.5 rounded-md bg-blue-700 px-4 py-2 text-xs font-medium text-white hover:bg-blue-800"
                 >
                   <ArrowRight className="w-3.5 h-3.5" />
-                  Continue Chapter Intake
+                  继续章节采集
                 </button>
               )}
             </div>
@@ -439,7 +439,7 @@ function CardSection({
                 : "bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
             )}
           >
-            {confirming ? "..." : confirmed ? "Confirmed" : "Confirm"}
+            {confirming ? "..." : confirmed ? "已确认" : "确认"}
           </button>
         )}
       </div>
@@ -504,7 +504,7 @@ function CharacterIdentityCard({
           ) : (
             <Circle className="h-4 w-4 text-gray-400" />
           )}
-          <h3 className="text-sm font-semibold text-gray-900">Character Identity</h3>
+          <h3 className="text-sm font-semibold text-gray-900">角色身份</h3>
         </div>
         {!editing && (
           <button
@@ -517,62 +517,62 @@ function CharacterIdentityCard({
                 : "bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
             )}
           >
-            {confirming ? "..." : confirmed ? "Confirmed" : "Confirm"}
+            {confirming ? "..." : confirmed ? "已确认" : "确认"}
           </button>
         )}
       </div>
       <div className="p-4 space-y-4">
         {content.characters.length === 0 && !editing && (
-          <p className="text-sm text-gray-400 italic">No characters defined.</p>
+          <p className="text-sm text-gray-400 italic">尚未定义角色。</p>
         )}
         {content.characters.map((char, idx) => (
           <div key={char.character_id} className="rounded-lg border border-gray-200 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Character {idx + 1}</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">角色 {idx + 1}</p>
               {editing && (
                 <button
                   onClick={() => removeCharacter(idx)}
                   className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
                 >
                   <Trash2 className="h-3 w-3" />
-                  Remove
+                  移除
                 </button>
               )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Field
-                label="Name"
+                label="姓名"
                 value={char.name}
                 editing={editing}
                 onChange={(v) => updateCharacter(idx, { ...char, name: v })}
               />
               <Field
-                label="Story Role"
+                label="故事定位"
                 value={char.story_role}
                 editing={editing}
                 onChange={(v) => updateCharacter(idx, { ...char, story_role: v })}
               />
               <Field
-                label="Core Motivation"
+                label="核心动机"
                 value={char.core_motivation}
                 editing={editing}
                 onChange={(v) => updateCharacter(idx, { ...char, core_motivation: v })}
               />
             </div>
             <TagList
-              label="Personality Anchors"
+              label="性格锚点"
               tags={char.personality_anchors}
               editing={editing}
               onChange={(tags) => updateCharacter(idx, { ...char, personality_anchors: tags })}
             />
             <TagList
-              label="Visual Identity Anchors"
+              label="视觉形象锚点"
               tags={char.visual_identity_anchors}
               editing={editing}
               onChange={(tags) => updateCharacter(idx, { ...char, visual_identity_anchors: tags })}
             />
             <TagList
-              label="Forbidden Drift"
+              label="禁止偏移"
               tags={char.forbidden_drift}
               editing={editing}
               onChange={(tags) => updateCharacter(idx, { ...char, forbidden_drift: tags })}
@@ -585,7 +585,7 @@ function CharacterIdentityCard({
             className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 hover:border-gray-400 hover:text-gray-800"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Character
+            添加角色
           </button>
         )}
       </div>
@@ -641,7 +641,7 @@ function RelationshipBaselinesCard({
           ) : (
             <Circle className="h-4 w-4 text-gray-400" />
           )}
-          <h3 className="text-sm font-semibold text-gray-900">Relationship Baselines</h3>
+          <h3 className="text-sm font-semibold text-gray-900">关系基线</h3>
         </div>
         {!editing && (
           <button
@@ -655,51 +655,51 @@ function RelationshipBaselinesCard({
                 : "bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-50"
             )}
           >
-            {confirming ? "..." : confirmed ? "Confirmed" : "Confirm"}
+            {confirming ? "..." : confirmed ? "已确认" : "确认"}
           </button>
         )}
       </div>
       <div className="p-4 space-y-4">
         {content.relationships.length === 0 && !editing && (
-          <p className="text-sm text-gray-400 italic">No relationship baselines defined.</p>
+          <p className="text-sm text-gray-400 italic">尚未定义关系基线。</p>
         )}
         {content.relationships.map((rel, idx) => (
           <div key={idx} className="rounded-lg border border-gray-200 p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Relationship {idx + 1}</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">关系 {idx + 1}</p>
               {editing && (
                 <button
                   onClick={() => removeRelationship(idx)}
                   className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
                 >
                   <Trash2 className="h-3 w-3" />
-                  Remove
+                  移除
                 </button>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Field
-                label="Character A"
+                label="角色 A"
                 value={rel.pair[0] || ""}
                 editing={editing}
                 onChange={(v) => updateRelationship(idx, { ...rel, pair: [v, rel.pair[1] || ""] })}
               />
               <Field
-                label="Character B"
+                label="角色 B"
                 value={rel.pair[1] || ""}
                 editing={editing}
                 onChange={(v) => updateRelationship(idx, { ...rel, pair: [rel.pair[0] || "", v] })}
               />
             </div>
             <Field
-              label="Baseline"
+              label="基线"
               value={rel.baseline}
               editing={editing}
               onChange={(v) => updateRelationship(idx, { ...rel, baseline: v })}
               dataTestId="baseline-input"
             />
             <TagList
-              label="Must Preserve"
+              label="必须保持"
               tags={rel.must_preserve}
               editing={editing}
               onChange={(tags) => updateRelationship(idx, { ...rel, must_preserve: tags })}
@@ -712,7 +712,7 @@ function RelationshipBaselinesCard({
             className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 hover:border-gray-400 hover:text-gray-800"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add Relationship
+            添加关系
           </button>
         )}
       </div>
@@ -745,7 +745,7 @@ function Field({
           className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
         />
       ) : (
-        <p className="text-sm text-gray-900">{value || <span className="text-gray-400">Not set</span>}</p>
+        <p className="text-sm text-gray-900">{value || <span className="text-gray-400">未填写</span>}</p>
       )}
     </div>
   );
@@ -795,7 +795,7 @@ function TagList({
                 setInput("");
               }
             }}
-            placeholder="+ Add"
+            placeholder="+ 添加"
             className="w-20 rounded-md border border-gray-300 px-2 py-0.5 text-xs text-gray-900 focus:border-blue-500 outline-none"
           />
         )}

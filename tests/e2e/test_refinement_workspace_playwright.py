@@ -345,7 +345,7 @@ def test_workspace_intake_view_shows_agent_summary_and_missing_slots(
     intake_tab = page.get_by_role("button", name="Intake", exact=True)
     intake_tab.click()
 
-    expect(page.locator("text=Project intake progress")).to_be_visible(timeout=10000)
+    expect(page.locator("text=项目采集进度")).to_be_visible(timeout=10000)
     expect(page.get_by_text("A YA sci-fi mystery about Elena searching for her missing brother.", exact=True).first).to_be_visible(timeout=10000)
     expect(page.get_by_text("Relationship Baselines", exact=True).first).to_be_visible(timeout=10000)
     expect(page.get_by_text("Constraints", exact=True).first).to_be_visible(timeout=10000)
@@ -488,8 +488,8 @@ def test_workspace_refinement_status_shows_blocked_reason_before_blueprint_ready
     expect(page.locator("h1")).to_have_text(project_name, timeout=10000)
 
     # Refinement status panel should show blocked reason
-    expect(page.locator("text=Complete all Project Brief cards first")).to_be_visible(timeout=10000)
-    expect(page.get_by_text("Project intake", exact=True)).to_be_visible(timeout=10000)
+    expect(page.locator("text=请先完成所有项目简报卡片")).to_be_visible(timeout=10000)
+    expect(page.get_by_text("需求采集", exact=True)).to_be_visible(timeout=10000)
 
 
 def test_workspace_brief_view_renders_relationship_baselines_card(
@@ -580,7 +580,7 @@ def test_workspace_legacy_project_status_panel_shows_ready_without_blocked_reaso
 
     # Refinement status should show legacy state with ready wording
     expect(page.get_by_text("Legacy blueprint", exact=True)).to_be_visible(timeout=10000)
-    expect(page.locator("text=Complete all Project Brief cards first")).not_to_be_visible()
+    expect(page.locator("text=请先完成所有项目简报卡片")).not_to_be_visible()
     expect(page.get_by_text("Planning", exact=True)).not_to_be_visible()
 
 
@@ -726,7 +726,7 @@ def test_workspace_new_project_shows_brief_tab_and_create_entry(
 
     # Intake tab is active by default -> start entry visible
     expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
-    start_btn = page.get_by_role("button", name="Start Intake with AI", exact=True)
+    start_btn = page.get_by_role("button", name="开始 AI 需求采集", exact=True)
     expect(start_btn).to_be_visible(timeout=10000)
 
 
@@ -739,7 +739,7 @@ def test_workspace_start_intake_uses_brief_language_and_refreshes_intake_panel(
     create_project_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    page.get_by_role("button", name="Start Intake with AI", exact=True).click()
+    page.get_by_role("button", name="开始 AI 需求采集", exact=True).click()
 
     chat_panel = page.get_by_test_id("chat-panel-docked")
     expect(chat_panel).to_contain_text("Project Brief", timeout=10000)
@@ -747,7 +747,7 @@ def test_workspace_start_intake_uses_brief_language_and_refreshes_intake_panel(
     expect(chat_panel).not_to_contain_text("更准确的蓝图")
     expect(chat_panel).not_to_contain_text("blueprint", ignore_case=True)
 
-    expect(page.locator("text=Project intake progress")).to_be_visible(timeout=10000)
+    expect(page.locator("text=项目采集进度")).to_be_visible(timeout=10000)
     expect(page.locator("text=Start Project Intake")).not_to_be_visible(timeout=10000)
 
 
@@ -827,7 +827,7 @@ def test_workspace_blueprint_project_shows_build_and_preview_actions(
     open_workspace_from_project_list(page, server_url, project_name)
 
     expect(page.locator("h1")).to_have_text(project_name, timeout=10000)
-    expect(page.get_by_role("button", name="Primary action: Build Web Preview", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Primary action: 构建 Web 预览", exact=True)).to_be_visible(timeout=10000)
     expect(page.get_by_role("button", name="Preview", exact=True)).to_be_visible(timeout=10000)
 
 
@@ -842,7 +842,7 @@ def test_workspace_shows_freeze_action_when_refinement_ready(
     _confirm_refinement_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    expect(page.get_by_role("button", name="Primary action: Freeze Blueprint", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="Primary action: 冻结蓝图", exact=True)).to_be_visible(timeout=10000)
     expect(page.locator("text=Freeze the blueprint to unlock generation")).to_be_visible(timeout=10000)
 
 
@@ -857,7 +857,7 @@ def test_workspace_freeze_action_creates_frozen_blueprint(
     _confirm_refinement_via_api(server_url, project_name)
     open_workspace_from_project_list(page, server_url, project_name)
 
-    freeze_btn = page.get_by_role("button", name="Primary action: Freeze Blueprint")
+    freeze_btn = page.get_by_role("button", name="Primary action: 冻结蓝图")
     expect(freeze_btn).to_be_visible(timeout=10000)
     freeze_btn.click()
 
@@ -888,7 +888,7 @@ def test_workspace_upstream_edit_marks_blueprint_stale(
     page.locator("button", has_text="Save").click()
 
     expect(page.locator("text=Blueprint stale")).to_be_visible(timeout=10000)
-    expect(page.locator("text=Project Brief or Chapter Outline changed. Freeze Blueprint again.")).to_be_visible(timeout=10000)
+    expect(page.locator("text=项目简报或章节大纲已变更，请重新冻结蓝图。")).to_be_visible(timeout=10000)
 
 
 def test_workspace_generation_stays_blocked_until_freeze(
@@ -1248,7 +1248,7 @@ def test_workspace_freeze_auto_generation_chain_shows_progress_and_completion(
 
     open_workspace_from_project_list(page, server_url, project_name)
 
-    freeze_btn = page.get_by_role("button", name="Primary action: Freeze Blueprint")
+    freeze_btn = page.get_by_role("button", name="Primary action: 冻结蓝图")
     expect(freeze_btn).to_be_visible(timeout=10000)
     freeze_btn.click()
 
@@ -1258,7 +1258,7 @@ def test_workspace_freeze_auto_generation_chain_shows_progress_and_completion(
         "Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.",
         timeout=10000,
     )
-    expect(page.get_by_role("button", name="Build Web Preview", exact=True)).to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name="构建 Web 预览", exact=True)).to_be_visible(timeout=10000)
     expect(page.get_by_role("button", name="Preview", exact=True)).to_be_disabled(timeout=10000)
 
 

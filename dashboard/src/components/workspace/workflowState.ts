@@ -103,37 +103,37 @@ export function deriveWorkflowDashboardState({
   const stages: WorkflowStage[] = [
     {
       id: "intake",
-      label: "Intake",
+      label: "需求采集",
       status: hasBrief || refinementIntake?.brief_draft_ready ? "done" : "ready",
-      detail: hasBrief ? "Project inputs collected" : "Collect project direction",
+      detail: hasBrief ? "项目信息已收集" : "收集项目方向",
     },
     {
       id: "brief",
-      label: "Brief",
+      label: "项目简报",
       status: refinementStatus?.brief_fully_confirmed ? "done" : refinementIntake?.brief_draft_ready ? "needs_review" : "locked",
-      detail: refinementStatus?.brief_fully_confirmed ? "Brief confirmed" : "Review project requirements",
+      detail: refinementStatus?.brief_fully_confirmed ? "项目简报已确认" : "确认项目需求",
     },
     {
       id: "outline",
-      label: "Outline",
+      label: "章节大纲",
       status: refinementStatus?.outline_fully_confirmed ? "done" : refinementIntake?.outline_draft_ready ? "needs_review" : "locked",
-      detail: refinementStatus?.outline_fully_confirmed ? "Chapter outline confirmed" : "Confirm chapter arc",
+      detail: refinementStatus?.outline_fully_confirmed ? "章节大纲已确认" : "确认章节叙事弧线",
     },
     {
       id: "blueprint",
-      label: "Blueprint",
+      label: "蓝图",
       status: frozen ? "done" : refinementStatus?.freeze_allowed ? "needs_review" : hasBlueprint ? "ready" : "locked",
-      detail: frozen ? "Blueprint frozen" : "Freeze the generation contract",
+      detail: frozen ? "蓝图已冻结" : "冻结生成契约",
     },
     {
       id: "scene_packages",
-      label: "Scene Packages",
+      label: "场景包",
       status: scenePackagesDone ? "done" : scenePackagesRunning ? "running" : frozen ? "ready" : "locked",
-      detail: scenePackagesDone ? "Scene packages ready" : "Derive scenes from the frozen blueprint",
+      detail: scenePackagesDone ? "场景包已就绪" : "从冻结的蓝图派生场景",
     },
     {
       id: "characters",
-      label: "Characters",
+      label: "角色",
       status: isAtOrAfterGeneration(genState, "character_assets_confirmed")
         ? "done"
         : genState === "character_assets_draft"
@@ -141,11 +141,11 @@ export function deriveWorkflowDashboardState({
         : scenePackagesDone
         ? "ready"
         : "locked",
-      detail: "Generate and accept character sprites",
+      detail: "生成并验收角色立绘",
     },
     {
       id: "backgrounds",
-      label: "Backgrounds",
+      label: "背景",
       status: isAtOrAfterGeneration(genState, "background_assets_confirmed")
         ? "done"
         : genState === "background_assets_draft"
@@ -153,94 +153,94 @@ export function deriveWorkflowDashboardState({
         : isAtOrAfterGeneration(genState, "character_assets_confirmed")
         ? "ready"
         : "locked",
-      detail: "Generate scene backgrounds",
+      detail: "生成场景背景",
     },
     {
       id: "script",
-      label: "Script",
+      label: "脚本",
       status: genState === "committed" ? "done" : genState === "script_preview" ? "needs_review" : "locked",
-      detail: "Preview and commit generated script",
+      detail: "预览并提交生成的脚本",
     },
     {
       id: "build",
-      label: "Build",
+      label: "构建",
       status: buildStatus === "failed" ? "failed" : buildStatus === "running" ? "running" : buildStatus === "success" ? "done" : hasBlueprint ? "ready" : "locked",
-      detail: "Build playable output",
+      detail: "构建可游玩的产物",
     },
     {
       id: "preview",
-      label: "Preview",
+      label: "预览",
       status: previewUrl ? "done" : previewAvailable ? "ready" : "locked",
-      detail: "Launch the playable web preview",
+      detail: "启动可游玩的 Web 预览",
     },
   ]
 
   let activeId = "intake"
-  let title = "Project intake"
-  let subtitle = "Start by collecting enough project direction for the agent to draft a brief."
+  let title = "项目需求采集"
+  let subtitle = "先收集足够的项目方向，让 AI 助手起草项目简报。"
   let status: WorkflowStageStatus = "ready"
-  let primaryAction: WorkflowDashboardState["primaryAction"] = { label: "Start Intake", action: "open_intake" }
+  let primaryAction: WorkflowDashboardState["primaryAction"] = { label: "开始需求采集", action: "open_intake" }
 
   if (refinementIntake?.brief_draft_ready && !hasBrief) {
     activeId = "brief"
-    title = "Brief review is ready"
-    subtitle = "The agent has enough intake material. Review the Project Brief before chapter planning."
+    title = "项目简报待审阅"
+    subtitle = "AI 助手已收集足够的项目信息。请在章节规划前审阅项目简报。"
     status = "needs_review"
-    primaryAction = { label: "Enter Brief Review", action: "promote_brief" }
+    primaryAction = { label: "进入简报审阅", action: "promote_brief" }
   } else if (refinementIntake?.outline_draft_ready && !refinementStatus?.outline_fully_confirmed) {
     activeId = "outline"
-    title = "Outline review is ready"
-    subtitle = "Chapter-level planning is ready for review and confirmation."
+    title = "章节大纲待审阅"
+    subtitle = "章节级规划已就绪，可以进行审阅与确认。"
     status = "needs_review"
-    primaryAction = { label: "Enter Outline Review", action: "promote_outline" }
+    primaryAction = { label: "进入大纲审阅", action: "promote_outline" }
   } else if (refinementStatus?.freeze_allowed && !frozen) {
     activeId = "blueprint"
-    title = "Blueprint freeze"
-    subtitle = "The confirmed brief and outline can now be frozen into the generation contract."
+    title = "冻结蓝图"
+    subtitle = "已确认的简报与大纲现在可以冻结为生成契约。"
     status = "needs_review"
-    primaryAction = { label: "Freeze Blueprint", action: "freeze" }
+    primaryAction = { label: "冻结蓝图", action: "freeze" }
   } else if (scenePackagesRunning) {
     activeId = "scene_packages"
-    title = "Generating scene packages"
-    subtitle = "The system is deriving playable scene material from the frozen blueprint."
+    title = "正在生成场景包"
+    subtitle = "系统正在从冻结的蓝图派生可游玩的场景内容。"
     status = "running"
-    primaryAction = { label: "Open Generation", action: "open_generation" }
+    primaryAction = { label: "打开生成面板", action: "open_generation" }
   } else if (frozen && !scenePackagesDone) {
     activeId = "scene_packages"
-    title = "Scene packages ready"
-    subtitle = "Move into generation to derive scene packages, assets, scripts, and preview output."
+    title = "准备生成场景包"
+    subtitle = "进入生成环节，派生场景包、素材、脚本与预览产物。"
     status = "ready"
-    primaryAction = { label: "Generate Scene Packages", action: "open_generation" }
+    primaryAction = { label: "生成场景包", action: "open_generation" }
   } else if (genState === "character_assets_draft") {
     activeId = "characters"
-    title = "Character assets need review"
-    subtitle = "Review generated character sprites and accept the renderable candidates."
+    title = "角色素材待审阅"
+    subtitle = "审阅生成的角色立绘，并验收可渲染的候选素材。"
     status = "needs_review"
-    primaryAction = { label: "Review Character Assets", action: "open_generation" }
+    primaryAction = { label: "审阅角色素材", action: "open_generation" }
   } else if (genState === "background_assets_draft") {
     activeId = "backgrounds"
-    title = "Scene backgrounds need review"
-    subtitle = "Review generated backgrounds and accept the images that are safe to render."
+    title = "场景背景待审阅"
+    subtitle = "审阅生成的背景，并验收可以安全渲染的图片。"
     status = "needs_review"
-    primaryAction = { label: "Review Backgrounds", action: "open_generation" }
+    primaryAction = { label: "审阅背景", action: "open_generation" }
   } else if (buildStatus === "failed") {
     activeId = "build"
-    title = "Build failed"
-    subtitle = "The last build did not complete. Retry after reviewing the build message below."
+    title = "构建失败"
+    subtitle = "上一次构建未完成。请查看下方构建信息后重试。"
     status = "failed"
-    primaryAction = { label: "Retry Web Build", action: "build_web" }
+    primaryAction = { label: "重试 Web 构建", action: "build_web" }
   } else if (previewAvailable || previewUrl) {
     activeId = "preview"
-    title = "Preview ready"
-    subtitle = "A playable web build is available for review."
+    title = "预览就绪"
+    subtitle = "已有可游玩的 Web 构建产物可供体验。"
     status = "ready"
-    primaryAction = { label: "Open Preview", action: "preview" }
+    primaryAction = { label: "打开预览", action: "preview" }
   } else if (hasBlueprint) {
     activeId = "build"
-    title = "Build next"
-    subtitle = "The project has generated material. Build a web preview to start playtesting."
+    title = "下一步：构建"
+    subtitle = "项目已有生成的内容。构建 Web 预览即可开始试玩。"
     status = "ready"
-    primaryAction = { label: "Build Web Preview", action: "build_web" }
+    primaryAction = { label: "构建 Web 预览", action: "build_web" }
   }
 
   return {

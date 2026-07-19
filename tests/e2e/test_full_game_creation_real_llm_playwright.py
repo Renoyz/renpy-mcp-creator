@@ -344,7 +344,7 @@ def _load_default_execution_mode() -> ExecutionMode:
     return FULL_GAME_CREATION_MODES.HYBRID_RECOVERY
 
 KNOWN_SHORTCUTS = {
-    "intake_start": "workspace Start Intake with AI button",
+    "intake_start": "workspace 开始 AI 需求采集 button",
     "brief_review": "api promote + api confirm fallback after ui failure",
     "outline_review": "api promote + api confirm fallback after ui failure",
     "build": "mock build by default",
@@ -387,7 +387,7 @@ def test_full_game_creation_server_env_uses_execution_mode_mock_build(tmp_path: 
 
 
 def test_full_game_creation_legacy_shortcuts_are_frozen() -> None:
-    assert "Start Intake with AI button" in KNOWN_SHORTCUTS["intake_start"]
+    assert "开始 AI 需求采集 button" in KNOWN_SHORTCUTS["intake_start"]
     assert "api promote" in KNOWN_SHORTCUTS["brief_review"]
     assert "api confirm fallback" in KNOWN_SHORTCUTS["brief_review"]
     assert "api promote" in KNOWN_SHORTCUTS["outline_review"]
@@ -432,8 +432,8 @@ def test_freeze_blueprint_button_uses_first_exact_match(page: Page) -> None:
     page.set_content(
         """
         <main>
-          <button>Freeze Blueprint</button>
-          <button>Freeze Blueprint</button>
+          <button>冻结蓝图</button>
+          <button>冻结蓝图</button>
         </main>
         """
     )
@@ -441,7 +441,7 @@ def test_freeze_blueprint_button_uses_first_exact_match(page: Page) -> None:
     freeze_button = _freeze_blueprint_button(page)
 
     assert freeze_button.count() == 1
-    expect(freeze_button).to_have_text("Freeze Blueprint")
+    expect(freeze_button).to_have_text("冻结蓝图")
 
 
 def test_wait_for_blueprint_file_detects_freeze_completion(tmp_path: Path) -> None:
@@ -503,7 +503,7 @@ def _pending_confirm_buttons(page: Page):
 
 
 def _freeze_blueprint_button(page: Page):
-    return page.get_by_role("button", name="Freeze Blueprint", exact=True).first
+    return page.get_by_role("button", name="冻结蓝图", exact=True).first
 
 
 def _wait_for_blueprint_file(blueprint_path: Path, timeout_seconds: float = 30.0) -> None:
@@ -631,7 +631,7 @@ def _start_intake_via_button(
     step_name: str | None = None,
 ):
     expect(page.locator("text=Start Project Intake")).to_be_visible(timeout=10000)
-    start_btn = page.get_by_role("button", name="Start Intake with AI", exact=True)
+    start_btn = page.get_by_role("button", name="开始 AI 需求采集", exact=True)
     expect(start_btn).to_be_visible(timeout=10000)
     start_btn.click()
     chat = _resolve_chat_surface(page)
@@ -736,7 +736,7 @@ def _try_complete_brief_review_ui(runner) -> bool:
     artifacts = runner.artifacts
 
     page.get_by_role("button", name="Intake", exact=True).click()
-    enter_brief = page.locator("button", has_text="Enter Brief Review")
+    enter_brief = page.locator("button", has_text="进入简报审阅")
     expect(enter_brief).to_be_visible(timeout=10000)
     enter_brief.click()
 
@@ -837,7 +837,7 @@ def _try_complete_outline_review_ui(runner) -> bool:
             _snap(page, "11b_confirm_button_stuck", writer=artifacts)
             return False
 
-    freeze_btn = page.locator("button", has_text="Freeze Blueprint")
+    freeze_btn = page.locator("button", has_text="冻结蓝图")
     if freeze_btn.count() == 0:
         _snap(page, "11b_outline_ui_incomplete", writer=artifacts)
         return False

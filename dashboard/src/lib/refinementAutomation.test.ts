@@ -151,7 +151,7 @@ describe("runFreezeAutoGenerationChain", () => {
         refreshProjectData: refresh,
         request,
       })
-    ).rejects.toThrow(/Generation tab/)
+    ).rejects.toThrow(/生成”页继续/)
 
     // total_count = 1 -> attempt cap = max(12, 1 * 3) = 12 scene-package calls, then it stops
     expect(request).toHaveBeenCalledTimes(12)
@@ -186,7 +186,7 @@ describe("runFreezeAutoGenerationChain", () => {
           refreshProjectData: refresh,
           request,
         })
-      ).rejects.toThrow(/Generation tab/)
+      ).rejects.toThrow(/生成”页继续/)
 
       // attempt cap would be 300 for 100 chapters; the wall clock must stop it much earlier
       expect(request.mock.calls.length).toBeLessThan(10)

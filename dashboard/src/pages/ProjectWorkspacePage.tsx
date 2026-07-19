@@ -198,7 +198,7 @@ export function ProjectWorkspacePage() {
           setPreviewStatus("success");
         } else if (data.status === "failed") {
           setPreviewStatus("failed");
-          setPreviewMessage(data.message || "Preview failed");
+          setPreviewMessage(data.message || "预览失败");
         }
       })
       .catch(() => {});
@@ -232,13 +232,13 @@ export function ProjectWorkspacePage() {
   }, [activeProjectName, pipelineStage]);
 
   const buildButtonLabel = (target: BuildTarget) => {
-    if (buildInProgressTarget === target && buildStatus === "running") return "Building...";
-    if (postFreezeFlow.status === "running") return "Preparing...";
-    if (buildStatus === "failed") return "Retry Build";
+    if (buildInProgressTarget === target && buildStatus === "running") return "构建中...";
+    if (postFreezeFlow.status === "running") return "准备中...";
+    if (buildStatus === "failed") return "重试构建";
     if (buildStatus === "success" && lastBuildTarget === target) {
-      return target === "web" ? "Web Build OK" : "Windows Build OK";
+      return target === "web" ? "Web 构建完成" : "Windows 构建完成";
     }
-    return target === "web" ? "Build Web Preview" : "Build Windows Package";
+    return target === "web" ? "构建 Web 预览" : "构建 Windows 包";
   };
 
   const handleBuild = async (target: BuildTarget) => {
@@ -274,8 +274,8 @@ export function ProjectWorkspacePage() {
         setLastBuildTarget(target);
         setBuildMessage(
           data.output_path
-            ? `Built ${target} to ${data.output_path}`
-            : `Build ${target} succeeded`
+            ? `已构建 ${target} 至 ${data.output_path}`
+            : `${target} 构建成功`
         );
         if (target === "web") {
           setPreviewAvailable(true);
@@ -285,7 +285,7 @@ export function ProjectWorkspacePage() {
         }
       } else {
         setBuildStatus("failed");
-        setBuildMessage(data.error || data.detail || `Build ${target} failed`);
+        setBuildMessage(data.error || data.detail || `${target} 构建失败`);
         if (target === "web") {
           setPreviewAvailable(false);
         }
@@ -295,7 +295,7 @@ export function ProjectWorkspacePage() {
       }
     } catch (e) {
       setBuildStatus("failed");
-      setBuildMessage(e instanceof Error ? e.message : "Build request failed");
+      setBuildMessage(e instanceof Error ? e.message : "构建请求失败");
     } finally {
       setBuildInProgressTarget(null);
     }
@@ -322,12 +322,12 @@ export function ProjectWorkspacePage() {
       } else {
         setPreviewUrl(null);
         setPreviewStatus("failed");
-        setPreviewMessage(data.detail || "Preview failed");
+        setPreviewMessage(data.detail || "预览失败");
       }
     } catch (e) {
       setPreviewUrl(null);
       setPreviewStatus("failed");
-      setPreviewMessage(e instanceof Error ? e.message : "Preview request failed");
+      setPreviewMessage(e instanceof Error ? e.message : "预览请求失败");
     } finally {
       setPreviewLoading(false);
     }
@@ -341,7 +341,7 @@ export function ProjectWorkspacePage() {
   const handleFreezeBlueprint = async () => {
     if (!activeProjectName) return;
     setActiveTab("blueprint");
-    setPostFreezeFlow({ status: "running", step: "freezing", message: "Freezing blueprint..." });
+    setPostFreezeFlow({ status: "running", step: "freezing", message: "正在冻结蓝图..." });
     try {
       await runFreezeAutoGenerationChain({
         projectName: activeProjectName,
@@ -356,7 +356,7 @@ export function ProjectWorkspacePage() {
           });
         },
       });
-      setBuildMessage("Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.");
+      setBuildMessage("场景包与原型脚本已就绪。下一步：构建游戏。Web 构建成功后解锁预览。");
       setBuildStatus("idle");
       setPreviewAvailable(false);
       setPreviewMessage("");
@@ -364,7 +364,7 @@ export function ProjectWorkspacePage() {
       setPostFreezeFlow({
         status: "failed",
         step: "failed",
-        message: e instanceof Error ? e.message : "Automatic generation failed after freeze.",
+        message: e instanceof Error ? e.message : "冻结后的自动生成失败。",
       });
     }
   };
@@ -374,17 +374,17 @@ export function ProjectWorkspacePage() {
     setBriefReviewFlow({
       status: "running",
       step: "brief_promote",
-      message: "Preparing Project Brief review...",
+      message: "正在准备项目简报审阅...",
     });
     try {
       await promoteBriefDraft(activeProjectName);
-      setBriefReviewFlow({ status: "success", step: "brief_ready", message: "Project Brief review is ready." });
+      setBriefReviewFlow({ status: "success", step: "brief_ready", message: "项目简报审阅已就绪。" });
       setActiveTab("brief");
     } catch (e) {
       setBriefReviewFlow({
         status: "failed",
         step: "brief_failed",
-        message: e instanceof Error ? e.message : "Failed to enter Project Brief review.",
+        message: e instanceof Error ? e.message : "进入项目简报审阅失败。",
       });
     }
   };
@@ -394,17 +394,17 @@ export function ProjectWorkspacePage() {
     setOutlineReviewFlow({
       status: "running",
       step: "outline_promote",
-      message: "Generating Chapter Outline review...",
+      message: "正在生成章节大纲审阅...",
     });
     setActiveTab("outline");
     try {
       await promoteOutlineDraft(activeProjectName);
-      setOutlineReviewFlow({ status: "success", step: "outline_ready", message: "Chapter Outline review is ready." });
+      setOutlineReviewFlow({ status: "success", step: "outline_ready", message: "章节大纲审阅已就绪。" });
     } catch (e) {
       setOutlineReviewFlow({
         status: "failed",
         step: "outline_failed",
-        message: e instanceof Error ? e.message : "Failed to enter Chapter Outline review.",
+        message: e instanceof Error ? e.message : "进入章节大纲审阅失败。",
       });
     }
   };
@@ -425,20 +425,20 @@ export function ProjectWorkspacePage() {
     if (refinementStatusError) {
       return {
         tone: "border-red-200 bg-red-50 text-red-700",
-        message: "Failed to load refinement status",
+        message: "加载需求确认状态失败",
       };
     }
     if (!refinementStatus) return null;
     if (refinementStatus.blueprint_freeze_status === "stale") {
       return {
         tone: "border-amber-200 bg-amber-50 text-amber-800",
-        message: "Project Brief or Chapter Outline changed. Freeze Blueprint again.",
+        message: "项目简报或章节大纲已变更，请重新冻结蓝图。",
       };
     }
     if (refinementStatus.blueprint_ready && refinementStatus.blueprint_freeze_status !== "frozen") {
       return {
         tone: "border-blue-200 bg-blue-50 text-blue-700",
-        message: "Freeze the blueprint to unlock generation",
+        message: "冻结蓝图以解锁生成",
       };
     }
     if (
@@ -447,19 +447,19 @@ export function ProjectWorkspacePage() {
     ) {
       return {
         tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
-        message: "Ready for generation",
+        message: "可以开始生成",
       };
     }
     if (!refinementStatus.brief_fully_confirmed) {
       return {
         tone: "border-amber-200 bg-amber-50 text-amber-800",
-        message: "Complete all Project Brief cards first",
+        message: "请先完成所有项目简报卡片",
       };
     }
     if (!refinementStatus.outline_fully_confirmed) {
       return {
         tone: "border-amber-200 bg-amber-50 text-amber-800",
-        message: "Complete all Chapter Outline cards first",
+        message: "请先完成所有章节大纲卡片",
       };
     }
     return null;
@@ -469,7 +469,7 @@ export function ProjectWorkspacePage() {
     refinementStatus?.generation_allowed ?? (refinementStatus?.blueprint_freeze_status === "frozen");
   const generationBlockedReason = generationAllowed
     ? null
-    : refinementStatusNote?.message ?? "Freeze the blueprint to unlock generation";
+    : refinementStatusNote?.message ?? "冻结蓝图以解锁生成";
 
   const handleWorkflowAction = (action: WorkflowAction) => {
     if (action === "open_intake") {
@@ -608,7 +608,7 @@ export function ProjectWorkspacePage() {
                     ) : (
                       <Play className="h-3.5 w-3.5" />
                     )}
-                    {postFreezeFlow.status === "running" ? "Preparing..." : previewLoading ? "Starting..." : "Preview"}
+                    {postFreezeFlow.status === "running" ? "准备中..." : previewLoading ? "启动中..." : "预览"}
                   </button>
                 )}
               </div>
@@ -657,7 +657,7 @@ export function ProjectWorkspacePage() {
           >
             {buildMessage}
             {previewAvailable && (
-              <span className="ml-2 text-green-600">Preview available</span>
+              <span className="ml-2 text-green-600">预览可用</span>
             )}
           </div>
         )}
@@ -675,7 +675,7 @@ export function ProjectWorkspacePage() {
         {canRunBuildPreview && previewUrl && (
           <div className="mt-2 rounded-md border border-gray-200 bg-white p-2 text-xs">
             <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-50 text-green-700 text-xs font-medium mr-2">
-              Preview Running
+              预览运行中
             </span>
             <a
               href={previewUrl}
@@ -735,17 +735,17 @@ export function ProjectWorkspacePage() {
               !brief && refinementStatus?.intake_required ? (
                 <div className="h-full overflow-auto p-6">
                   <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50 p-6">
-                    <h2 className="text-base font-semibold text-blue-900">Start in Intake first</h2>
+                    <h2 className="text-base font-semibold text-blue-900">请先从需求采集开始</h2>
                     <p className="mt-2 text-sm text-blue-800">
-                      The agent needs to collect project-level inputs and prepare a Project Brief draft before full
-                      Brief review starts.
+                      AI 助手需要先收集项目级信息并准备项目简报草稿，然后才能开始完整的简报审阅。
+
                     </p>
                     <button
                       type="button"
                       onClick={() => setActiveTab("intake")}
                       className="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
                     >
-                      Go to Intake
+                      前往需求采集
                     </button>
                   </div>
                 </div>
@@ -768,7 +768,7 @@ export function ProjectWorkspacePage() {
               outlineReviewFlow.status === "running" && !chapterOutline ? (
                 <div className="h-full overflow-auto p-6">
                   <div className="rounded-lg border border-blue-200 bg-blue-50 p-6">
-                    <h2 className="text-base font-semibold text-blue-900">Preparing Outline Review</h2>
+                    <h2 className="text-base font-semibold text-blue-900">正在准备大纲审阅</h2>
                     <p className="mt-2 text-sm text-blue-800">{outlineReviewFlow.message}</p>
                     <div
                       data-testid="outline-review-progress"
@@ -781,31 +781,31 @@ export function ProjectWorkspacePage() {
               ) : outlineReviewFlow.status === "failed" && !chapterOutline ? (
                 <div className="h-full overflow-auto p-6">
                   <div className="rounded-lg border border-red-200 bg-red-50 p-6">
-                    <h2 className="text-base font-semibold text-red-900">Failed to enter Outline Review</h2>
+                    <h2 className="text-base font-semibold text-red-900">进入大纲审阅失败</h2>
                     <p className="mt-2 text-sm text-red-800">{outlineReviewFlow.message}</p>
                     <button
                       type="button"
                       onClick={() => setActiveTab("intake")}
                       className="mt-4 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
                     >
-                      Go to Intake
+                      前往需求采集
                     </button>
                   </div>
                 </div>
               ) : !chapterOutline && refinementStatus?.chapter_intake_required ? (
                 <div className="h-full overflow-auto p-6">
                   <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50 p-6">
-                    <h2 className="text-base font-semibold text-blue-900">Chapter Intake First</h2>
+                    <h2 className="text-base font-semibold text-blue-900">请先完成章节需求采集</h2>
                     <p className="mt-2 text-sm text-blue-800">
-                      The agent needs to collect chapter-level inputs and prepare a Chapter Outline draft before full
-                      Outline review starts.
+                      AI 助手需要先收集章节级信息并准备章节大纲草稿，然后才能开始完整的大纲审阅。
+
                     </p>
                     <button
                       type="button"
                       onClick={() => setActiveTab("intake")}
                       className="mt-4 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
                     >
-                      Go to Intake
+                      前往需求采集
                     </button>
                   </div>
                 </div>

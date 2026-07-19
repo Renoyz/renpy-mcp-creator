@@ -57,9 +57,9 @@ describe('ChapterOutlineWorkspaceView next-step CTA', () => {
 
     const header = screen.getByTestId('outline-review-header')
 
-    expect(header).toHaveTextContent('Review progress')
-    expect(header).toHaveTextContent('1 / 2 chapters confirmed')
-    expect(header).toHaveTextContent('1 remaining')
+    expect(header).toHaveTextContent('确认进度')
+    expect(header).toHaveTextContent('1 / 2 个章节已确认')
+    expect(header).toHaveTextContent('剩余 1 章')
   })
 
   it('should show freeze blueprint button when all chapters are confirmed', () => {
@@ -74,7 +74,7 @@ describe('ChapterOutlineWorkspaceView next-step CTA', () => {
     )
 
     expect(
-      screen.getByRole('button', { name: /freeze blueprint/i })
+      screen.getByRole('button', { name: /冻结蓝图/ })
     ).toBeInTheDocument()
   })
 
@@ -93,7 +93,7 @@ describe('ChapterOutlineWorkspaceView next-step CTA', () => {
     )
 
     expect(
-      screen.queryByRole('button', { name: /freeze blueprint/i })
+      screen.queryByRole('button', { name: /冻结蓝图/ })
     ).not.toBeInTheDocument()
   })
 
@@ -111,7 +111,7 @@ describe('ChapterOutlineWorkspaceView next-step CTA', () => {
       />
     )
 
-    const btn = screen.getByRole('button', { name: /freeze blueprint/i })
+    const btn = screen.getByRole('button', { name: /冻结蓝图/ })
     await user.click(btn)
 
     expect(onFreezeBlueprint).toHaveBeenCalledTimes(1)
@@ -132,15 +132,15 @@ describe('ChapterOutlineWorkspaceView action error handling', () => {
       />
     )
 
-    await user.click(screen.getByRole('button', { name: /^edit$/i }))
+    await user.click(screen.getByRole('button', { name: /^编辑$/ }))
     const nameInput = screen.getByDisplayValue('Chapter 1')
     await user.clear(nameInput)
     await user.type(nameInput, 'Renamed Chapter')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.click(screen.getByRole('button', { name: /保存/ }))
 
     const errorBox = await screen.findByTestId('outline-action-error')
     expect(errorBox).toHaveTextContent('outline save failed')
-    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /保存/ })).toBeInTheDocument()
     expect(screen.getByDisplayValue('Renamed Chapter')).toBeInTheDocument()
   })
 
@@ -157,7 +157,7 @@ describe('ChapterOutlineWorkspaceView action error handling', () => {
       />
     )
 
-    const confirmButtons = screen.getAllByRole('button', { name: /^confirm$/i })
+    const confirmButtons = screen.getAllByRole('button', { name: /^确认$/ })
     await user.click(confirmButtons[0])
 
     const errorBox = await screen.findByTestId('outline-action-error')

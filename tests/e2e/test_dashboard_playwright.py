@@ -153,13 +153,13 @@ def expect_new_project_intake_workspace(page: Page) -> None:
 
 def start_project_intake(page: Page) -> None:
     """Start the current Project Brief intake flow."""
-    start_btn = page.get_by_role("button", name="Start Intake with AI", exact=True)
+    start_btn = page.get_by_role("button", name="开始 AI 需求采集", exact=True)
     expect(start_btn).to_be_visible(timeout=10000)
     start_btn.click()
 
 
 def expect_project_intake_started(page: Page, chat_scope: Locator | None = None) -> None:
-    """Current intake startup state after the user clicks Start Intake with AI."""
+    """Current intake startup state after the user clicks 开始 AI 需求采集."""
     scope = chat_scope or page.locator("body")
     expect(scope).to_contain_text("Project Brief", timeout=15000)
     expect(page.locator("text=Agent Intake")).to_be_visible(timeout=10000)

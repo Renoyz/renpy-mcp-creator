@@ -56,44 +56,44 @@ export function GenerationFlowPanel({ generationState, busyAction }: Props) {
 
   const cards = [
     {
-      label: "Scene Packages",
+      label: "场景包",
       icon: <Layers3 className="h-4 w-4" />,
       status: sceneStatus,
       detail: sceneGeneration
-        ? `${sceneGeneration.completed_count} / ${sceneGeneration.total_count} chapters complete`
-        : "Derive scene packages from the frozen blueprint",
+        ? `${sceneGeneration.completed_count} / ${sceneGeneration.total_count} 个章节已完成`
+        : "从冻结的蓝图派生场景包",
     },
     {
-      label: "Character Assets",
+      label: "角色素材",
       icon: <UserRound className="h-4 w-4" />,
       status: atOrAfter(state, "character_assets_confirmed") ? "done" : state === "character_assets_draft" ? "review" : sceneStatus === "done" ? "ready" : "locked",
-      detail: `${characterCount} character slots`,
+      detail: `${characterCount} 个角色槽位`,
     },
     {
-      label: "Scene Backgrounds",
+      label: "场景背景",
       icon: <Image className="h-4 w-4" />,
       status: atOrAfter(state, "background_assets_confirmed") ? "done" : state === "background_assets_draft" ? "review" : atOrAfter(state, "character_assets_confirmed") ? "ready" : "locked",
-      detail: `${backgroundCount} background slots`,
+      detail: `${backgroundCount} 个背景槽位`,
     },
     {
-      label: "Script Preview",
+      label: "脚本预览",
       icon: <FileCode2 className="h-4 w-4" />,
       status: state === "committed" ? "done" : state === "script_preview" ? "review" : "locked",
       detail: generationState?.script_preview?.script_files?.length
-        ? `${generationState.script_preview.script_files.length} script files staged`
-        : "Preview generated Ren'Py script before writeback",
+        ? `已暂存 ${generationState.script_preview.script_files.length} 个脚本文件`
+        : "写回前预览生成的 Ren'Py 脚本",
     },
     {
-      label: "Build",
+      label: "构建",
       icon: <Package className="h-4 w-4" />,
       status: state === "committed" ? "ready" : "locked",
-      detail: "Build is available from the workspace header",
+      detail: "可在工作区顶部进行构建",
     },
     {
-      label: "Preview",
+      label: "预览",
       icon: <Play className="h-4 w-4" />,
       status: "locked",
-      detail: "Preview unlocks after a successful web build",
+      detail: "Web 构建成功后解锁预览",
     },
   ] satisfies Array<{ label: string; icon: React.ReactNode; status: FlowStatus; detail: string }>
 
@@ -101,8 +101,8 @@ export function GenerationFlowPanel({ generationState, busyAction }: Props) {
     <section data-testid="generation-flow-panel" className="rounded-lg border border-gray-200 bg-white p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-base font-semibold text-gray-900">Generation Flow</h3>
-          <p className="mt-1 text-sm text-gray-500">Track the production line from frozen blueprint to playable preview.</p>
+          <h3 className="text-base font-semibold text-gray-900">生成流程</h3>
+          <p className="mt-1 text-sm text-gray-500">跟踪从冻结蓝图到可游玩预览的生产线。</p>
         </div>
         <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600">{state}</span>
       </div>

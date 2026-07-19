@@ -27,7 +27,7 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
             active={activeTab === "scene"}
             onClick={() => onChange("scene")}
             icon={<Code className="w-4 h-4" />}
-            label="Scene"
+            label="场景"
           />
         </div>
         {onBackToOverview && (
@@ -36,7 +36,7 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
             className="flex items-center gap-1.5 mr-4 text-xs font-medium text-gray-600 hover:text-gray-900 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            Back to overview
+            返回总览
           </button>
         )}
       </div>
@@ -50,31 +50,31 @@ export function WorkspaceTabs({ activeTab, onChange, hasSceneSelected, onBackToO
           active={activeTab === "intake"}
           onClick={() => onChange("intake")}
           icon={<MessageSquarePlus className="w-4 h-4" />}
-          label="Intake"
+          label="需求采集"
         />
         <TabButton
           active={activeTab === "brief"}
           onClick={() => onChange("brief")}
           icon={<BookOpen className="w-4 h-4" />}
-          label="Brief"
+          label="项目简报"
         />
         <TabButton
           active={activeTab === "outline"}
           onClick={() => onChange("outline")}
           icon={<ListOrdered className="w-4 h-4" />}
-          label="Outline"
+          label="章节大纲"
         />
         <TabButton
           active={activeTab === "blueprint"}
           onClick={() => onChange("blueprint")}
           icon={<FileText className="w-4 h-4" />}
-          label="Blueprint"
+          label="蓝图"
         />
         <TabButton
           active={activeTab === "generation"}
           onClick={() => onChange("generation")}
           icon={<Code className="w-4 h-4" />}
-          label="Generation"
+          label="生成"
         />
         <TabButton
           active={activeTab === "storymap"}

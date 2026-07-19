@@ -139,7 +139,7 @@ export function ProjectSelectPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900">
-                AI Galgame Creator
+                RenPy MCP Creator
               </h1>
               <p className="text-xs text-gray-500">
                 本地优先的 Ren'Py 视觉小说创作工具

@@ -43,7 +43,7 @@ export function WorkflowStatusHeader({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide opacity-70">
             <span>
-              Step {workflow.currentStep} of {workflow.totalSteps}
+              第 {workflow.currentStep} 步 / 共 {workflow.totalSteps} 步
             </span>
             <span>/</span>
             <span>{projectName}</span>

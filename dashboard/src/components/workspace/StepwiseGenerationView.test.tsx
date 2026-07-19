@@ -78,8 +78,8 @@ describe("StepwiseGenerationView", () => {
 
     const characterSection = screen.getByTestId("character-assets-section");
 
-    expect(within(characterSection).getByRole("button", { name: "Confirm Characters" })).toBeEnabled();
-    expect(within(characterSection).getByRole("button", { name: "Accept" })).toBeEnabled();
+    expect(within(characterSection).getByRole("button", { name: "确认角色素材" })).toBeEnabled();
+    expect(within(characterSection).getByRole("button", { name: "验收" })).toBeEnabled();
   });
 
   it("shows derived character design metadata as a reviewable slot list", () => {
@@ -93,15 +93,15 @@ describe("StepwiseGenerationView", () => {
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
 
-    expect(screen.queryByText("No character slots yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无派生的角色槽位。")).not.toBeInTheDocument();
     expect(within(slotCard).getByText("Aya")).toBeInTheDocument();
     expect(within(slotCard).getByText(/Detective protagonist/)).toBeInTheDocument();
     expect(within(slotCard).getByText(/red coat, black notebook/)).toBeInTheDocument();
-    expect(within(slotCard).getByText(/Design source: blueprint/)).toBeInTheDocument();
+    expect(within(slotCard).getByText(/设计来源：blueprint/)).toBeInTheDocument();
     expect(within(slotCard).getByText("existing generated prompt")).toBeInTheDocument();
-    expect(within(slotCard).getByRole("button", { name: "Edit Prompt" })).toBeInTheDocument();
-    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
-    expect(within(slotCard).getByLabelText("Manual Upload")).toBeInTheDocument();
+    expect(within(slotCard).getByRole("button", { name: "编辑提示词" })).toBeInTheDocument();
+    expect(within(slotCard).getByRole("button", { name: "重新生成" })).toBeInTheDocument();
+    expect(within(slotCard).getByLabelText("手动上传")).toBeInTheDocument();
   });
 
   it("renders generated assets as list rows with thumbnail, description, prompt, and combined actions columns", () => {
@@ -121,9 +121,9 @@ describe("StepwiseGenerationView", () => {
     expect(within(columns[1]).getByText("Aya")).toBeInTheDocument();
     expect(within(columns[1]).getByText(/Detective protagonist/)).toBeInTheDocument();
     expect(within(columns[2]).getByText("existing generated prompt")).toBeInTheDocument();
-    expect(within(columns[2]).getByRole("button", { name: "Edit Prompt" })).toBeInTheDocument();
-    expect(within(columns[3]).getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
-    expect(within(columns[3]).getByLabelText("Manual Upload")).toBeInTheDocument();
+    expect(within(columns[2]).getByRole("button", { name: "编辑提示词" })).toBeInTheDocument();
+    expect(within(columns[3]).getByRole("button", { name: "重新生成" })).toBeInTheDocument();
+    expect(within(columns[3]).getByLabelText("手动上传")).toBeInTheDocument();
   });
 
   it("does not show manual target forms as the default empty-state workflow", () => {
@@ -139,8 +139,8 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    expect(screen.getByText("No derived character slots available.")).toBeInTheDocument();
-    expect(screen.getByText("No derived scene background slots available.")).toBeInTheDocument();
+    expect(screen.getByText("暂无派生的角色槽位。")).toBeInTheDocument();
+    expect(screen.getByText("暂无派生的场景背景槽位。")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("character name/id")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("scene id")).not.toBeInTheDocument();
     expect(screen.queryByText(/fallback/i)).not.toBeInTheDocument();
@@ -155,10 +155,10 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    expect(screen.getByText(/Manual progression:/)).toBeInTheDocument();
-    expect(screen.getByTestId("character-assets-section")).toHaveTextContent("Character Assets");
-    expect(screen.getByTestId("scene-backgrounds-section")).toHaveTextContent("Scene Backgrounds");
-    expect(screen.getByText("Script Preview & Commit")).toBeInTheDocument();
+    expect(screen.getByText(/手动流程：/)).toBeInTheDocument();
+    expect(screen.getByTestId("character-assets-section")).toHaveTextContent("角色素材");
+    expect(screen.getByTestId("scene-backgrounds-section")).toHaveTextContent("场景背景");
+    expect(screen.getByText("脚本预览与提交")).toBeInTheDocument();
   });
 
   it("renders a visible generation flow panel before asset tables", () => {
@@ -172,12 +172,12 @@ describe("StepwiseGenerationView", () => {
 
     const flow = screen.getByTestId("generation-flow-panel");
 
-    expect(flow).toHaveTextContent("Scene Packages");
-    expect(flow).toHaveTextContent("Character Assets");
-    expect(flow).toHaveTextContent("Scene Backgrounds");
-    expect(flow).toHaveTextContent("Script Preview");
-    expect(flow).toHaveTextContent("Build");
-    expect(flow).toHaveTextContent("Preview");
+    expect(flow).toHaveTextContent("场景包");
+    expect(flow).toHaveTextContent("角色素材");
+    expect(flow).toHaveTextContent("场景背景");
+    expect(flow).toHaveTextContent("脚本预览");
+    expect(flow).toHaveTextContent("构建");
+    expect(flow).toHaveTextContent("预览");
   });
 
   it("shows per-chapter scene package progress and generates all remaining chapters in one action", async () => {
@@ -235,14 +235,14 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    expect(screen.getByText("Scene Package Progress")).toBeInTheDocument();
-    expect(within(screen.getByTestId("scene-package-progress-panel")).getByText(/1\s*\/\s*2 chapters complete/)).toBeInTheDocument();
+    expect(screen.getByText("场景包进度")).toBeInTheDocument();
+    expect(within(screen.getByTestId("scene-package-progress-panel")).getByText(/1\s*\/\s*2 个章节已完成/)).toBeInTheDocument();
     expect(screen.getByText("Opening")).toBeInTheDocument();
     expect(screen.getByText("Aftermath")).toBeInTheDocument();
     expect(screen.getByText("complete")).toBeInTheDocument();
     expect(screen.getByText("pending")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Generate Scene Packages" }));
+    await user.click(screen.getByRole("button", { name: "生成场景包" }));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/projects/demo/scene-packages/generate", {
@@ -298,11 +298,11 @@ describe("StepwiseGenerationView", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: "Generate Scene Packages" }));
+    await user.click(screen.getByRole("button", { name: "生成场景包" }));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadGenerationState).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText("Scene package generation did not reach completion.")).not.toBeInTheDocument();
+    expect(screen.queryByText("场景包生成未全部完成。")).not.toBeInTheDocument();
   });
 
   it("shows scene background description field and edits prompt from a dialog", async () => {
@@ -322,12 +322,12 @@ describe("StepwiseGenerationView", () => {
     expect(within(slotCard).getByText("existing background prompt")).toBeInTheDocument();
     await user.clear(descriptionBox);
     await user.type(descriptionBox, "A moonlit cyberpunk alley.");
-    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    await user.click(within(slotCard).getByRole("button", { name: "编辑提示词" }));
     const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
     const promptBox = within(dialog).getByLabelText("scene_01 main prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "wide-angle alley backdrop");
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    await user.click(within(dialog).getByRole("button", { name: "完成" }));
 
     expect(descriptionBox).toHaveValue("A moonlit cyberpunk alley.");
     expect(within(slotCard).getByText("wide-angle alley backdrop")).toBeInTheDocument();
@@ -354,7 +354,7 @@ describe("StepwiseGenerationView", () => {
     const descriptionBox = within(slotCard).getByLabelText("scene_01 main description");
     await user.clear(descriptionBox);
     await user.type(descriptionBox, "Neon alley at night");
-    await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
+    await user.click(within(slotCard).getByRole("button", { name: "重新生成" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/demo/generation/backgrounds/scene_01/main/generate",
@@ -393,7 +393,7 @@ describe("StepwiseGenerationView", () => {
     await user.clear(descriptionBox);
     await user.type(descriptionBox, "Rainy moonlit alley");
 
-    const uploadInput = within(slotCard).getByLabelText("Manual Upload");
+    const uploadInput = within(slotCard).getByLabelText("手动上传");
     const file = new File(["fake"], "scene.png", { type: "image/png" });
     await user.upload(uploadInput, file);
 
@@ -429,13 +429,13 @@ describe("StepwiseGenerationView", () => {
     );
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    await user.click(within(slotCard).getByRole("button", { name: "编辑提示词" }));
     const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
     const promptBox = within(dialog).getByLabelText("Alice normal prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "new ink vampire sprite prompt");
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
-    await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
+    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    await user.click(within(slotCard).getByRole("button", { name: "重新生成" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/demo/generation/characters/assets/char_Alice_normal/generate",
@@ -485,7 +485,7 @@ describe("StepwiseGenerationView", () => {
     expect(screen.queryByTestId("slot-card-bg_polluted_main")).not.toBeInTheDocument();
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    await user.click(within(slotCard).getByRole("button", { name: "Regenerate" }));
+    await user.click(within(slotCard).getByRole("button", { name: "重新生成" }));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/projects/demo/generation/characters/assets/char_Alice_normal/generate");
@@ -512,13 +512,13 @@ describe("StepwiseGenerationView", () => {
     );
 
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    await user.click(within(slotCard).getByRole("button", { name: "Edit Prompt" }));
+    await user.click(within(slotCard).getByRole("button", { name: "编辑提示词" }));
     const dialog = screen.getByRole("dialog", { name: "Edit asset prompt" });
     const promptBox = within(dialog).getByLabelText("Alice normal prompt");
     await user.clear(promptBox);
     await user.type(promptBox, "replacement accepted sprite prompt");
-    await user.click(within(dialog).getByRole("button", { name: "Done" }));
-    await user.click(within(slotCard).getByRole("button", { name: "Regenerate accepted" }));
+    await user.click(within(dialog).getByRole("button", { name: "完成" }));
+    await user.click(within(slotCard).getByRole("button", { name: "重新生成（已验收）" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/projects/demo/generation/characters/assets/char_Alice_normal/generate",
@@ -538,18 +538,18 @@ describe("StepwiseGenerationView", () => {
         generationState={baseState("character_assets_draft")}
         loadGenerationState={vi.fn()}
         generationAllowed={false}
-        blockedReason="Freeze the blueprint to unlock generation"
+        blockedReason="冻结蓝图以解锁生成"
       />
     );
 
     expect(screen.getByTestId("generation-blocked-reason")).toHaveTextContent(
-      "Freeze the blueprint to unlock generation"
+      "冻结蓝图以解锁生成"
     );
-    expect(screen.getByRole("button", { name: "Start Characters" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始角色素材" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始场景背景" })).toBeDisabled();
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeDisabled();
-    expect(within(slotCard).getByLabelText("Manual Upload")).toBeDisabled();
+    expect(within(slotCard).getByRole("button", { name: "重新生成" })).toBeDisabled();
+    expect(within(slotCard).getByLabelText("手动上传")).toBeDisabled();
   });
 
   it("keeps start, generate, and upload actions enabled and hides the blocked reason when generation is allowed", () => {
@@ -564,9 +564,9 @@ describe("StepwiseGenerationView", () => {
     );
 
     expect(screen.queryByTestId("generation-blocked-reason")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Characters" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "开始角色素材" })).toBeEnabled();
     const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
-    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeEnabled();
-    expect(within(slotCard).getByLabelText("Manual Upload")).toBeEnabled();
+    expect(within(slotCard).getByRole("button", { name: "重新生成" })).toBeEnabled();
+    expect(within(slotCard).getByLabelText("手动上传")).toBeEnabled();
   });
 });

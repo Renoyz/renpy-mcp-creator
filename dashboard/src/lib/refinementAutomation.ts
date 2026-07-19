@@ -48,7 +48,7 @@ export async function runFreezeAutoGenerationChain({
   onProgress?.({
     status: "running",
     step: "freezing",
-    message: "Freezing blueprint...",
+    message: "正在冻结蓝图...",
   })
   await freezeBlueprint(projectName)
   await refreshProjectData(projectName)
@@ -56,7 +56,7 @@ export async function runFreezeAutoGenerationChain({
   onProgress?.({
     status: "running",
     step: "scene_packages",
-    message: "Generating scene packages from the frozen blueprint...",
+    message: "正在根据冻结蓝图生成场景包...",
   })
   const scenePhaseStartedAt = Date.now()
   let sceneAttempts = 0
@@ -68,7 +68,7 @@ export async function runFreezeAutoGenerationChain({
     })
     if (!sceneResp.ok) {
       const detail = await parseErrorDetail(sceneResp, `HTTP ${sceneResp.status}`)
-      throw new Error(`Scene package generation failed: ${detail}`)
+      throw new Error(`场景包生成失败：${detail}`)
     }
     const sceneBody = await sceneResp.json().catch(() => ({}))
     await refreshProjectData(projectName)
@@ -80,7 +80,7 @@ export async function runFreezeAutoGenerationChain({
       onProgress?.({
         status: "running",
         step: "scene_packages",
-        message: `Generating scene packages from the frozen blueprint... ${completed}/${total} chapters complete`,
+        message: `正在根据冻结蓝图生成场景包... 已完成 ${completed}/${total} 章`,
       })
     }
     const explicitComplete = sceneBody?.complete === true || sceneGeneration?.status === "complete"
@@ -93,7 +93,7 @@ export async function runFreezeAutoGenerationChain({
       Date.now() - scenePhaseStartedAt >= SCENE_PACKAGE_WALL_CLOCK_LIMIT_MS
     ) {
       throw new Error(
-        "Scene package generation did not complete in time. You can continue generation from the Generation tab."
+        "场景包生成未及时完成，你可以前往“生成”页继续。"
       )
     }
   }
@@ -101,7 +101,7 @@ export async function runFreezeAutoGenerationChain({
   onProgress?.({
     status: "running",
     step: "prototype",
-    message: "Generating prototype scripts from the scene packages...",
+    message: "正在根据场景包生成原型脚本...",
   })
   const protoResp = await request(`/api/projects/${encodeURIComponent(projectName)}/prototype/multi-chapter/generate`, {
     method: "POST",
@@ -109,14 +109,14 @@ export async function runFreezeAutoGenerationChain({
   })
   if (!protoResp.ok) {
     const detail = await parseErrorDetail(protoResp, `HTTP ${protoResp.status}`)
-    throw new Error(`Prototype generation failed: ${detail}`)
+    throw new Error(`原型生成失败：${detail}`)
   }
   await refreshProjectData(projectName)
 
   onProgress?.({
     status: "running",
     step: "activating",
-    message: "Activating generated prototype for build and preview...",
+    message: "正在激活生成的原型以用于构建和预览...",
   })
   const activateResp = await request(`/api/projects/${encodeURIComponent(projectName)}/prototype/multi-chapter/activate`, {
     method: "POST",
@@ -124,14 +124,14 @@ export async function runFreezeAutoGenerationChain({
   })
   if (!activateResp.ok) {
     const detail = await parseErrorDetail(activateResp, `HTTP ${activateResp.status}`)
-    throw new Error(`Prototype activation failed: ${detail}`)
+    throw new Error(`原型激活失败：${detail}`)
   }
   await refreshProjectData(projectName)
 
   onProgress?.({
     status: "success",
     step: "complete",
-    message: "Scene packages and prototype scripts are ready. Next step: Build the game. Preview unlocks after a successful build.",
+    message: "场景包与原型脚本已就绪。下一步：构建游戏。构建成功后解锁预览。",
   })
 }
 

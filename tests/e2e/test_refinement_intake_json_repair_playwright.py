@@ -146,14 +146,14 @@ def test_intake_malformed_json_auto_repair_promotes_to_brief_review(
     expect(chat.locator("text=JSON parse error")).to_have_count(0, timeout=10000)
 
     # Should show brief draft ready message after backend repairs malformed mock JSON.
-    expect(chat.locator("text=Enter Brief Review").first).to_be_visible(timeout=15000)
+    expect(chat.locator("text=进入简报审阅").first).to_be_visible(timeout=15000)
 
-    # --- Step 3: Enter Brief Review ---
+    # --- Step 3: 进入简报审阅 ---
     intake_tab = page.get_by_role("button", name="Intake", exact=True)
     expect(intake_tab).to_be_visible(timeout=5000)
     intake_tab.click()
 
-    enter_brief_btn = page.locator("button", has_text="Enter Brief Review")
+    enter_brief_btn = page.locator("button", has_text="进入简报审阅")
     expect(enter_brief_btn).to_be_visible(timeout=10000)
     enter_brief_btn.click()
 

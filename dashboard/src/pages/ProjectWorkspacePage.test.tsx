@@ -98,7 +98,7 @@ describe("ProjectWorkspacePage build controls", () => {
       </MemoryRouter>
     )
 
-    const webButton = await screen.findByRole("button", { name: "Primary action: Build Web Preview" })
+    const webButton = await screen.findByRole("button", { name: "Primary action: 构建 Web 预览" })
     await user.click(webButton)
 
     expect(fetchMock.mock.calls[2][0]).toBe("/api/projects/demo/prototype/status")
@@ -154,7 +154,7 @@ describe("ProjectWorkspacePage build controls", () => {
       </MemoryRouter>
     )
 
-    const windowsButton = await screen.findByRole("button", { name: /build windows package/i })
+    const windowsButton = await screen.findByRole("button", { name: /构建 Windows 包/ })
     await user.click(windowsButton)
 
     expect(fetchMock.mock.calls[2][0]).toBe("/api/projects/demo/prototype/status")
@@ -202,7 +202,7 @@ describe("ProjectWorkspacePage build controls", () => {
       </MemoryRouter>
     )
 
-    const windowsButton = await screen.findByRole("button", { name: /build windows package/i })
+    const windowsButton = await screen.findByRole("button", { name: /构建 Windows 包/ })
     await user.click(windowsButton)
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -214,8 +214,8 @@ describe("ProjectWorkspacePage build controls", () => {
         body: JSON.stringify({ target: "windows" }),
       })
     )
-    expect(screen.getByText("Preview available")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Primary action: Open Preview" })).toBeEnabled()
+    expect(screen.getByText("预览可用")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Primary action: 打开预览" })).toBeEnabled()
   })
 
   it("shows a workflow header with brief review as the primary action when intake is ready", async () => {
@@ -270,10 +270,10 @@ describe("ProjectWorkspacePage build controls", () => {
     )
 
     const header = await screen.findByTestId("workflow-status-header")
-    expect(header).toHaveTextContent("Step")
-    expect(header).toHaveTextContent("Brief review is ready")
+    expect(header).toHaveTextContent("第 2 步 / 共 10 步")
+    expect(header).toHaveTextContent("项目简报待审阅")
 
-    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+    await user.click(within(header).getByRole("button", { name: "Primary action: 进入简报审阅" }))
 
     expect(promoteBriefDraft).toHaveBeenCalledWith("demo")
   })
@@ -329,7 +329,7 @@ describe("ProjectWorkspacePage build controls", () => {
 
     const header = await screen.findByTestId("workflow-status-header")
     const blocker = within(header).getByTestId("workflow-blocker-chip")
-    expect(blocker).toHaveTextContent("Complete all Project Brief cards first")
+    expect(blocker).toHaveTextContent("请先完成所有项目简报卡片")
     expect(screen.queryByTestId("refinement-status-panel")).not.toBeInTheDocument()
   })
 
@@ -372,8 +372,8 @@ describe("ProjectWorkspacePage build controls", () => {
     )
 
     const header = await screen.findByTestId("workflow-status-header")
-    expect(header).toHaveTextContent("Blueprint freeze")
-    expect(within(header).getByRole("button", { name: "Primary action: Freeze Blueprint" })).toBeInTheDocument()
+    expect(header).toHaveTextContent("冻结蓝图")
+    expect(within(header).getByRole("button", { name: "Primary action: 冻结蓝图" })).toBeInTheDocument()
   })
 
   it("renders a workflow rail with production stages and scene navigation", async () => {
@@ -424,12 +424,12 @@ describe("ProjectWorkspacePage build controls", () => {
     )
 
     const rail = await screen.findByTestId("workflow-rail")
-    expect(rail).toHaveTextContent("Intake")
-    expect(rail).toHaveTextContent("Brief")
-    expect(rail).toHaveTextContent("Outline")
-    expect(rail).toHaveTextContent("Scene Packages")
-    expect(rail).toHaveTextContent("Build")
-    expect(rail).toHaveTextContent("Preview")
+    expect(rail).toHaveTextContent("需求采集")
+    expect(rail).toHaveTextContent("项目简报")
+    expect(rail).toHaveTextContent("章节大纲")
+    expect(rail).toHaveTextContent("场景包")
+    expect(rail).toHaveTextContent("构建")
+    expect(rail).toHaveTextContent("预览")
     expect(rail).toHaveTextContent("First clue")
   })
 })
@@ -503,12 +503,12 @@ describe("ProjectWorkspacePage brief promote flow", () => {
     )
 
     const header = await screen.findByTestId("workflow-status-header")
-    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+    await user.click(within(header).getByRole("button", { name: "Primary action: 进入简报审阅" }))
 
     const status = await screen.findByTestId("brief-review-status")
     expect(status).toHaveTextContent("Brief draft is not ready yet")
     expect(screen.getByTestId("intake-progress-panel")).toBeInTheDocument()
-    expect(screen.queryByText("Start in Intake first")).not.toBeInTheDocument()
+    expect(screen.queryByText("请先从需求采集开始")).not.toBeInTheDocument()
   })
 
   it("switches to the brief tab with a success status only after brief promote succeeds", async () => {
@@ -529,11 +529,11 @@ describe("ProjectWorkspacePage brief promote flow", () => {
     )
 
     const header = await screen.findByTestId("workflow-status-header")
-    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+    await user.click(within(header).getByRole("button", { name: "Primary action: 进入简报审阅" }))
 
     const status = await screen.findByTestId("brief-review-status")
-    expect(status).toHaveTextContent("Project Brief review is ready.")
-    expect(screen.getByText("No Project Brief yet")).toBeInTheDocument()
+    expect(status).toHaveTextContent("项目简报审阅已就绪。")
+    expect(screen.getByText("还没有项目简报")).toBeInTheDocument()
   })
 })
 
@@ -585,12 +585,12 @@ describe("ProjectWorkspacePage generation gating", () => {
       </MemoryRouter>
     )
 
-    await user.click(await screen.findByRole("button", { name: "Generation" }))
+    await user.click(await screen.findByRole("button", { name: "生成" }))
 
     const blocked = await screen.findByTestId("generation-blocked-reason")
-    expect(blocked).toHaveTextContent("Freeze the blueprint to unlock generation")
-    expect(screen.getByRole("button", { name: "Start Characters" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeDisabled()
+    expect(blocked).toHaveTextContent("冻结蓝图以解锁生成")
+    expect(screen.getByRole("button", { name: "开始角色素材" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "开始场景背景" })).toBeDisabled()
   })
 
   it("enables the generation tab start actions when generation is allowed", async () => {
@@ -619,11 +619,11 @@ describe("ProjectWorkspacePage generation gating", () => {
       </MemoryRouter>
     )
 
-    await user.click(await screen.findByRole("button", { name: "Generation" }))
+    await user.click(await screen.findByRole("button", { name: "生成" }))
 
-    await screen.findByRole("button", { name: "Start Characters" })
+    await screen.findByRole("button", { name: "开始角色素材" })
     expect(screen.queryByTestId("generation-blocked-reason")).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Start Characters" })).toBeEnabled()
-    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "开始角色素材" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "开始场景背景" })).toBeEnabled()
   })
 })

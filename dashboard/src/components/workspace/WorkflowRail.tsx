@@ -34,7 +34,7 @@ export function WorkflowRail({ stages, chapters, selectedSceneId, onSelectScene 
     <aside data-testid="workflow-rail" className="flex h-full w-full flex-col bg-slate-50">
       <div className="border-b border-slate-200 p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Production Flow</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">制作流程</h3>
           <Circle className="h-3 w-3 text-blue-500" />
         </div>
         <div className="space-y-1.5">

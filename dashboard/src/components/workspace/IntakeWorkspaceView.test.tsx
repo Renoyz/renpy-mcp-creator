@@ -69,16 +69,16 @@ describe("IntakeWorkspaceView outline progress", () => {
     )
 
     const progress = screen.getByTestId("intake-progress-panel")
-    expect(progress).toHaveTextContent("Project intake progress")
-    expect(progress).toHaveTextContent("2 / 9 slots collected")
-    expect(progress).toHaveTextContent("7 remaining")
-    expect(progress).toHaveTextContent("Next: keep chatting with AI")
+    expect(progress).toHaveTextContent("项目采集进度")
+    expect(progress).toHaveTextContent("2 / 9 项已收集")
+    expect(progress).toHaveTextContent("剩余 7 项")
+    expect(progress).toHaveTextContent("下一步：继续与 AI 对话")
 
     const requirements = screen.getByTestId("intake-requirements-grid")
-    expect(requirements).toHaveTextContent("Requirements")
-    expect(requirements).toHaveTextContent("Core Premise")
-    expect(requirements).toHaveTextContent("Complete")
-    expect(requirements).toHaveTextContent("Missing")
+    expect(requirements).toHaveTextContent("需求清单")
+    expect(requirements).toHaveTextContent("核心设定")
+    expect(requirements).toHaveTextContent("已完成")
+    expect(requirements).toHaveTextContent("缺失")
   })
 
   it("moves project intake to brief review when all required slots are collected", () => {
@@ -110,8 +110,8 @@ describe("IntakeWorkspaceView outline progress", () => {
       />
     )
 
-    expect(screen.getByTestId("intake-progress-panel")).toHaveTextContent("Next: enter Brief Review")
-    expect(screen.getByRole("button", { name: /enter brief review/i })).toBeInTheDocument()
+    expect(screen.getByTestId("intake-progress-panel")).toHaveTextContent("下一步：进入简报审阅")
+    expect(screen.getByRole("button", { name: /进入简报审阅/ })).toBeInTheDocument()
   })
 
   it("shows outline generation progress while chapter intake is still in progress", () => {
@@ -124,10 +124,10 @@ describe("IntakeWorkspaceView outline progress", () => {
       />
     )
 
-    expect(screen.getByText(/preparing outline review/i)).toBeInTheDocument()
+    expect(screen.getByText(/正在准备大纲审阅/)).toBeInTheDocument()
     expect(screen.getByTestId("outline-phase-progress")).toBeInTheDocument()
     expect(
-      screen.queryByRole("button", { name: /enter outline review/i })
+      screen.queryByRole("button", { name: /进入大纲审阅/ })
     ).not.toBeInTheDocument()
   })
 
@@ -141,6 +141,6 @@ describe("IntakeWorkspaceView outline progress", () => {
       />
     )
 
-    expect(screen.getByRole("button", { name: /enter outline review/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /进入大纲审阅/ })).toBeInTheDocument()
   })
 })

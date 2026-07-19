@@ -27,24 +27,24 @@ function buildDefaultPrompt(kind: AssetSlot["kind"], target: string, variant: st
 }
 
 function promptPlaceholder(kind: AssetSlot["kind"], target: string, variant: string) {
-  return `${buildDefaultPrompt(kind, target, variant)}. Leave blank to use the backend default prompt.`;
+  return `${buildDefaultPrompt(kind, target, variant)}。留空则使用后端默认提示词。`;
 }
 
 function descriptionPlaceholder(description?: string | null) {
-  return description?.trim().length ? description : "Describe the scene background composition and mood.";
+  return description?.trim().length ? description : "描述场景背景的构图与氛围。";
 }
 
 function prettyValidation(slot: AssetSlot): string | null {
   if (!slot.validation) return null;
   const base = `${slot.validation.width}x${slot.validation.height} (${slot.validation.reason})`;
   if (slot.kind === "background" && !slot.validation.ok) {
-    return `Image is usable, but it is not close to 16:9 and may be cropped in preview: ${base}`;
+    return `图片可用，但比例不接近 16:9，预览中可能被裁剪：${base}`;
   }
   if (slot.kind === "character_sprite" && !slot.renderable) {
-    return `This sprite has no transparent background: ${base}`;
+    return `该立绘没有透明背景：${base}`;
   }
   if (!slot.validation.ok) {
-    return `Validation warning: ${base}`;
+    return `校验警告：${base}`;
   }
   return null;
 }
@@ -97,9 +97,9 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     try {
       await action();
       await loadGenerationState(projectName);
-      setActionMessage("Operation completed.");
+      setActionMessage("操作已完成。");
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Operation failed";
+      const msg = error instanceof Error ? error.message : "操作失败";
       setActionError(msg);
     } finally {
       setBusyAction(null);
@@ -108,7 +108,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
   const parseError = async (response: Response) => {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.detail || `Request failed (${response.status})`);
+    throw new Error(data.detail || `请求失败 (${response.status})`);
   };
 
   const buildGenerationPayload = ({ prompt, replace, description }: GenerationRequestPayload) => {
@@ -167,7 +167,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
         }
       }
       if (!complete) {
-        throw new Error("Scene package generation did not reach completion.");
+        throw new Error("场景包生成未全部完成。");
       }
     });
 
@@ -380,7 +380,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             />
           ) : (
             <div className="flex h-24 w-24 items-center justify-center rounded border border-dashed border-gray-300 bg-gray-50 text-xs text-gray-400">
-              No image
+              暂无图片
             </div>
           )}
         </div>
@@ -388,40 +388,40 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           <div className="font-medium text-gray-900">
             {slot.display_name || slot.target} <span className="text-xs text-gray-500">({slot.variant})</span>
           </div>
-          <div className="mt-1 text-xs text-gray-500">Source: {slot.source ?? "none"}</div>
-          {slot.character_source ? <div className="text-xs text-gray-500">Design source: {slot.character_source}</div> : null}
+          <div className="mt-1 text-xs text-gray-500">来源：{slot.source ?? "无"}</div>
+          {slot.character_source ? <div className="text-xs text-gray-500">设计来源：{slot.character_source}</div> : null}
           {slot.status === "accepted" ? (
             <span className="mt-2 inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs text-green-700">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Accepted
+              已验收
             </span>
           ) : (
             <span className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusChipClass(slot.status)}`}>
               {slot.status}
             </span>
           )}
-          {slot.role ? <p className="mt-2 text-xs text-gray-700"><span className="font-medium">Role:</span> {slot.role}</p> : null}
+          {slot.role ? <p className="mt-2 text-xs text-gray-700"><span className="font-medium">定位：</span> {slot.role}</p> : null}
           {slot.appearance ? (
-            <p className="mt-1 line-clamp-3 text-xs text-gray-700"><span className="font-medium">Appearance:</span> {slot.appearance}</p>
+            <p className="mt-1 line-clamp-3 text-xs text-gray-700"><span className="font-medium">外观：</span> {slot.appearance}</p>
           ) : null}
           {!isCharacter && slot.description ? (
-            <p className="mt-2 line-clamp-3 text-xs text-gray-700"><span className="font-medium">Description:</span> {slot.description}</p>
+            <p className="mt-2 line-clamp-3 text-xs text-gray-700"><span className="font-medium">描述：</span> {slot.description}</p>
           ) : null}
           {validationMessage ? (
             <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
               {isCharacter && slot.renderable === false ? (
                 <div className="mb-1 flex items-start gap-1">
                   <AlertCircle className="mt-0.5 h-3.5 w-3.5" />
-                  <span>No transparent background.</span>
+                  <span>无透明背景。</span>
                 </div>
               ) : null}
               <p>{validationMessage}</p>
             </div>
           ) : null}
-          {slot.placeholder && <div className="mt-2 text-xs text-gray-500">Placeholder slot</div>}
+          {slot.placeholder && <div className="mt-2 text-xs text-gray-500">占位槽位</div>}
           {slot.kind === "background" ? (
             <label className="mt-3 block text-xs font-medium text-gray-700">
-              Editable description
+              可编辑描述
               <textarea
                 aria-label={`${slot.target} ${slot.variant} description`}
                 className="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm"
@@ -445,13 +445,13 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               disabled={acceptDisabled}
               className="mt-2 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {busyAction === `accept-${slot.asset_id}` ? "Accepting..." : isCharacter && slot.renderable === false ? "Accept as non-renderable" : "Accept"}
+              {busyAction === `accept-${slot.asset_id}` ? "验收中..." : isCharacter && slot.renderable === false ? "按不可渲染验收" : "验收"}
             </button>
           ) : null}
         </div>
         <div role="cell">
           <div className="text-xs font-medium text-gray-700">
-            Prompt
+            提示词
           </div>
           <p className="mt-1 line-clamp-3 whitespace-pre-wrap rounded-md border border-gray-200 bg-gray-50 p-2 text-xs text-gray-700">
             {prompt || slot.generation_prompt || slot.prompt || promptPlaceholder(slot.kind, slot.target, slot.variant)}
@@ -461,7 +461,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             onClick={() => setPromptEditorSlotId(slot.asset_id)}
             className="mt-2 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
           >
-            Edit Prompt
+            编辑提示词
           </button>
         </div>
         <div role="cell">
@@ -479,12 +479,12 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             disabled={!canGenerateSlot || busyAction === `generate-${slot.asset_id}`}
             className="w-full whitespace-normal rounded-md bg-gray-900 px-2 py-2 text-xs font-medium leading-snug text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {slot.status === "empty" ? "Generate with AI" : isAccepted ? "Regenerate accepted" : "Regenerate"}
+            {slot.status === "empty" ? "使用 AI 生成" : isAccepted ? "重新生成（已验收）" : "重新生成"}
           </button>
-          {isAccepted ? <p className="mt-2 text-xs text-amber-700">Requires re-accept after regeneration.</p> : null}
+          {isAccepted ? <p className="mt-2 text-xs text-amber-700">重新生成后需要重新验收。</p> : null}
           <label className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-300 px-2 py-2 text-xs font-medium">
             <Upload className="h-4 w-4" />
-            Manual Upload
+            手动上传
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
@@ -518,10 +518,10 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Stepwise Generation</h2>
-              <p className="mt-1 text-sm text-gray-500">Current state: {activeState}</p>
+              <h2 className="text-base font-semibold text-gray-900">分步生成</h2>
+              <p className="mt-1 text-sm text-gray-500">当前状态：{activeState}</p>
               <p className="mt-1 text-xs text-gray-500">
-                Manual progression: Character Assets -&gt; Scene Backgrounds -&gt; Script Preview &amp; Commit; Build is outside this tab.
+                手动流程：角色素材 -&gt; 场景背景 -&gt; 脚本预览与提交；构建在本页之外进行。
               </p>
             </div>
             <button
@@ -530,7 +530,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               <RefreshCw className="h-4 w-4" />
-              Refresh
+              刷新
             </button>
           </div>
           {actionMessage && <div className="mt-3 text-sm text-green-700">{actionMessage}</div>}
@@ -546,10 +546,10 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           <div data-testid="scene-package-progress-panel" className="rounded-lg border border-gray-200 bg-white p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">Scene Package Progress</h3>
+                <h3 className="text-sm font-semibold text-gray-900">场景包进度</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  {sceneGeneration.completed_count} / {sceneGeneration.total_count} chapters complete
-                  {sceneGeneration.current_chapter_id ? ` · current: ${sceneGeneration.current_chapter_id}` : ""}
+                  {sceneGeneration.completed_count} / {sceneGeneration.total_count} 个章节已完成
+                  {sceneGeneration.current_chapter_id ? ` · 当前：${sceneGeneration.current_chapter_id}` : ""}
                 </p>
               </div>
               <button
@@ -558,7 +558,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 disabled={!canGenerateScenePackages || busyAction === "scene-packages-all"}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "scene-packages-all" ? "Generating..." : "Generate Scene Packages"}
+                {busyAction === "scene-packages-all" ? "生成中..." : "生成场景包"}
               </button>
             </div>
             {sceneGeneration.chapters.length > 0 && (
@@ -589,7 +589,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                         {chapter.status}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500">{chapter.scene_count} scenes</div>
+                    <div className="text-xs text-gray-500">{chapter.scene_count} 个场景</div>
                   </div>
                 ))}
               </div>
@@ -599,7 +599,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
         <div data-testid="character-assets-section" className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-gray-900">Character Assets</h3>
+            <h3 className="text-sm font-semibold text-gray-900">角色素材</h3>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -607,7 +607,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 disabled={busyAction !== null || !generationAllowed}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "start-characters" ? "Starting..." : "Start Characters"}
+                {busyAction === "start-characters" ? "启动中..." : "开始角色素材"}
               </button>
               <button
                 type="button"
@@ -616,25 +616,25 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 style={{ display: canConfirmCharacters ? "inline-block" : "none" }}
                 className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "confirm-characters" ? "Confirming..." : "Confirm Characters"}
+                {busyAction === "confirm-characters" ? "确认中..." : "确认角色素材"}
               </button>
             </div>
           </div>
 
           {characters.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm font-medium text-gray-800">No derived character slots available.</p>
+              <p className="text-sm font-medium text-gray-800">暂无派生的角色槽位。</p>
               <p className="mt-1 text-xs text-gray-500">
-                Confirm or refresh the frozen blueprint so character designs can be listed here before asset generation.
+                请确认或刷新已冻结的蓝图，以便在素材生成前列出角色设计。
               </p>
             </div>
           ) : (
             <div role="table" className="mt-3 overflow-x-auto rounded-md border border-gray-200">
               <div role="row" className="hidden min-w-[980px] bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(240px,1.1fr)_minmax(260px,1fr)_220px]">
-                <div role="columnheader">Thumbnail</div>
-                <div role="columnheader">Description</div>
-                <div role="columnheader">Prompt</div>
-                <div role="columnheader">Actions</div>
+                <div role="columnheader">缩略图</div>
+                <div role="columnheader">描述</div>
+                <div role="columnheader">提示词</div>
+                <div role="columnheader">操作</div>
               </div>
               {characters.map((slot) => assetRow(slot))}
             </div>
@@ -643,7 +643,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
         <div data-testid="scene-backgrounds-section" className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-gray-900">Scene Backgrounds</h3>
+            <h3 className="text-sm font-semibold text-gray-900">场景背景</h3>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -651,7 +651,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 disabled={busyAction !== null || !generationAllowed}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "start-backgrounds" ? "Starting..." : "Start Backgrounds"}
+                {busyAction === "start-backgrounds" ? "启动中..." : "开始场景背景"}
               </button>
               <button
                 type="button"
@@ -660,25 +660,25 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 style={{ display: canConfirmBackgrounds ? "inline-block" : "none" }}
                 className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "confirm-backgrounds" ? "Confirming..." : "Confirm Backgrounds"}
+                {busyAction === "confirm-backgrounds" ? "确认中..." : "确认场景背景"}
               </button>
             </div>
           </div>
 
           {backgrounds.length === 0 ? (
             <div className="mt-4 rounded-md border border-dashed border-gray-300 bg-gray-50 p-4">
-              <p className="text-sm font-medium text-gray-800">No derived scene background slots available.</p>
+              <p className="text-sm font-medium text-gray-800">暂无派生的场景背景槽位。</p>
               <p className="mt-1 text-xs text-gray-500">
-                Generate scene packages from the frozen blueprint so each scene can expose an AI generation/upload entry.
+                请从冻结的蓝图生成场景包，让每个场景都提供 AI 生成 / 上传入口。
               </p>
             </div>
           ) : (
             <div role="table" className="mt-3 overflow-x-auto rounded-md border border-gray-200">
               <div role="row" className="hidden min-w-[980px] bg-gray-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 xl:grid xl:grid-cols-[96px_minmax(240px,1.1fr)_minmax(260px,1fr)_220px]">
-                <div role="columnheader">Thumbnail</div>
-                <div role="columnheader">Description</div>
-                <div role="columnheader">Prompt</div>
-                <div role="columnheader">Actions</div>
+                <div role="columnheader">缩略图</div>
+                <div role="columnheader">描述</div>
+                <div role="columnheader">提示词</div>
+                <div role="columnheader">操作</div>
               </div>
               {backgrounds.map((slot) => assetRow(slot))}
             </div>
@@ -687,7 +687,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
 
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-gray-900">Script Preview &amp; Commit</h3>
+            <h3 className="text-sm font-semibold text-gray-900">脚本预览与提交</h3>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -696,7 +696,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 className="inline-flex items-center gap-1 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Play className="h-4 w-4" />
-                {busyAction === "preview-script" ? "Generating..." : "Generate Preview Script"}
+                {busyAction === "preview-script" ? "生成中..." : "生成预览脚本"}
               </button>
               <button
                 type="button"
@@ -704,15 +704,15 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 disabled={busyAction !== null || activeState !== "script_preview"}
                 className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {busyAction === "commit-script" ? "Committing..." : "Commit Preview Script"}
+                {busyAction === "commit-script" ? "提交中..." : "提交预览脚本"}
               </button>
             </div>
           </div>
           {generationState?.script_preview?.staging_path && (
-            <p className="mt-2 text-xs text-gray-500">Last staging script: {generationState.script_preview.staging_path}</p>
+            <p className="mt-2 text-xs text-gray-500">最近暂存脚本：{generationState.script_preview.staging_path}</p>
           )}
           {previewScriptFiles.length > 0 && (
-            <p className="mt-2 text-xs text-gray-500">Script files: {previewScriptFiles.join(", ")}</p>
+            <p className="mt-2 text-xs text-gray-500">脚本文件：{previewScriptFiles.join(", ")}</p>
           )}
           {previewScript && (
             <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800">
@@ -720,7 +720,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             </pre>
           )}
           {generationState?.script_preview?.chapter_ids && generationState.script_preview.chapter_ids.length > 0 && (
-            <p className="mt-2 text-xs text-gray-500">Chapter IDs: {generationState.script_preview.chapter_ids.join(", ")}</p>
+            <p className="mt-2 text-xs text-gray-500">章节 ID：{generationState.script_preview.chapter_ids.join(", ")}</p>
           )}
         </div>
       </div>
@@ -734,7 +734,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-base font-semibold text-gray-900">Edit Prompt</h3>
+                <h3 className="text-base font-semibold text-gray-900">编辑提示词</h3>
                 <p className="mt-1 text-sm text-gray-500">
                   {promptEditorSlot.display_name || promptEditorSlot.target} ({promptEditorSlot.variant})
                 </p>
@@ -744,11 +744,11 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 onClick={() => setPromptEditorSlotId(null)}
                 className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-700"
               >
-                Close
+                关闭
               </button>
             </div>
             <label className="mt-4 block text-sm font-medium text-gray-700">
-              Prompt
+              提示词
               <textarea
                 aria-label={`${promptEditorSlot.target} ${promptEditorSlot.variant} prompt`}
                 className="mt-1 block min-h-56 w-full rounded-md border border-gray-300 p-3 text-sm"
@@ -769,7 +769,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
                 onClick={() => setPromptEditorSlotId(null)}
                 className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white"
               >
-                Done
+                完成
               </button>
             </div>
           </div>
