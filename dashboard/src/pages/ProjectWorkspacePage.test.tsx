@@ -433,3 +433,197 @@ describe("ProjectWorkspacePage build controls", () => {
     expect(rail).toHaveTextContent("First clue")
   })
 })
+
+describe("ProjectWorkspacePage brief promote flow", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.mocked(useProject).mockReset()
+  })
+
+  const briefReadyContext = {
+    ...baseContext,
+    blueprint: null,
+    brief: null,
+    refinementIntake: {
+      phase: "project",
+      current_summary: "The detective premise is ready for review.",
+      missing_slots: [],
+      slots: {},
+      brief_draft_ready: true,
+      chapter_draft: [],
+      outline_draft_ready: false,
+      updated_at: "2026-04-27T00:00:00",
+    },
+    refinementStatus: {
+      refinement_state: "intake_ready",
+      brief_fully_confirmed: false,
+      outline_fully_confirmed: false,
+      blueprint_ready: false,
+      freeze_allowed: false,
+      blueprint_freeze_status: null,
+      generation_allowed: false,
+    },
+  }
+
+  const stubStatusFetches = () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+  }
+
+  it("keeps the user on the intake tab and shows an inline error when brief promote fails", async () => {
+    const user = userEvent.setup()
+    const promoteBriefDraft = vi.fn().mockRejectedValue(new Error("Brief draft is not ready yet"))
+    vi.mocked(useProject).mockReturnValue({
+      ...briefReadyContext,
+      refinementStatus: {
+        ...briefReadyContext.refinementStatus,
+        intake_required: true,
+      },
+      promoteBriefDraft,
+    } as never)
+    stubStatusFetches()
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByTestId("workflow-status-header")
+    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+
+    const status = await screen.findByTestId("brief-review-status")
+    expect(status).toHaveTextContent("Brief draft is not ready yet")
+    expect(screen.getByTestId("intake-progress-panel")).toBeInTheDocument()
+    expect(screen.queryByText("Start in Intake first")).not.toBeInTheDocument()
+  })
+
+  it("switches to the brief tab with a success status only after brief promote succeeds", async () => {
+    const user = userEvent.setup()
+    const promoteBriefDraft = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(useProject).mockReturnValue({
+      ...briefReadyContext,
+      promoteBriefDraft,
+    } as never)
+    stubStatusFetches()
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    const header = await screen.findByTestId("workflow-status-header")
+    await user.click(within(header).getByRole("button", { name: "Primary action: Enter Brief Review" }))
+
+    const status = await screen.findByTestId("brief-review-status")
+    expect(status).toHaveTextContent("Project Brief review is ready.")
+    expect(screen.getByText("No Project Brief yet")).toBeInTheDocument()
+  })
+})
+
+describe("ProjectWorkspacePage generation gating", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.mocked(useProject).mockReset()
+  })
+
+  const stubStatusFetches = () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+  }
+
+  it("disables the generation tab start actions until the blueprint is frozen", async () => {
+    const user = userEvent.setup()
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      brief: { cards: {}, updated_at: "2026-04-27T00:00:00" },
+      chapterOutline: { chapters: [], updated_at: "2026-04-27T00:00:00" },
+      refinementStatus: {
+        refinement_state: "outline_confirmed",
+        brief_fully_confirmed: true,
+        outline_fully_confirmed: true,
+        blueprint_ready: true,
+        freeze_allowed: true,
+        blueprint_freeze_status: "draft",
+        generation_allowed: false,
+      },
+    } as never)
+    stubStatusFetches()
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await user.click(await screen.findByRole("button", { name: "Generation" }))
+
+    const blocked = await screen.findByTestId("generation-blocked-reason")
+    expect(blocked).toHaveTextContent("Freeze the blueprint to unlock generation")
+    expect(screen.getByRole("button", { name: "Start Characters" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeDisabled()
+  })
+
+  it("enables the generation tab start actions when generation is allowed", async () => {
+    const user = userEvent.setup()
+    vi.mocked(useProject).mockReturnValue({
+      ...baseContext,
+      brief: { cards: {}, updated_at: "2026-04-27T00:00:00" },
+      chapterOutline: { chapters: [], updated_at: "2026-04-27T00:00:00" },
+      refinementStatus: {
+        refinement_state: "blueprint_ready",
+        brief_fully_confirmed: true,
+        outline_fully_confirmed: true,
+        blueprint_ready: true,
+        freeze_allowed: false,
+        blueprint_freeze_status: "frozen",
+        generation_allowed: true,
+      },
+    } as never)
+    stubStatusFetches()
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    await user.click(await screen.findByRole("button", { name: "Generation" }))
+
+    await screen.findByRole("button", { name: "Start Characters" })
+    expect(screen.queryByTestId("generation-blocked-reason")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Start Characters" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeEnabled()
+  })
+})

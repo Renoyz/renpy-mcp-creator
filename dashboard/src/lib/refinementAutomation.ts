@@ -36,6 +36,8 @@ async function parseErrorDetail(resp: ResponseLike, fallback: string): Promise<s
   return fallback
 }
 
+const SCENE_PACKAGE_WALL_CLOCK_LIMIT_MS = 15 * 60 * 1000
+
 export async function runFreezeAutoGenerationChain({
   projectName,
   freezeBlueprint,
@@ -56,7 +58,10 @@ export async function runFreezeAutoGenerationChain({
     step: "scene_packages",
     message: "Generating scene packages from the frozen blueprint...",
   })
+  const scenePhaseStartedAt = Date.now()
+  let sceneAttempts = 0
   while (true) {
+    sceneAttempts += 1
     const sceneResp = await request(`/api/projects/${encodeURIComponent(projectName)}/scene-packages/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -70,6 +75,7 @@ export async function runFreezeAutoGenerationChain({
     const sceneGeneration = sceneBody?.scene_generation
     const completed = Number(sceneGeneration?.completed_count ?? 0)
     const total = Number(sceneGeneration?.total_count ?? 0)
+    const maxSceneAttempts = Math.max(12, (Number.isFinite(total) ? total : 0) * 3)
     if (total > 0) {
       onProgress?.({
         status: "running",
@@ -81,6 +87,14 @@ export async function runFreezeAutoGenerationChain({
     const legacyComplete = sceneBody?.complete === undefined && sceneGeneration === undefined
     if (explicitComplete || legacyComplete) {
       break
+    }
+    if (
+      sceneAttempts >= maxSceneAttempts ||
+      Date.now() - scenePhaseStartedAt >= SCENE_PACKAGE_WALL_CLOCK_LIMIT_MS
+    ) {
+      throw new Error(
+        "Scene package generation did not complete in time. You can continue generation from the Generation tab."
+      )
     }
   }
 

@@ -81,6 +81,7 @@ export function ProjectWorkspacePage() {
   const [previewAvailable, setPreviewAvailable] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<string>("idle");
   const [outlineReviewFlow, setOutlineReviewFlow] = useState<FlowBanner>({ status: "idle", message: "", step: null });
+  const [briefReviewFlow, setBriefReviewFlow] = useState<FlowBanner>({ status: "idle", message: "", step: null });
   const [postFreezeFlow, setPostFreezeFlow] = useState<FlowBanner>({ status: "idle", message: "", step: null });
 
   // Derive the active project name as a stable primitive.
@@ -146,6 +147,7 @@ export function ProjectWorkspacePage() {
     setPreviewAvailable(false);
     setPipelineStage("idle");
     setOutlineReviewFlow({ status: "idle", message: "", step: null });
+    setBriefReviewFlow({ status: "idle", message: "", step: null });
     setPostFreezeFlow({ status: "idle", message: "", step: null });
     autoRouteTokenRef.current = 0;
   }, [name]);
@@ -369,8 +371,22 @@ export function ProjectWorkspacePage() {
 
   const handlePromoteBriefDraft = async () => {
     if (!activeProjectName) return;
-    setActiveTab("brief");
-    await promoteBriefDraft(activeProjectName);
+    setBriefReviewFlow({
+      status: "running",
+      step: "brief_promote",
+      message: "Preparing Project Brief review...",
+    });
+    try {
+      await promoteBriefDraft(activeProjectName);
+      setBriefReviewFlow({ status: "success", step: "brief_ready", message: "Project Brief review is ready." });
+      setActiveTab("brief");
+    } catch (e) {
+      setBriefReviewFlow({
+        status: "failed",
+        step: "brief_failed",
+        message: e instanceof Error ? e.message : "Failed to enter Project Brief review.",
+      });
+    }
   };
 
   const handlePromoteOutlineDraft = async () => {
@@ -448,6 +464,12 @@ export function ProjectWorkspacePage() {
     }
     return null;
   })();
+
+  const generationAllowed =
+    refinementStatus?.generation_allowed ?? (refinementStatus?.blueprint_freeze_status === "frozen");
+  const generationBlockedReason = generationAllowed
+    ? null
+    : refinementStatusNote?.message ?? "Freeze the blueprint to unlock generation";
 
   const handleWorkflowAction = (action: WorkflowAction) => {
     if (action === "open_intake") {
@@ -606,6 +628,20 @@ export function ProjectWorkspacePage() {
             }`}
           >
             {postFreezeFlow.message}
+          </div>
+        )}
+        {briefReviewFlow.status !== "idle" && (
+          <div
+            data-testid="brief-review-status"
+            className={`mt-2 rounded-md p-2 text-xs ${
+              briefReviewFlow.status === "failed"
+                ? "bg-red-50 text-red-700"
+                : briefReviewFlow.status === "success"
+                ? "bg-green-50 text-green-700"
+                : "bg-blue-50 text-blue-700"
+            }`}
+          >
+            {briefReviewFlow.message}
           </div>
         )}
         {canRunBuildPreview && buildMessage && (
@@ -822,6 +858,8 @@ export function ProjectWorkspacePage() {
                 projectName={activeProjectName}
                 generationState={generationState}
                 loadGenerationState={loadGenerationState}
+                generationAllowed={generationAllowed}
+                blockedReason={generationBlockedReason}
               />
             )}
             {activeTab === "gameshell" && (

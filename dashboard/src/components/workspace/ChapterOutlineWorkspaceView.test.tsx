@@ -117,3 +117,51 @@ describe('ChapterOutlineWorkspaceView next-step CTA', () => {
     expect(onFreezeBlueprint).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('ChapterOutlineWorkspaceView action error handling', () => {
+  it('should keep the draft and show an inline error when saving fails', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockRejectedValue(new Error('outline save failed'))
+
+    render(
+      <ChapterOutlineWorkspaceView
+        outline={createOutline(false)}
+        projectName="test"
+        onSave={onSave}
+        onConfirmChapter={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /^edit$/i }))
+    const nameInput = screen.getByDisplayValue('Chapter 1')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Renamed Chapter')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    const errorBox = await screen.findByTestId('outline-action-error')
+    expect(errorBox).toHaveTextContent('outline save failed')
+    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Renamed Chapter')).toBeInTheDocument()
+  })
+
+  it('should show an inline error and re-enable the chapter when confirming fails', async () => {
+    const user = userEvent.setup()
+    const onConfirmChapter = vi.fn().mockRejectedValue(new Error('chapter confirm failed'))
+
+    render(
+      <ChapterOutlineWorkspaceView
+        outline={createOutline(false)}
+        projectName="test"
+        onSave={vi.fn()}
+        onConfirmChapter={onConfirmChapter}
+      />
+    )
+
+    const confirmButtons = screen.getAllByRole('button', { name: /^confirm$/i })
+    await user.click(confirmButtons[0])
+
+    const errorBox = await screen.findByTestId('outline-action-error')
+    expect(errorBox).toHaveTextContent('chapter confirm failed')
+    expect(confirmButtons[0]).toBeEnabled()
+  })
+})

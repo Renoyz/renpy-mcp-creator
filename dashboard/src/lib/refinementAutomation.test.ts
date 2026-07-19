@@ -130,5 +130,69 @@ describe("runFreezeAutoGenerationChain", () => {
     })
     expect(refresh).toHaveBeenCalledTimes(5)
   })
+
+  it("stops polling scene packages after the attempt cap and points at the Generation tab", async () => {
+    const freezeBlueprint = vi.fn().mockResolvedValue(undefined)
+    const refresh = vi.fn().mockResolvedValue(undefined)
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        complete: false,
+        scene_generation: { status: "in_progress", completed_count: 0, total_count: 1 },
+      }),
+    })
+
+    await expect(
+      runFreezeAutoGenerationChain({
+        projectName: "demo",
+        freezeBlueprint,
+        refreshProjectData: refresh,
+        request,
+      })
+    ).rejects.toThrow(/Generation tab/)
+
+    // total_count = 1 -> attempt cap = max(12, 1 * 3) = 12 scene-package calls, then it stops
+    expect(request).toHaveBeenCalledTimes(12)
+    expect(
+      request.mock.calls.every(([url]) => String(url).includes("/scene-packages/generate"))
+    ).toBe(true)
+  })
+
+  it("stops polling scene packages when the wall-clock cap is exceeded", async () => {
+    const freezeBlueprint = vi.fn().mockResolvedValue(undefined)
+    const refresh = vi.fn().mockResolvedValue(undefined)
+    let now = 1_000_000
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now)
+    try {
+      const request = vi.fn().mockImplementation(async () => {
+        now += 5 * 60 * 1000 // each backend response arrives 5 minutes later
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            complete: false,
+            scene_generation: { status: "in_progress", completed_count: 3, total_count: 100 },
+          }),
+        }
+      })
+
+      await expect(
+        runFreezeAutoGenerationChain({
+          projectName: "demo",
+          freezeBlueprint,
+          refreshProjectData: refresh,
+          request,
+        })
+      ).rejects.toThrow(/Generation tab/)
+
+      // attempt cap would be 300 for 100 chapters; the wall clock must stop it much earlier
+      expect(request.mock.calls.length).toBeLessThan(10)
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
 })
 

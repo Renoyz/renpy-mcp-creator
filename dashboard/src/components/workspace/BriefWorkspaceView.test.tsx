@@ -119,3 +119,51 @@ describe('BriefWorkspaceView next-step CTA', () => {
     expect(onProceedToOutline).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('BriefWorkspaceView action error handling', () => {
+  it('should keep the draft and show an inline error when saving fails', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn().mockRejectedValue(new Error('save failed: server exploded'))
+
+    render(
+      <BriefWorkspaceView
+        brief={createBrief(false)}
+        projectName="test"
+        onSave={onSave}
+        onConfirmCard={vi.fn()}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /^edit$/i }))
+    const premiseBox = screen.getByPlaceholderText('Enter Core Premise...')
+    await user.clear(premiseBox)
+    await user.type(premiseBox, 'edited premise draft')
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    const errorBox = await screen.findByTestId('brief-action-error')
+    expect(errorBox).toHaveTextContent('save failed: server exploded')
+    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Enter Core Premise...')).toHaveValue('edited premise draft')
+  })
+
+  it('should show an inline error and re-enable the card when confirming fails', async () => {
+    const user = userEvent.setup()
+    const onConfirmCard = vi.fn().mockRejectedValue(new Error('confirm failed'))
+
+    render(
+      <BriefWorkspaceView
+        brief={createBrief(false)}
+        projectName="test"
+        onSave={vi.fn()}
+        onConfirmCard={onConfirmCard}
+      />
+    )
+
+    const confirmButtons = screen.getAllByRole('button', { name: /^confirm$/i })
+    await user.click(confirmButtons[0])
+
+    const errorBox = await screen.findByTestId('brief-action-error')
+    expect(errorBox).toHaveTextContent('confirm failed')
+    expect(confirmButtons[0]).toBeEnabled()
+  })
+})

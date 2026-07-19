@@ -7,6 +7,8 @@ interface Props {
   projectName: string;
   generationState: GenerationState | null;
   loadGenerationState: (name: string) => Promise<void>;
+  generationAllowed?: boolean;
+  blockedReason?: string | null;
 }
 
 function statusChipClass(status: AssetSlot["status"]) {
@@ -56,7 +58,7 @@ type GenerationRequestPayload = {
   description?: string;
 };
 
-export function StepwiseGenerationView({ projectName, generationState, loadGenerationState }: Props) {
+export function StepwiseGenerationView({ projectName, generationState, loadGenerationState, generationAllowed = true, blockedReason = null }: Props) {
   const [actionMessage, setActionMessage] = useState<string>("");
   const [actionError, setActionError] = useState<string>("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -318,6 +320,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     activeState === "background_assets_confirmed" ||
     activeState === "script_preview";
   const canGenerateScenePackages =
+    generationAllowed &&
     busyAction === null &&
     sceneGeneration !== null &&
     sceneGeneration.status !== "complete" &&
@@ -350,7 +353,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
     const descriptionForPayload = descriptionPayloadValue(slot);
     const isAccepted = slot.status === "accepted";
     const canGenerateSlot =
-      busyAction === null && (slot.kind === "character_sprite" ? canUploadManualCharacter : canUploadManualBackground);
+      generationAllowed && busyAction === null && (slot.kind === "character_sprite" ? canUploadManualCharacter : canUploadManualBackground);
     const isCharacter = slot.kind === "character_sprite";
     const acceptDisabled =
       busyAction !== null ||
@@ -485,7 +488,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              disabled={busyAction !== null || slot.status === "accepted"}
+              disabled={busyAction !== null || !generationAllowed || slot.status === "accepted"}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
@@ -532,6 +535,9 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
           </div>
           {actionMessage && <div className="mt-3 text-sm text-green-700">{actionMessage}</div>}
           {actionError && <div className="mt-3 text-sm text-red-700">{actionError}</div>}
+          {!generationAllowed && blockedReason && (
+            <div data-testid="generation-blocked-reason" className="mt-3 text-sm text-amber-700">{blockedReason}</div>
+          )}
         </div>
 
         <GenerationFlowPanel generationState={generationState} busyAction={busyAction} />
@@ -598,7 +604,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               <button
                 type="button"
                 onClick={() => void startCharacters()}
-                disabled={busyAction !== null}
+                disabled={busyAction !== null || !generationAllowed}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busyAction === "start-characters" ? "Starting..." : "Start Characters"}
@@ -642,7 +648,7 @@ export function StepwiseGenerationView({ projectName, generationState, loadGener
               <button
                 type="button"
                 onClick={() => void startBackgrounds()}
-                disabled={busyAction !== null}
+                disabled={busyAction !== null || !generationAllowed}
                 className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busyAction === "start-backgrounds" ? "Starting..." : "Start Backgrounds"}

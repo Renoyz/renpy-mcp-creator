@@ -83,6 +83,7 @@ export function BriefWorkspaceView({
   const [draft, setDraft] = useState<ProjectBrief | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const startEdit = useCallback(() => {
     setDraft(brief ? JSON.parse(JSON.stringify(brief)) : { cards: {}, updated_at: "" });
@@ -97,10 +98,13 @@ export function BriefWorkspaceView({
   const handleSave = useCallback(async () => {
     if (!draft) return;
     setSaving(true);
+    setActionError(null);
     try {
       await onSave(projectName, draft);
       setEditing(false);
       setDraft(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed to save Project Brief.");
     } finally {
       setSaving(false);
     }
@@ -109,8 +113,11 @@ export function BriefWorkspaceView({
   const handleConfirm = useCallback(
     async (cardKey: string) => {
       setConfirming(cardKey);
+      setActionError(null);
       try {
         await onConfirmCard(projectName, cardKey);
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : "Failed to confirm card.");
       } finally {
         setConfirming(null);
       }
@@ -257,6 +264,12 @@ export function BriefWorkspaceView({
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
             <span>Saving will reset all confirmation flags. You will need to re-confirm each card.</span>
+          </div>
+        )}
+        {actionError && (
+          <div data-testid="brief-action-error" className="mt-2 flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <span>{actionError}</span>
           </div>
         )}
         <div

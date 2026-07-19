@@ -33,6 +33,7 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
   const [draft, setDraft] = useState<ChapterOutline | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const startEdit = useCallback(() => {
     setDraft(outline ? JSON.parse(JSON.stringify(outline)) : { chapters: [], updated_at: "" });
@@ -47,10 +48,13 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
   const handleSave = useCallback(async () => {
     if (!draft) return;
     setSaving(true);
+    setActionError(null);
     try {
       await onSave(projectName, draft);
       setEditing(false);
       setDraft(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed to save Chapter Outline.");
     } finally {
       setSaving(false);
     }
@@ -59,8 +63,11 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
   const handleConfirm = useCallback(
     async (chapterId: string) => {
       setConfirming(chapterId);
+      setActionError(null);
       try {
         await onConfirmChapter(projectName, chapterId);
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : "Failed to confirm chapter.");
       } finally {
         setConfirming(null);
       }
@@ -206,6 +213,12 @@ export function ChapterOutlineWorkspaceView({ outline, projectName, onSave, onCo
           <div className="mt-2 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
             <span>Saving will reset all chapter confirmation flags. You will need to re-confirm each chapter.</span>
+          </div>
+        )}
+        {actionError && (
+          <div data-testid="outline-action-error" className="mt-2 flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <span>{actionError}</span>
           </div>
         )}
         <div

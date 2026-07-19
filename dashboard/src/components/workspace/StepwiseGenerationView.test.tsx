@@ -530,4 +530,43 @@ describe("StepwiseGenerationView", () => {
     );
     expect(loadGenerationState).toHaveBeenCalledWith("demo");
   });
+
+  it("disables start, generate, and upload actions and shows the blocked reason when generation is not allowed", () => {
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={baseState("character_assets_draft")}
+        loadGenerationState={vi.fn()}
+        generationAllowed={false}
+        blockedReason="Freeze the blueprint to unlock generation"
+      />
+    );
+
+    expect(screen.getByTestId("generation-blocked-reason")).toHaveTextContent(
+      "Freeze the blueprint to unlock generation"
+    );
+    expect(screen.getByRole("button", { name: "Start Characters" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start Backgrounds" })).toBeDisabled();
+    const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
+    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeDisabled();
+    expect(within(slotCard).getByLabelText("Manual Upload")).toBeDisabled();
+  });
+
+  it("keeps start, generate, and upload actions enabled and hides the blocked reason when generation is allowed", () => {
+    render(
+      <StepwiseGenerationView
+        projectName="demo"
+        generationState={baseState("character_assets_draft")}
+        loadGenerationState={vi.fn()}
+        generationAllowed
+        blockedReason={null}
+      />
+    );
+
+    expect(screen.queryByTestId("generation-blocked-reason")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Characters" })).toBeEnabled();
+    const slotCard = screen.getByTestId("slot-card-char_Alice_normal");
+    expect(within(slotCard).getByRole("button", { name: "Regenerate" })).toBeEnabled();
+    expect(within(slotCard).getByLabelText("Manual Upload")).toBeEnabled();
+  });
 });
