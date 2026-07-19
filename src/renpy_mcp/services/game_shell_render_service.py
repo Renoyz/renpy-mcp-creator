@@ -269,7 +269,7 @@ class GameShellRenderService:
                 "                vbox:",
                 f"                    text {title} size 28",
                 f"                    if renpy.loadable({image_path}):",
-                f"                        add {image_path} xmaximum 640 ymaximum 360 fit \"contain\"",
+                f"                        add im.Fit({image_path}, 640, 360, \"contain\")",
                 "                    else:",
                 f"                        text {_renpy_string(item.image_path or 'No image')} size 16",
             ])

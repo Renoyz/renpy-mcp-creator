@@ -12,6 +12,11 @@
 - `sdk_provisioner` only writes `.env` in source checkouts; `download_web_support.py` creates its target directory on fresh machines; `start.bat` warns when `dashboard/dist` is missing.
 - Packaging metadata: `license`, `readme`, `authors`, `keywords`, `classifiers`, and repository URL added to `pyproject.toml`.
 - Pinned `requires-python` to `>=3.11,<3.12`: fresh installs on Python 3.12+ fail in the `rembg`→`pymatting`→`numba` chain (no prebuilt wheels), so the resolver now stops early with a clear message. Verified with clean-venv installs on Python 3.11 (passes) and 3.12/3.13 (blocked by the guard).
+- Fixed the DashScope default image model: `qwen-image-2.1` does not exist on the API; the default is now `qwen-image`, the smoke script reads `DASHSCOPE_IMAGE_MODEL`, and `.env.example` documents that free quota binds to versioned snapshot ids (e.g. `qwen-image-2.0-pro-2026-06-22`).
+- Real-services verification run (DeepSeek chat + DashScope image + real Ren'Py SDK build): the pipeline produced a coherent 4-scene Chinese story with consistent characters, 7 real assets (4 backgrounds + 3 sprites), committed scripts, and game-shell files. Two build-blocking bugs were found and fixed:
+  - `PrototypeScene.entry_label` is now sanitized to a valid Ren'Py identifier (`sanitize_renpy_label` + pydantic validator + chapter-label sites). Hyphenated scene ids previously produced labels like `prototype_ch1_1_ch1_1-s1`, and the real SDK build failed with `expected ':' not found`.
+  - Gallery screen images now render via `im.Fit(...)`; the previous `add ... xmaximum` form is rejected by Ren'Py.
+  After both fixes, the real SDK web build succeeded (17s) and the preview served the running game with advancing dialogue. Confirmed remaining issue: CJK text renders as tofu boxes in web preview because no CJK font is bundled into web builds (Ren'Py ships DejaVu only).
 
 ### 2026-07-13 — Repository maintenance
 

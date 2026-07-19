@@ -30,12 +30,13 @@ def main() -> int:
         print("ERROR: DASHSCOPE_API_KEY environment variable is not set.")
         return 1
 
+    model = os.environ.get("DASHSCOPE_IMAGE_MODEL", "qwen-image")
     print(f"Endpoint: {base_url}")
-    print(f"Model:    qwen-image-2.1")
+    print(f"Model:    {model}")
     print("-" * 60)
 
     payload = {
-        "model": "qwen-image-2.1",
+        "model": model,
         "input": {
             "messages": [
                 {

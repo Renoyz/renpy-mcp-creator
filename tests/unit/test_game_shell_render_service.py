@@ -135,6 +135,39 @@ def test_render_preview_writes_additive_files_and_no_absolute_paths(pm: ProjectM
     assert "Rooftop" in preview.preview
 
 
+def test_gallery_image_add_uses_valid_renpy_syntax(pm: ProjectManager):
+    """Ren'Py rejects `add "..." xmaximum N` — the gallery must fit via im.Fit.
+
+    Evidence: a real SDK build of a generated project failed on
+    zz_generated_gallery.rpy with "'xmaximum' is not a keyword argument or
+    valid child of the add statement" (2026-07-19).
+    """
+    from renpy_mcp.blueprint.models import GameShellConfig, GameShellGalleryItem
+    from renpy_mcp.services.game_shell_render_service import GameShellRenderService
+
+    project_name = "demo"
+    _make_project(pm, project_name)
+    config = GameShellConfig(
+        title="Demo VN",
+        gallery_items=[
+            GameShellGalleryItem(
+                id="bg_1",
+                title="Rooftop",
+                image_path="game/images/backgrounds/rooftop.png",
+                source="background",
+            )
+        ],
+    )
+
+    GameShellRenderService(pm).render_preview(project_name, config)
+
+    gallery_text = (
+        pm._project_dir(project_name) / "game/__staging__/shell/zz_generated_gallery.rpy"
+    ).read_text(encoding="utf-8")
+    assert "xmaximum" not in gallery_text
+    assert 'im.Fit("game/images/backgrounds/rooftop.png", 640, 360, "contain")' in gallery_text
+
+
 def test_validate_shell_rejects_absolute_and_traversal_paths(pm: ProjectManager, tmp_path: Path):
     from pydantic import ValidationError
     from renpy_mcp.blueprint.models import GameShellConfig, GameShellGalleryItem

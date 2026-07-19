@@ -7,7 +7,7 @@
 | 维度 | 状态 |
 |---|---|
 | 核心流水线 | 可运行：项目创建 → intake → brief → outline → blueprint freeze → 多章节场景 → 资产 → 脚本 → build/preview |
-| 历史真实 E2E | 2026-04 已完成一次真实模型全流程验证：14/14 阶段，约 132 秒；这不是当前每次提交的自动保证 |
+| 历史真实 E2E | 2026-04 真实模型验证到蓝图冻结（mock 构建）；2026-07-19 真实服务全链路（DeepSeek + DashScope + 真实 SDK）：场景/资产/脚本产出达标，修复 label 连字符与 gallery add 语法两个编译阻塞 bug 后真实 web 构建通过（17s）、预览可运行；web 预览 CJK 文本显示为方框（未打包 CJK 字体） |
 | 当前本地验证 | 2026-07-19：unit 478 passed / 1 skipped；chat_engine 14 passed；integration 417 passed / 0 failed；e2e 仅 collect-only（144 collected，未全量运行）；Dashboard build + 12 files / 46 tests（2026-07-13）；Desktop build + 3 files / 6 tests（2026-07-13） |
 | 桌面交付 | Electron/PyInstaller 源码已存在；NSIS 安装包与全新机器 smoke test 已延期，先以 pip/uv 安装路径发布 |
 | 运行环境 | 仅 Python 3.11（3.12+ 被 rembg/numba 依赖链阻塞，`requires-python` 已设为 `<3.12`）；Windows 为主 |
@@ -40,6 +40,8 @@
 
 仍开放：
 
+- **Web 预览 CJK 字体**：真实运行确认 CJK 文本显示为方框——web 构建只打包 DejaVu，项目侧无 CJK 字体注入机制。这是当前影响可玩性的首要已知缺陷。
+- Web 预览黑屏待确认：headless 截图中场景为黑，但浏览器无任何资产加载错误，疑似 ReadPixels 截图伪影，需窗口浏览器确认。
 - 全新机器 smoke test（PyInstaller hiddenimports、rembg 首次模型下载）未验证。
 - e2e 全量（Playwright）本轮未运行，仅 collect-only。
 

@@ -21,7 +21,7 @@ _DASHSCOPE_WANX_ENDPOINT = (
     "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
 )
 _DASHSCOPE_TASKS_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/tasks"
-_DEFAULT_MODEL = "qwen-image-2.1"
+_DEFAULT_MODEL = "qwen-image"
 _WANX_ASYNC_POLL_INTERVAL_SECONDS = 1.0
 _WANX_ASYNC_MAX_POLLS = 90
 

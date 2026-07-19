@@ -60,7 +60,7 @@ def _to_renpy_asset_path(project_dir_relative_path: str) -> str:
         return project_dir_relative_path[5:]
     return project_dir_relative_path
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from renpy_mcp.blueprint.models import (
     ChapterStyleProfile,
@@ -145,6 +145,22 @@ def resolve_cjk_font_path(config_path: Path | None = None) -> Path | None:
     return None
 
 
+def sanitize_renpy_label(label: str) -> str:
+    """Return a valid Ren'Py label name (ASCII Python-identifier rules).
+
+    Scene/chapter ids may contain hyphens, punctuation, spaces, or CJK text,
+    all of which are illegal in Ren'Py labels — a real SDK build failed with
+    ``expected ':' not found`` on ``prototype_ch1_1_ch1_1-s1`` (2026-07-19).
+    Each invalid character becomes an underscore; a leading digit is prefixed.
+    """
+    cleaned = "".join(
+        ch if (ch.isascii() and ch.isalnum()) or ch == "_" else "_" for ch in label
+    )
+    if cleaned[:1].isdigit():
+        cleaned = f"_{cleaned}"
+    return cleaned
+
+
 class PrototypeScene(BaseModel):
     """A detailed scene generated for the prototype chapter."""
 
@@ -159,6 +175,11 @@ class PrototypeScene(BaseModel):
     sprite_plan: list[SpritePlanItem] = Field(default_factory=list)
     entry_label: str
     next_scene_id: str | None = None
+
+    @field_validator("entry_label")
+    @classmethod
+    def _sanitize_entry_label(cls, value: str) -> str:
+        return sanitize_renpy_label(value)
 
 
 class PrototypeGenerationService:
@@ -339,7 +360,7 @@ class PrototypeGenerationService:
             if i + 1 < len(sorted_chapters):
                 next_ch = sorted_chapters[i + 1]
                 if next_ch.scenes:
-                    next_chapter_start_label = f"prototype_{next_ch.chapter_id}_start"
+                    next_chapter_start_label = f"prototype_{sanitize_renpy_label(next_ch.chapter_id)}_start"
 
             chapter_summary = ChapterSummary(
                 id=ch.chapter_id,
@@ -409,7 +430,7 @@ class PrototypeGenerationService:
         # Determine first chapter entry label for manifest (before any mutation)
         first_label: str | None = None
         if sorted_chapters and sorted_chapters[0].scenes:
-            first_label = f"prototype_{sorted_chapters[0].chapter_id}_start"
+            first_label = f"prototype_{sanitize_renpy_label(sorted_chapters[0].chapter_id)}_start"
 
         chapter_results = [
             {

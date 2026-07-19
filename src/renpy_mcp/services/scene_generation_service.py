@@ -254,7 +254,7 @@ class SceneGenerationService:
         blueprint: ProjectBlueprint,
         progress: dict[str, Any],
     ) -> dict[str, list]:
-        from renpy_mcp.services.prototype_generation_service import PrototypeScene
+        from renpy_mcp.services.prototype_generation_service import PrototypeScene, sanitize_renpy_label
 
         generated = progress.get("generated_chapters", {})
         if not isinstance(generated, dict):
@@ -530,7 +530,7 @@ class SceneGenerationService:
             ValueError: If the provider response cannot be parsed into valid scenes.
         """
         # Deferred import to avoid circular dependency at module level
-        from renpy_mcp.services.prototype_generation_service import PrototypeScene
+        from renpy_mcp.services.prototype_generation_service import PrototypeScene, sanitize_renpy_label
 
         if self.provider is None:
             raise RuntimeError("No LLM provider configured for prototype generation.")
@@ -698,9 +698,9 @@ Requirements:
             # cross-chapter label duplication when the LLM copies the ch1 example.
             for i, scene in enumerate(scenes):
                 scene.entry_label = (
-                    f"prototype_{chapter.id}_start"
+                    f"prototype_{sanitize_renpy_label(chapter.id)}_start"
                     if i == 0
-                    else f"prototype_{chapter.id}_scene_{i + 1}"
+                    else f"prototype_{sanitize_renpy_label(chapter.id)}_scene_{i + 1}"
                 )
             return scenes
 
