@@ -8,7 +8,7 @@
 |---|---|
 | 核心流水线 | 可运行：项目创建 → intake → brief → outline → blueprint freeze → 多章节场景 → 资产 → 脚本 → build/preview |
 | 历史真实 E2E | 2026-04 真实模型验证到蓝图冻结（mock 构建）；2026-07-19 真实服务全链路（DeepSeek + DashScope + 真实 SDK）：场景/资产/脚本产出达标，修复 label 连字符与 gallery add 语法两个编译阻塞 bug 后真实 web 构建通过（17s）、预览可运行；web 预览 CJK 文本显示为方框（未打包 CJK 字体） |
-| 当前本地验证 | 2026-07-19：unit 478 passed / 1 skipped；chat_engine 14 passed；integration 417 passed / 0 failed；e2e 仅 collect-only（144 collected，未全量运行）；Dashboard build + 12 files / 46 tests（2026-07-13）；Desktop build + 3 files / 6 tests（2026-07-13） |
+| 当前本地验证 | 2026-07-19：unit+chat_engine 497 passed / 1 skipped；integration 417 passed / 0 failed；e2e 仅 collect-only（144 collected，未全量运行）；真实服务全链路验证通过（真实 SDK web 构建成功）；Dashboard build + 12 files / 46 tests（2026-07-13）；Desktop build + 3 files / 6 tests（2026-07-13） |
 | 桌面交付 | Electron/PyInstaller 源码已存在；NSIS 安装包与全新机器 smoke test 已延期，先以 pip/uv 安装路径发布 |
 | 运行环境 | 仅 Python 3.11（3.12+ 被 rembg/numba 依赖链阻塞，`requires-python` 已设为 `<3.12`）；Windows 为主 |
 | 产品验证 | 尚无外部用户；开源发布后以 Issue/star/使用报告等软信号衡量 |
