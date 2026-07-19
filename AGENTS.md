@@ -13,7 +13,7 @@ This file is for AI coding agents working in this repository.
 - The core pipeline is operational: create project → AI intake → brief → outline → blueprint freeze → multi-chapter scenes → asset review → script commit/rollback → build/preview.
 - Historical evidence includes one real-LLM E2E run covering 14/14 stages in about 132 seconds. Real-LLM tests remain manual and are not a per-commit guarantee.
 - Completed capabilities include adaptive refinement, position-aware narrative guidance, stepwise generation/import, derived asset slots, Game Shell, and the workflow Dashboard redesign.
-- Current priority is release hygiene and real-user validation, followed by the four known integration failures and preview-process cleanup.
+- The project is now an open-source (MIT), non-commercial effort: priorities are release hygiene, GitHub publication, and community feedback. Installer/packaging work is deferred until user demand appears. The four known integration failures and the preview-process cleanup were fixed on 2026-07-19.
 - Product differentiation work is ordered as GameIR v1 → Asset Manifest Protocol → generated/user ownership → compiler diagnostics.
 - Dual-agent audit, another broad UI redesign, more providers, and hosted SaaS work are deferred until user validation succeeds.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) is the authoritative current-status document.
@@ -134,6 +134,6 @@ If this workflow is reactivated:
 - path normalization between script, index, and API layers
 - blueprint precondition consistency across stepwise upload APIs and tests
 - mock build output paths remaining project-scoped and absolute-path safe
-- preview subprocess cleanup after tests and application shutdown
+- preview servers are tracked by the shared `get_shared_preview_manager()` and stopped on FastAPI shutdown; tests must mock `PreviewManager.start` or stop previews explicitly
 - frozen Dashboard path resolution in PyInstaller/Electron builds
 - accidental use of real external AI credentials during tests

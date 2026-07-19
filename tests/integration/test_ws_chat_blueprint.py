@@ -1529,7 +1529,9 @@ def test_auto_build_mock_output_path_matches_api_endpoint(
     output_path = status.get("output_path")
     assert output_path is not None
     expected_dir = tmp_path / f"{project_name}-dists" / f"{project_name}-web"
-    assert Path(output_path).resolve() == expected_dir.resolve(), (
+    # Persisted output_path is workspace-relative (absolute paths are forbidden
+    # in persisted metadata), so resolve it against the workspace before comparing.
+    assert (tmp_path / output_path).resolve() == expected_dir.resolve(), (
         f"Auto-build mock path mismatch: {output_path} != {expected_dir}"
     )
     assert (expected_dir / "index.html").exists()

@@ -19,6 +19,9 @@ def main():
     LOG.write_text("", encoding="utf-8")
     log("Downloading RenPy web support...")
 
+    DEST.parent.mkdir(parents=True, exist_ok=True)
+    SDK_DIR.mkdir(parents=True, exist_ok=True)
+
     if DEST.exists():
         DEST.unlink()
 

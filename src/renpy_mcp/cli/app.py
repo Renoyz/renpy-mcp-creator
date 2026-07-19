@@ -28,11 +28,34 @@ def version():
     click.echo("vn-creator 0.1.0")
 
 
+def _ensure_renpy_sdk() -> None:
+    """Auto-provision the Ren'Py SDK on start when missing.
+
+    Failure is non-fatal: chat/refinement work without the SDK, and
+    build/preview report the missing SDK when used.
+    """
+    settings = get_settings()
+    provisioner = SdkProvisioner(settings)
+    if provisioner.is_sdk_ready(provisioner.resolve_sdk_path()):
+        return
+    console.print("[cyan]Ren'Py SDK not found. Downloading Ren'Py 8.3.4 (one-time setup)...[/cyan]")
+    try:
+        sdk_path = asyncio.run(provisioner.ensure_sdk())
+    except Exception as exc:  # noqa: BLE001 - the server must still start without the SDK
+        console.print(
+            f"[yellow]SDK download failed: {exc}. "
+            "Build/preview unavailable until the SDK is configured (see `vn-creator doctor`).[/yellow]"
+        )
+        return
+    console.print(f"[green]Ren'Py SDK ready at {sdk_path}[/green]")
+
+
 @main.command()
 @click.option("--port", default=8080, help="HTTP server port")
 @click.option("--no-browser", is_flag=True, help="Do not open browser automatically")
 def start(port: int, no_browser: bool):
     """Start the RenPy MCP server and open Dashboard."""
+    _ensure_renpy_sdk()
     url = f"http://localhost:{port}/dashboard"
     if not no_browser:
         console.print(f"[green]Opening Dashboard at {url}...[/green]")

@@ -511,27 +511,28 @@ def test_workspace_build_and_preview(page: Page, server_url: str, e2e_workspace:
     # Click Preview (server is running with RENPY_MCP_MOCK_BUILD=1, so build produces real output)
     preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
     preview_button.click()
-    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+    try:
+        expect(preview_button).not_to_contain_text("Starting", timeout=30000)
 
-    # Assert preview URL is shown
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
-    preview_url = preview_link.get_attribute("href") or ""
-    assert preview_url.startswith("http://127.0.0.1")
-
-    # Stop preview server via the browser session so the current-project cookie is included.
-    stop_result = page.evaluate(
-        """
-        async () => {
-          const response = await fetch("/api/projects/preview/stop", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({})
-          });
-          return { ok: response.ok, payload: await response.json() };
-        }
-        """
-    )
+        # Assert preview URL is shown
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
+        preview_url = preview_link.get_attribute("href") or ""
+        assert preview_url.startswith("http://127.0.0.1")
+    finally:
+        # Stop preview server via the browser session so the current-project cookie is included.
+        stop_result = page.evaluate(
+            """
+            async () => {
+              const response = await fetch("/api/projects/preview/stop", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({})
+              });
+              return { ok: response.ok, payload: await response.json() };
+            }
+            """
+        )
     assert stop_result["ok"] is True
 
 
@@ -569,14 +570,15 @@ def test_workspace_build_status_survives_refresh(page: Page, server_url: str, e2
     # Preview should still work after refresh
     preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
     preview_button.click()
-    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
-    preview_url = preview_link.get_attribute("href") or ""
-    assert preview_url.startswith("http://127.0.0.1")
-
-    # Stop preview server to avoid port leaks
-    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
+    try:
+        expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
+        preview_url = preview_link.get_attribute("href") or ""
+        assert preview_url.startswith("http://127.0.0.1")
+    finally:
+        # Stop preview server to avoid port leaks
+        httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
 
 
 def test_chat_history_survives_refresh(
@@ -1142,10 +1144,14 @@ def test_workspace_prototype_build_and_preview(
     # Preview should be available
     preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
     preview_button.click()
-    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+    try:
+        expect(preview_button).not_to_contain_text("Starting", timeout=30000)
 
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
+    finally:
+        # Stop preview server to avoid port leaks
+        httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
 
 
 def test_workspace_prototype_pipeline_full_journey(
@@ -1178,26 +1184,27 @@ def test_workspace_prototype_pipeline_full_journey(
     # Preview
     preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
     preview_button.click()
-    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+    try:
+        expect(preview_button).not_to_contain_text("Starting", timeout=30000)
 
-    # Preview URL visible
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
+        # Preview URL visible
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
 
-    # Preview Running label visible
-    expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
+        # Preview Running label visible
+        expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
 
-    # Refresh
-    page.reload()
-    expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
+        # Refresh
+        page.reload()
+        expect(page.locator("h1")).to_have_text(project_name, timeout=30000)
 
-    # After refresh, preview URL and running label should still be visible
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
-    expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
-
-    # Stop preview to avoid port leaks
-    httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
+        # After refresh, preview URL and running label should still be visible
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
+        expect(page.locator("text=Preview Running")).to_be_visible(timeout=5000)
+    finally:
+        # Stop preview to avoid port leaks
+        httpx.post(f"{server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
 
 
 def test_no_blind_build_poll_for_idle_pipeline(
@@ -3337,12 +3344,13 @@ def test_blueprint_confirmation_auto_builds_and_reaches_preview_ready(
     # Preview should be available
     preview_button = page.locator("button", has_text=re.compile("Preview|Starting"))
     preview_button.click()
-    expect(preview_button).not_to_contain_text("Starting", timeout=30000)
+    try:
+        expect(preview_button).not_to_contain_text("Starting", timeout=30000)
 
-    preview_link = page.locator("a[href*='127.0.0.1']")
-    expect(preview_link).to_be_visible(timeout=10000)
-    preview_url = preview_link.get_attribute("href") or ""
-    assert preview_url.startswith("http://127.0.0.1")
-
-    # Stop preview server to avoid port leaks
-    httpx.post(f"{mock_llm_server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)
+        preview_link = page.locator("a[href*='127.0.0.1']")
+        expect(preview_link).to_be_visible(timeout=10000)
+        preview_url = preview_link.get_attribute("href") or ""
+        assert preview_url.startswith("http://127.0.0.1")
+    finally:
+        # Stop preview server to avoid port leaks
+        httpx.post(f"{mock_llm_server_url}/api/projects/preview/stop", json={"name": project_name}, timeout=5.0)

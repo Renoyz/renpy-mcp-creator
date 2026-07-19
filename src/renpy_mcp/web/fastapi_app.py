@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from ..config import RenPyConfig, _current_project_path, get_settings, resolve_project_dir
-from ..services.preview_manager import PreviewManager
+from ..services.preview_manager import PreviewManager, get_shared_preview_manager
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -36,7 +37,7 @@ def _resolve_dashboard_dir() -> Path:
 
 DASHBOARD_DIR = _resolve_dashboard_dir()
 
-_preview_manager = PreviewManager()
+_preview_manager: PreviewManager = get_shared_preview_manager()
 _last_build_results: dict[str, Path] = {}
 _last_build_results_lock = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -150,11 +151,33 @@ def _public_build_output_path(output_path: Path | None) -> str | None:
         return output_path.name
 
 
+def _resolved_sdk_dir() -> Path | None:
+    try:
+        config = _get_base_config()
+    except RuntimeError:
+        return None
+    sdk_path = getattr(config, "sdk_path", None)
+    if sdk_path is None:
+        return None
+    try:
+        resolved = Path(sdk_path).resolve()
+    except OSError:
+        return None
+    # Skip drive-root-ish values (e.g. "C:\", "/") that would mangle messages.
+    if len(str(resolved)) <= 3:
+        return None
+    return resolved
+
+
 def _redact_local_paths(value: str) -> str:
     settings = get_settings()
     workspace = settings.workspace.resolve()
     redacted = value.replace(str(workspace), "<workspace>")
     redacted = redacted.replace(workspace.as_posix(), "<workspace>")
+    sdk_dir = _resolved_sdk_dir()
+    if sdk_dir is not None and sdk_dir != workspace:
+        redacted = redacted.replace(str(sdk_dir), "<sdk>")
+        redacted = redacted.replace(sdk_dir.as_posix(), "<sdk>")
     return redacted
 
 
@@ -243,8 +266,15 @@ def _resolve_preview_build_dir(project_name: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
+@asynccontextmanager
+async def _preview_cleanup_lifespan(app: FastAPI):
+    """Stop all tracked preview servers on shutdown so they never outlive the app."""
+    yield
+    await _preview_manager.stop_all()
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="RenPy MCP Unified Server")
+    app = FastAPI(title="RenPy MCP Unified Server", lifespan=_preview_cleanup_lifespan)
     settings = get_settings()
     secret_key = settings.session_secret or os.environ.get("SESSION_SECRET")
     if not secret_key:

@@ -15,6 +15,20 @@ import httpx
 from renpy_mcp.config import Settings, get_settings
 
 
+def _repo_env_file() -> Path | None:
+    """Return the repo-root .env path when running from a source checkout.
+
+    In installed/frozen layouts the derived root is meaningless, so this
+    returns None and the caller skips the write. Persistence still works via
+    the default SDK install location probed by ``ensure_sdk`` on next start.
+    """
+    root = Path(__file__).resolve().parent.parent.parent.parent
+    if not (root / "pyproject.toml").exists():
+        return None
+    env_file = root / ".env"
+    return env_file if env_file.exists() else None
+
+
 class SdkProvisioner:
     """Manage Ren'Py SDK download, extraction, and path configuration."""
 
@@ -165,9 +179,10 @@ class SdkProvisioner:
         self.settings.renpy_sdk_path = sdk_path
         os.environ["RENPY_SDK_PATH"] = str(sdk_path)
 
-        # Update .env file if it exists in project root
-        env_file = Path(__file__).resolve().parent.parent.parent.parent / ".env"
-        if env_file.exists():
+        # Persist to the repo-root .env only when running from a source checkout;
+        # installed/frozen layouts rely on the default install location instead.
+        env_file = _repo_env_file()
+        if env_file is not None:
             lines = env_file.read_text(encoding="utf-8").splitlines()
             found = False
             for i, line in enumerate(lines):

@@ -142,7 +142,7 @@ export function ProjectSelectPage() {
                 AI Galgame Creator
               </h1>
               <p className="text-xs text-gray-500">
-                基于 Spec + Dual-Agent 的 Ren'Py 视觉小说创作平台
+                本地优先的 Ren'Py 视觉小说创作工具
               </p>
             </div>
           </div>

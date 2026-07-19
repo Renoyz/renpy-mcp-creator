@@ -2,7 +2,10 @@
 
 面向中文创作者的、本地优先的 Ren'Py 工程与原型生成工具。它把自然语言需求转换为可审阅的 brief、章节大纲、蓝图、场景和资产，再通过受控的 staging、commit/rollback、build 与 preview 流程生成可继续编辑的 Ren'Py 项目。
 
-> 当前版本为 **0.1.0 开发预览版**。核心流水线可运行，但尚未发布稳定安装包，也尚未完成真实用户验证。
+> 当前版本为 **0.1.0 开发预览版**（开源，MIT）。核心流水线可运行，欢迎试用并通过 Issue 反馈；安装包与后续能力将根据社区反馈迭代。
+
+![项目列表](docs/images/dashboard-projects.png)
+![工作区流水线](docs/images/dashboard-workspace.png)
 
 ## 当前能力
 
@@ -24,12 +27,17 @@
 - 分步资产确认、项目相对路径、失败回滚和稳定资产保护。
 - Windows Electron/PyInstaller 打包源码；安装包仍处于验证阶段。
 
+## 两种用法
+
+- **完整创作流水线**：面向视觉小说创作者——对话式需求整理 → brief → 蓝图 → 多章节场景与资产 → 构建/预览，全程可审阅、可回滚，人工修改后可安全地继续增量生成。
+- **Ren'Py MCP 工具包**：面向开发者——70+ MCP 工具（脚本读写、资产管理、构建、预览、SDK 自动配置）可独立接入 Claude / Kimi 等 MCP 客户端，让 AI 代理安全地执行 Ren'Py 工程操作。
+
 ## 环境要求
 
-- Python 3.11+
+- Python 3.11（3.12+ 暂不支持：`rembg`/`numba` 依赖链在 3.12+ 无可用的预编译轮子）
 - Windows 10/11（当前主要支持平台）
 - Node.js 20.19+ 或 22.12+（仅从源码构建 Dashboard/Desktop 时需要）
-- Ren'Py SDK 8.x（目前需自行安装并通过 `RENPY_SDK_PATH` 指定；自动下载组件尚未接入启动命令）
+- Ren'Py SDK 8.x（`vn-creator start` 会在缺失时自动下载；也可自行安装并通过 `RENPY_SDK_PATH` 指定）
 
 ## 安装
 

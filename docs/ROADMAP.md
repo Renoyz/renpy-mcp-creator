@@ -1,6 +1,6 @@
 # RenPy MCP Creator 路线图
 
-更新日期：2026-07-13
+更新日期：2026-07-19
 
 ## 当前状态
 
@@ -8,38 +8,44 @@
 |---|---|
 | 核心流水线 | 可运行：项目创建 → intake → brief → outline → blueprint freeze → 多章节场景 → 资产 → 脚本 → build/preview |
 | 历史真实 E2E | 2026-04 已完成一次真实模型全流程验证：14/14 阶段，约 132 秒；这不是当前每次提交的自动保证 |
-| 当前本地验证 | 2026-07-13 清理后：unit 466 passed / 1 skipped；chat_engine 14 passed；integration 413 passed / 4 failed；Dashboard build + 12 files / 46 tests；Desktop build + 3 files / 6 tests |
-| 桌面交付 | Electron/PyInstaller 源码已存在；稳定 NSIS 安装包和安装后 smoke test 尚未完成 |
-| 产品验证 | 尚无可核验的外部用户完成率、复用率或付费意愿数据 |
+| 当前本地验证 | 2026-07-19：unit 478 passed / 1 skipped；chat_engine 14 passed；integration 417 passed / 0 failed；e2e 仅 collect-only（144 collected，未全量运行）；Dashboard build + 12 files / 46 tests（2026-07-13）；Desktop build + 3 files / 6 tests（2026-07-13） |
+| 桌面交付 | Electron/PyInstaller 源码已存在；NSIS 安装包与全新机器 smoke test 已延期，先以 pip/uv 安装路径发布 |
+| 运行环境 | 仅 Python 3.11（3.12+ 被 rembg/numba 依赖链阻塞，`requires-python` 已设为 `<3.12`）；Windows 为主 |
+| 产品验证 | 尚无外部用户；开源发布后以 Issue/star/使用报告等软信号衡量 |
 | 版本 | 0.1.0 development preview |
 
 ## 当前决策
 
-项目继续方式从“扩展更多 AI 功能”调整为“先完成可发布、可维护、可验证的 Ren'Py 工程工具”。
+项目转为开源（MIT）、非商业化维护：以“可发布、可维护、可验证的 Ren'Py 工程工具”为定位公开发布，由社区反馈驱动后续迭代。
 
-近期不以一次生成更多文本、增加更多模型供应商或继续扩大 Dashboard 为目标。优先证明用户能独立完成一次真实项目，并能在人工精修后安全地继续增量生成。
+近期不以一次生成更多文本、增加更多模型供应商或继续扩大 Dashboard 为目标。
 
 ## 优先级
 
-### P0：发布卫生与真实用户验证
+### P0：开源发布与社区反馈
 
 - 保持仓库、依赖锁、许可证、环境模板和文档一致。
-- 完成 Windows 安装包及全新机器 smoke test。
-- 找到 8–10 名真实 Ren'Py 创作者，验证端到端完成率、二次使用率和支持成本。
-- 保持本地优先、BYOK/self-hosted，避免把模型成本和私有素材强制放到托管服务。
+- 完成 GitHub 公开发布与 v0.1.0 tag。
+- 通过社区渠道收集试用反馈（Issue、star、实际使用报告）。
+- 保持本地优先、BYOK/self-hosted，不引入托管服务依赖。
+- Windows 安装包与全新机器 smoke test 延期：先以 pip/uv 安装路径发布，由用户需求驱动恢复。
 
 ### P1：修复当前可靠性缺口
 
-当前 integration suite 有两个失败簇：
+2026-07-19 已完成：
 
-1. **test_stepwise_generation_import_upload.py** 的 3 个测试与当前 blueprint 前置条件不一致。
-2. **test_ws_chat_blueprint.py::test_auto_build_mock_output_path_matches_api_endpoint** 的 mock build 相对路径解析不一致。
+- integration 4 个失败全部修复（验证：`python -m pytest tests/integration -q` → 417 passed / 0 failed）：upload 测试补齐冻结蓝图前置并对背景移除打桩；mock build 输出路径断言改为相对 workspace 解析。
+- 预览子进程泄漏修复：FastAPI lifespan 关闭时 `stop_all()`；HTTP 路由与 MCP 工具共用 `get_shared_preview_manager()`；integration 预览测试统一打桩；e2e start/stop 改为 try/finally，Windows 用 `taskkill /T /F` 清理进程树。修复后实测不再新增 `http.server` 残留。
+- 发布阻塞修复：`httpx` 移入运行时依赖（uv.lock 已刷新）；`vn-creator start` 接入 SDK 自动下载（失败仅告警不阻塞启动）；`_redact_local_paths` 覆盖 SDK 路径；`start.bat` 增加 dashboard/dist 缺失提示。
 
-集成测试还可能遗留测试专用 **python -m http.server** 预览子进程。修复时必须保留项目级路径隔离和 rollback 行为。
+仍开放：
 
-### P2：建立真正的工程差异化
+- 全新机器 smoke test（PyInstaller hiddenimports、rembg 首次模型下载）未验证。
+- e2e 全量（Playwright）本轮未运行，仅 collect-only。
 
-用户验证成立后，按以下顺序推进：
+### P2：工程差异化（由社区需求拉动）
+
+以下工作不再预设排期，由真实 Issue 和用户反馈拉动；没有需求信号时不主动开发：
 
 1. GameIR v1：结构化权威源、schema version 和 validator。
 2. Asset Manifest Protocol：统一 required/candidate/accepted 生命周期及本地 provider hook。
@@ -48,7 +54,7 @@
 
 详见 [视觉小说工程中间件目标差距分析](vn-engineering-middleware-gap-analysis.md)。
 
-## 明确延期
+## 明确不做
 
 - 双 Agent Creator/Auditor 质量门。
 - 新一轮大规模 Dashboard 重构。
@@ -56,19 +62,15 @@
 - 完整分支图编辑器、语音和 BGM 自动生成。
 - 托管 SaaS 与计费系统。
 
-这些工作只有在真实用户验证通过、核心工程边界稳定后才能重新排期。双 Agent 方案保留为[未来设计](dual-agent-design.md)，不是当前实施阶段。
+项目转为开源维护模式后，以上方向整体排除。双 Agent 方案保留为[未来设计](dual-agent-design.md)，仅作历史参考，不构成实施承诺。
 
-## 4–6 周继续/停止标准
+## 维护模式
 
-继续投入至少需要满足：
+项目以开源形式维护，不设商业化指标：
 
-- 至少 5 名测试用户能在不依赖开发者代操作的情况下完成全流程。
-- 至少 3 名用户在两周内创建第二个项目。
-- 至少 2 名用户愿意进入付费试点或持续赞助。
-- 人工修改后的再次生成没有覆盖事故。
-- 单名用户的支持成本低于 1 小时。
-
-若其中两项未达到，停止商业化扩张，将项目收缩为开源 Ren'Py MCP/工程工具包。
+- 迭代由真实 Issue 拉动；没有用户信号时不预先扩展功能。
+- 真实 LLM E2E 仅在需要时手动触发，不作为每次提交的门槛。
+- 若长期（约 6 个月）没有任何外部使用信号，将仓库归档为参考实现，停止主动维护。
 
 ## 文档状态
 

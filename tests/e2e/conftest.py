@@ -33,6 +33,21 @@ def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
     return False
 
 
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Stop a spawned server process and, on Windows, its entire process tree."""
+    if sys.platform == "win32":
+        # terminate()/kill() only reach the direct child; taskkill /T also kills
+        # grandchild processes such as preview `python -m http.server` instances.
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
 @pytest.fixture(scope="session")
 def e2e_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Provide an isolated workspace for E2E runs."""
@@ -94,12 +109,7 @@ def server_url(e2e_workspace: Path):
 
     yield url
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    _kill_process_tree(proc)
 
 
 @pytest.fixture(scope="session")
@@ -128,9 +138,4 @@ def mock_chat_server_url(e2e_workspace: Path) -> str:
 
     yield f"ws://{host}:{port}"
 
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+    _kill_process_tree(proc)

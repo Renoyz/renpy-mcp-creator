@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 2026-07-19 — Reliability fixes and open-source readiness
+
+- Fixed a fresh-install blocker: `httpx` moved from dev extras to runtime dependencies (it is imported by `sdk_provisioner`, LLM providers, and the image service); `uv.lock` refreshed.
+- Fixed all 4 known integration failures (suite now 417 passed / 0 failed): upload tests now seed a frozen blueprint and stub background removal for determinism; the mock-build path assertion resolves against the workspace.
+- Preview server lifecycle: HTTP routes and MCP tools now share one `get_shared_preview_manager()`, and a FastAPI lifespan hook stops all preview servers on shutdown. Integration/E2E tests no longer leak `python -m http.server` processes (mocked starts, try/finally stops, Windows process-tree kill).
+- `vn-creator start` now auto-downloads the Ren'Py SDK when missing; a failed download warns without blocking server startup.
+- Build-status messages redact Ren'Py SDK absolute paths (in addition to workspace paths), keeping persisted metadata and API payloads free of local paths.
+- `sdk_provisioner` only writes `.env` in source checkouts; `download_web_support.py` creates its target directory on fresh machines; `start.bat` warns when `dashboard/dist` is missing.
+- Packaging metadata: `license`, `readme`, `authors`, `keywords`, `classifiers`, and repository URL added to `pyproject.toml`.
+- Pinned `requires-python` to `>=3.11,<3.12`: fresh installs on Python 3.12+ fail in the `rembg`→`pymatting`→`numba` chain (no prebuilt wheels), so the resolver now stops early with a clear message. Verified with clean-venv installs on Python 3.11 (passes) and 3.12/3.13 (blocked by the guard).
+
 ### 2026-07-13 — Repository maintenance
 
 - Removed reproducible dependency directories, build output, caches, logs, screenshots, and the obsolete UI prototype.

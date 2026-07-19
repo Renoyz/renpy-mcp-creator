@@ -1667,6 +1667,8 @@ class TestProjectScopedBuildPreviewApi:
         """POST /api/projects/{name}/preview must start preview for that specific project."""
         from renpy_mcp.models import BuildResult
         from renpy_mcp.services import build_manager as bm
+        from renpy_mcp.services import preview_manager as pm
+        from renpy_mcp.services.preview_manager import PreviewServer
 
         project_name = "scoped_preview_test"
         client.post("/api/projects", json={"name": project_name})
@@ -1684,7 +1686,18 @@ class TestProjectScopedBuildPreviewApi:
                 output_path=build_dir,
             )
 
+        async def _mock_start(self, project_name, directory):
+            # Do not spawn a real http.server here: it would outlive the test
+            # process. Real spawn/teardown is covered by test_preview_manager.py.
+            return PreviewServer(
+                project_name=project_name,
+                directory=directory,
+                port=55555,
+                process=None,  # type: ignore[arg-type]
+            )
+
         monkeypatch.setattr(bm.BuildManager, "build", _mock_build)
+        monkeypatch.setattr(pm.PreviewManager, "start", _mock_start)
         client.post("/api/projects/select", json={"name": project_name})
         client.post("/api/projects/build", json={"target": "web"})
 

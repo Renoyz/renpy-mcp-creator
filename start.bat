@@ -24,6 +24,10 @@ if errorlevel 1 (
 )
 
 echo [2/2] 启动服务...
+if not exist "dashboard\dist\index.html" (
+    echo [提示] 未找到 dashboard\dist，网页控制台不可用。
+    echo        如需构建：cd dashboard ^&^& npm ci ^&^& npm run build
+)
 python -m renpy_mcp.cli.app start
 
 pause

@@ -39,6 +39,34 @@ def _make_project(client: TestClient, project_name: str) -> None:
     assert r.status_code == 200, r.text
 
 
+def _allow_stepwise_generation(tmp_path: Path, project_name: str) -> None:
+    from renpy_mcp.blueprint.models import (
+        BlueprintFreezeStatus,
+        ProjectBlueprint,
+        ProjectMeta,
+        ProjectStatus,
+        RefinementState,
+    )
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.services.project_manager import ProjectManager
+
+    pm = ProjectManager(get_settings())
+    pm.write_blueprint(
+        project_name,
+        ProjectBlueprint(title="Test VN", genre="test", worldview="test world"),
+    )
+    pm.write_project_meta(
+        project_name,
+        ProjectMeta(
+            name=project_name,
+            path=tmp_path / project_name,
+            status=ProjectStatus.DRAFT,
+            refinement_state=RefinementState.BLUEPRINT_READY,
+            blueprint_freeze_status=BlueprintFreezeStatus.FROZEN,
+        ),
+    )
+
+
 def _rgba_png_bytes(size=(640, 360), alpha=True) -> bytes:
     mode = "RGBA" if alpha else "RGB"
     image = Image.new(mode, size=size, color=(32, 128, 255, 255) if alpha else (32, 128, 255))
@@ -61,9 +89,10 @@ def _project_upload(
     return r
 
 
-def test_character_upload_valid_png_returns_preview_url_and_relative_paths(client: TestClient):
+def test_character_upload_valid_png_returns_preview_url_and_relative_paths(client: TestClient, tmp_path: Path):
     project_name = "upload_valid"
     _make_project(client, project_name)
+    _allow_stepwise_generation(tmp_path, project_name)
     client.post(f"/api/projects/{project_name}/generation/characters/start")
 
     r = _project_upload(
@@ -84,9 +113,10 @@ def test_character_upload_valid_png_returns_preview_url_and_relative_paths(clien
     assert not Path(slot["staging_path"]).is_absolute()
 
 
-def test_non_image_upload_returns_400(client: TestClient):
+def test_non_image_upload_returns_400(client: TestClient, tmp_path: Path):
     project_name = "upload_invalid"
     _make_project(client, project_name)
+    _allow_stepwise_generation(tmp_path, project_name)
     client.post(f"/api/projects/{project_name}/generation/characters/start")
 
     r = _project_upload(
@@ -99,10 +129,20 @@ def test_non_image_upload_returns_400(client: TestClient):
     assert r.status_code == 400, r.text
 
 
-def test_accept_non_renderable_character_without_override_returns_409_and_with_override_succeeds(client: TestClient):
+def test_accept_non_renderable_character_without_override_returns_409_and_with_override_succeeds(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     project_name = "upload_override"
     _make_project(client, project_name)
+    _allow_stepwise_generation(tmp_path, project_name)
     client.post(f"/api/projects/{project_name}/generation/characters/start")
+
+    # Stub background removal to fail so the RGB upload stays non-renderable;
+    # otherwise the outcome depends on whether rembg works in the local environment.
+    monkeypatch.setattr(
+        "renpy_mcp.ai.background_remover.BackgroundRemover.remove_background",
+        lambda self, path: None,
+    )
 
     r = _project_upload(
         client,

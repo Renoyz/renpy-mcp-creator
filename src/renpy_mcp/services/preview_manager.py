@@ -104,3 +104,18 @@ class PreviewManager:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             return sock.getsockname()[1]
+
+
+_shared_manager: "PreviewManager | None" = None
+
+
+def get_shared_preview_manager() -> PreviewManager:
+    """Return the process-wide shared PreviewManager.
+
+    FastAPI routes and MCP preview tools must share one instance so the app
+    shutdown hook can clean up every preview server regardless of entry point.
+    """
+    global _shared_manager
+    if _shared_manager is None:
+        _shared_manager = PreviewManager()
+    return _shared_manager

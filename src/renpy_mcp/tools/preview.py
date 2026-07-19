@@ -15,7 +15,7 @@ from ..config import RenPyConfig, get_settings
 from ..models import BuildRequest
 from ..renpy_runner import RenPyRunner
 from ..services.build_manager import BuildManager
-from ..services.preview_manager import PreviewManager
+from ..services.preview_manager import get_shared_preview_manager
 from ..services.project_manager import ProjectManager
 
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -77,7 +77,7 @@ def register_preview_tools(mcp, config: RenPyConfig, runner: RenPyRunner):
     """Register preview/screenshot MCP tools."""
     settings = get_settings()
     build_manager = BuildManager(settings)
-    preview_manager = PreviewManager()
+    preview_manager = get_shared_preview_manager()
     project_manager = ProjectManager(settings)
 
     # Remove legacy build_project from project.py and replace with BuildManager-based version
