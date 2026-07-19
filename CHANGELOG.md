@@ -16,7 +16,8 @@
 - Real-services verification run (DeepSeek chat + DashScope image + real Ren'Py SDK build): the pipeline produced a coherent 4-scene Chinese story with consistent characters, 7 real assets (4 backgrounds + 3 sprites), committed scripts, and game-shell files. Two build-blocking bugs were found and fixed:
   - `PrototypeScene.entry_label` is now sanitized to a valid Ren'Py identifier (`sanitize_renpy_label` + pydantic validator + chapter-label sites). Hyphenated scene ids previously produced labels like `prototype_ch1_1_ch1_1-s1`, and the real SDK build failed with `expected ':' not found`.
   - Gallery screen images now render via `im.Fit(...)`; the previous `add ... xmaximum` form is rejected by Ren'Py.
-  After both fixes, the real SDK web build succeeded (17s) and the preview served the running game with advancing dialogue. Confirmed remaining issue: CJK text renders as tofu boxes in web preview because no CJK font is bundled into web builds (Ren'Py ships DejaVu only).
+  After both fixes, the real SDK web build succeeded (17s) and the preview served the running game with advancing dialogue.
+- CJK font injection for web builds: stepwise `commit()` now copies a system CJK font into `game/fonts/` and writes `prototype_fonts.rpy` (gui/default font overrides + DejaVu replacement map), recorded in `index.json` as `cjk_font_config`. The injection runs after stale-prototype cleanup (which would otherwise delete `prototype_fonts.rpy`), and degrades gracefully when no CJK font exists on the host. Verified with a real rebuild: CJK dialogue now renders correctly in the web preview (previously all tofu boxes).
 
 ### 2026-07-13 — Repository maintenance
 

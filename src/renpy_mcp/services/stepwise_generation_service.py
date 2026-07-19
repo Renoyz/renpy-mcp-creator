@@ -1850,6 +1850,18 @@ class StepwiseGenerationService:
         if changed:
             self.pm.write_project_index(project_name, index)
 
+    def _ensure_cjk_fonts(self, project_name: str) -> dict:
+        """Inject a CJK font + runtime override config so web builds render CJK.
+
+        Real-run evidence (2026-07-19): web previews rendered all CJK dialogue
+        as tofu boxes because generated projects carried no CJK font.
+        """
+        from renpy_mcp.services.asset_generation_service import AssetGenerationService
+
+        return AssetGenerationService(
+            self.pm, script_renderer=self._script_renderer
+        ).ensure_cjk_font_config(project_name)
+
     def commit(self, project_name: str) -> dict[str, Any]:
         state = self.get_state(project_name)
         if state.get("state") != "script_preview":
@@ -1930,16 +1942,6 @@ class StepwiseGenerationService:
         try:
             self._prototype_activation.wire_main_script_to_prototype(project_name, entry_label)
 
-            for plan in preview_plans:
-                self._prototype_activation.update_index(
-                    project_name=project_name,
-                    chapter=plan["chapter"],
-                    scenes=plan["scenes"],
-                    script_path=cast(str, plan["final_script_path"]),
-                    background_assets=plan["background_assets"],
-                    character_assets=plan["character_assets"],
-                )
-
             if len(preview_plans) == 1:
                 self._promote_staged_asset_slots(project_dir, preview_asset_slots)
                 self._prototype_activation.commit_prototype_replacement(
@@ -1957,6 +1959,21 @@ class StepwiseGenerationService:
                 self._cleanup_stale_prototype_index_entries(
                     project_name,
                     [scene.scene_id for plan in preview_plans for scene in plan["scenes"]],
+                )
+
+            # Font injection runs AFTER stale-prototype cleanup: the cleanup
+            # globs game/prototype_*.rpy and would delete prototype_fonts.rpy.
+            cjk_font_config = self._ensure_cjk_fonts(project_name)
+
+            for plan in preview_plans:
+                self._prototype_activation.update_index(
+                    project_name=project_name,
+                    chapter=plan["chapter"],
+                    scenes=plan["scenes"],
+                    script_path=cast(str, plan["final_script_path"]),
+                    background_assets=plan["background_assets"],
+                    character_assets=plan["character_assets"],
+                    cjk_font_config=cjk_font_config,
                 )
 
             manifest = PrototypeManifest(

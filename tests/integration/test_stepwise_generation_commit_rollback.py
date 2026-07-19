@@ -132,6 +132,97 @@ def _assert_no_absolute_paths(value: object) -> None:
             _assert_no_absolute_paths(item)
 
 
+def _drive_to_committable(client: TestClient, project_name: str) -> None:
+    """Drive a single-scene project to just before script commit."""
+    from renpy_mcp.config import get_settings
+    from renpy_mcp.services.project_manager import ProjectManager
+
+    pm = ProjectManager(get_settings())
+    _seed_single_scene_packages(pm, project_name)
+
+    assert client.post(f"/api/projects/{project_name}/generation/characters/start").status_code == 200
+    alice_slot = _project_upload(
+        client, project_name,
+        "generation/characters/Alice/normal/upload", "alice.png", _rgba_png_bytes(),
+    )
+    accepted = client.post(
+        f"/api/projects/{project_name}/generation/characters/{alice_slot['asset_id']}/accept"
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    assert client.post(f"/api/projects/{project_name}/generation/backgrounds/start").status_code == 200
+    bg_slot = _project_upload(
+        client, project_name,
+        "generation/backgrounds/scene_01/main/upload", "scene_01.png",
+        _rgba_png_bytes(size=(1280, 720)),
+    )
+    bg_accepted = client.post(
+        f"/api/projects/{project_name}/generation/backgrounds/{bg_slot['asset_id']}/accept"
+    )
+    assert bg_accepted.status_code == 200, bg_accepted.text
+
+    assert client.post(f"/api/projects/{project_name}/generation/characters/confirm").status_code == 200
+    assert client.post(f"/api/projects/{project_name}/generation/backgrounds/confirm").status_code == 200
+    preview = client.post(f"/api/projects/{project_name}/generation/script/preview")
+    assert preview.status_code == 200, preview.text
+
+
+def test_commit_injects_cjk_font_for_web_builds(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stepwise commit must inject a CJK font + override config.
+
+    Real-run evidence (2026-07-19): the web preview rendered all CJK dialogue
+    as tofu boxes because generated projects carried no CJK font.
+    """
+    fake_font = tmp_path / "fake_cjk.ttf"
+    fake_font.write_bytes(b"FAKE-TTF" * 1024)
+    monkeypatch.setattr(
+        "renpy_mcp.services.prototype_generation_service.resolve_cjk_font_path",
+        lambda config_path=None: fake_font,
+    )
+
+    project_name = "stepwise_commit_cjk_font"
+    _make_project(client, project_name)
+    _drive_to_committable(client, project_name)
+
+    commit = client.post(f"/api/projects/{project_name}/generation/script/commit")
+    assert commit.status_code == 200, commit.text
+
+    project_dir = tmp_path / project_name
+    assert (project_dir / "game" / "fonts" / "simhei.ttf").read_bytes() == fake_font.read_bytes()
+    font_cfg = (project_dir / "game" / "prototype_fonts.rpy").read_text(encoding="utf-8")
+    assert "fonts/simhei.ttf" in font_cfg
+
+    index_payload = json.loads((project_dir / "meta" / "index.json").read_text(encoding="utf-8"))
+    assert index_payload["cjk_font_config"]["configured"] is True
+
+
+def test_commit_without_available_cjk_font_still_succeeds(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No CJK font on the host must not break commit; config degrades gracefully."""
+    monkeypatch.setattr(
+        "renpy_mcp.services.prototype_generation_service.resolve_cjk_font_path",
+        lambda config_path=None: None,
+    )
+
+    project_name = "stepwise_commit_cjk_font_missing"
+    _make_project(client, project_name)
+    _drive_to_committable(client, project_name)
+
+    commit = client.post(f"/api/projects/{project_name}/generation/script/commit")
+    assert commit.status_code == 200, commit.text
+
+    project_dir = tmp_path / project_name
+    assert not (project_dir / "game" / "fonts" / "simhei.ttf").exists()
+    font_cfg = (project_dir / "game" / "prototype_fonts.rpy").read_text(encoding="utf-8")
+    assert "fallback disabled" in font_cfg
+
+    index_payload = json.loads((project_dir / "meta" / "index.json").read_text(encoding="utf-8"))
+    assert index_payload.get("cjk_font_config", {}).get("configured") is False
+
+
 def test_commit_promotes_only_accepted_assets_and_skips_unaccepted(client: TestClient, tmp_path: Path) -> None:
     project_name = "stepwise_commit_accepted_only"
     _make_project(client, project_name)
