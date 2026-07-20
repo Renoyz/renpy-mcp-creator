@@ -69,6 +69,9 @@ export function ProjectWorkspacePage() {
   const [snapshotLoading, setSnapshotLoading] = useState(true);
   const snapshotLoadTokenRef = useRef(0);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("intake");
+  // Tab that was active before a scene took over the tab bar, so
+  // "返回总览" can restore it instead of always landing on blueprint.
+  const lastOverviewTabRef = useRef<WorkspaceTab>("blueprint");
   const autoRouteTokenRef = useRef(0);
   const [buildStatus, setBuildStatus] = useState<Status>("idle");
   const [buildMessage, setBuildMessage] = useState<string>("");
@@ -335,6 +338,9 @@ export function ProjectWorkspacePage() {
 
   const handleSelectScene = async (sceneId: string) => {
     await selectScene(sceneId, activeProjectName || undefined);
+    if (activeTab !== "scene") {
+      lastOverviewTabRef.current = activeTab;
+    }
     setActiveTab("scene");
   };
 
@@ -715,7 +721,7 @@ export function ProjectWorkspacePage() {
             activeTab={activeTab}
             onChange={setActiveTab}
             hasSceneSelected={!!selectedSceneId}
-            onBackToOverview={() => setActiveTab("blueprint")}
+            onBackToOverview={() => setActiveTab(lastOverviewTabRef.current)}
           />
           <div className="flex-1 overflow-hidden">
             {activeTab === "intake" && (

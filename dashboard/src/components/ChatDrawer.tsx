@@ -3,6 +3,9 @@ import { Send, X, Bot, User, Loader2, Wrench, CheckCircle2, CheckCircle, Refresh
 import { useProject } from "../context/ProjectContext";
 import { ChatMarkdown } from "./ChatMarkdown";
 
+// Reconnect backoff schedule after an unexpected close (max 5 attempts).
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+
 export type MessageType =
   | "user"
   | "assistant"
@@ -276,6 +279,8 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
   const [connecting, setConnecting] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
+  const [reconnecting, setReconnecting] = useState(false);
+  const reconnectAttemptsRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const historyRequestIdRef = useRef(0);
@@ -420,8 +425,15 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
       wsRef.current?.close();
       wsRef.current = null;
       setConnected(false);
+      setReconnecting(false);
+      reconnectAttemptsRef.current = 0;
       return;
     }
+
+    // Guards against reconnecting after a user-initiated close (drawer
+    // close, unmount, project switch, or manual reconnect bump).
+    let intentionalClose = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const url =
       wsUrl ||
@@ -434,6 +446,8 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
     wsRef.current = ws;
 
     ws.onopen = () => {
+      reconnectAttemptsRef.current = 0;
+      setReconnecting(false);
       setConnected(true);
       setConnecting(false);
       if (pendingWsStartRef.current) {
@@ -519,9 +533,26 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
       setConnected(false);
       setConnecting(false);
       setPendingConfirmation(null);
+      if (intentionalClose) return;
+      if (reconnectAttemptsRef.current >= RECONNECT_DELAYS_MS.length) {
+        setReconnecting(false);
+        return;
+      }
+      const delay = RECONNECT_DELAYS_MS[reconnectAttemptsRef.current];
+      reconnectAttemptsRef.current += 1;
+      setReconnecting(true);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        setReconnectKey((k) => k + 1);
+      }, delay);
     };
 
     return () => {
+      intentionalClose = true;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       ws.close();
     };
   }, [open, wsUrl, reconnectKey, handleBlueprintEvent]);
@@ -604,6 +635,9 @@ export function ChatDrawer({ open, onClose, wsUrl, mode = "overlay" }: ChatDrawe
               />
               {connecting && (
                 <Loader2 className="ml-2 h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+              {reconnecting && (
+                <span className="ml-2 text-xs text-muted-foreground">连接已断开，正在重连…</span>
               )}
             </div>
             {!isDocked && (

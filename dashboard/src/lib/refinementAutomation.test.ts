@@ -71,7 +71,7 @@ describe("runFreezeAutoGenerationChain", () => {
         refreshProjectData: refresh,
         request,
       })
-    ).rejects.toThrow("Scene package generation failed: LLM provider unavailable")
+    ).rejects.toThrow("场景包生成失败：LLM provider unavailable")
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 

@@ -422,7 +422,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const requestVersionRef = useRef(0);
   const selectProjectVersionRef = useRef(0);
   const loadingTokenRef = useRef(0);
-  const genTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
     const requestVersion = ++requestVersionRef.current;
@@ -491,10 +490,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     const loadingToken = ++loadingTokenRef.current;
     setLoading(true);
     setError(null);
-    if (genTimerRef.current) {
-      clearInterval(genTimerRef.current);
-      genTimerRef.current = null;
-    }
 
     try {
       const [metaResp, bpResp, scenesResp, mapResp, sessionResp, briefResp, outlineResp, refinementResp, intakeResp, generationStateResp] = await Promise.all([

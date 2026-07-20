@@ -627,3 +627,64 @@ describe("ProjectWorkspacePage generation gating", () => {
     expect(screen.getByRole("button", { name: "开始场景背景" })).toBeEnabled()
   })
 })
+
+describe("ProjectWorkspacePage scene tab navigation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.mocked(useProject).mockReset()
+  })
+
+  it("returns to the previously active tab instead of blueprint when leaving a scene", async () => {
+    const user = userEvent.setup()
+    let ctx = {
+      ...baseContext,
+      chapters: [
+        {
+          id: "ch1",
+          name: "Opening",
+          order: 1,
+          scenes: [{ id: "s1", name: "First clue", order: 1, status: "generated" }],
+        },
+      ],
+      selectedSceneId: null as string | null,
+    }
+    const selectScene = vi.fn().mockImplementation(async () => {
+      ctx = { ...ctx, selectedSceneId: "s1" }
+    })
+    vi.mocked(useProject).mockImplementation(() => ({ ...ctx, selectScene }) as never)
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ stage: "idle", previewable: false }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: "idle" }),
+        })
+    )
+
+    render(
+      <MemoryRouter initialEntries={["/projects/demo"]}>
+        <Routes>
+          <Route path="/projects/:name" element={<ProjectWorkspacePage />} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+    // Start from the Story Map tab.
+    await user.click(await screen.findByRole("button", { name: "Story Map" }))
+    expect(screen.getByText("暂无 Story Map")).toBeInTheDocument()
+
+    // Select a scene from the rail: the tab bar is taken over.
+    await user.click(screen.getByRole("button", { name: /First clue/ }))
+    const backButton = await screen.findByRole("button", { name: /返回总览/ })
+
+    // Back should restore the Story Map tab, not jump to the blueprint tab.
+    await user.click(backButton)
+    expect(screen.getByText("暂无 Story Map")).toBeInTheDocument()
+  })
+})

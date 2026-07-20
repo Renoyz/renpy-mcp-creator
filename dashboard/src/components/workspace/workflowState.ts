@@ -223,6 +223,34 @@ export function deriveWorkflowDashboardState({
     subtitle = "审阅生成的背景，并验收可以安全渲染的图片。"
     status = "needs_review"
     primaryAction = { label: "审阅背景", action: "open_generation" }
+  } else if (frozen && scenePackagesDone && genState !== "committed") {
+    // Generation/asset steps are still incomplete: point at the earliest
+    // one instead of falling through to the build CTA.
+    if (!isAtOrAfterGeneration(genState, "character_assets_confirmed")) {
+      activeId = "characters"
+      title = "生成角色素材"
+      subtitle = "场景包已就绪。请先生成并验收角色立绘，然后再构建。"
+      status = "ready"
+      primaryAction = { label: "生成角色素材", action: "open_generation" }
+    } else if (!isAtOrAfterGeneration(genState, "background_assets_confirmed")) {
+      activeId = "backgrounds"
+      title = "生成场景背景"
+      subtitle = "角色素材已验收。请生成并验收场景背景，然后再构建。"
+      status = "ready"
+      primaryAction = { label: "生成场景背景", action: "open_generation" }
+    } else if (genState === "script_preview") {
+      activeId = "script"
+      title = "脚本待审阅"
+      subtitle = "脚本预览已生成。请审阅并提交脚本，然后再构建。"
+      status = "needs_review"
+      primaryAction = { label: "审阅脚本", action: "open_generation" }
+    } else {
+      activeId = "script"
+      title = "生成预览脚本"
+      subtitle = "素材已验收。请生成并提交脚本，然后再构建。"
+      status = "ready"
+      primaryAction = { label: "生成预览脚本", action: "open_generation" }
+    }
   } else if (buildStatus === "failed") {
     activeId = "build"
     title = "构建失败"

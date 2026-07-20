@@ -39,6 +39,7 @@ export function ProjectSelectPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { selectProject } = useProject();
   const requestIdRef = useRef(0);
@@ -95,18 +96,19 @@ export function ProjectSelectPage() {
     if (!name) return;
     try {
       setCreating(true);
+      setCreateError(null);
       const resp = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      if (!resp.ok) throw new Error("Failed to create project");
+      if (!resp.ok) throw new Error("创建项目失败，请稍后重试");
       setDialogOpen(false);
       setNewName("");
       await selectProject(name);
       navigate(`/projects/${encodeURIComponent(name)}`);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Unknown error");
+      setCreateError(e instanceof Error ? e.message : "创建项目失败，请稍后重试");
     } finally {
       setCreating(false);
     }
@@ -149,7 +151,10 @@ export function ProjectSelectPage() {
 
           <button
             data-testid="new-project-cta"
-            onClick={() => setDialogOpen(true)}
+            onClick={() => {
+              setCreateError(null);
+              setDialogOpen(true);
+            }}
             className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
           >
             <FolderPlus className="h-4 w-4" />
@@ -302,10 +307,22 @@ export function ProjectSelectPage() {
                   autoFocus
                 />
               </div>
+              {createError && (
+                <p
+                  data-testid="create-project-error"
+                  role="alert"
+                  className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  {createError}
+                </p>
+              )}
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button
-                onClick={() => setDialogOpen(false)}
+                onClick={() => {
+                  setCreateError(null);
+                  setDialogOpen(false);
+                }}
                 className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
               >
                 取消
