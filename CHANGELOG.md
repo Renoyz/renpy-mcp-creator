@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 2026-07-20 — Dashboard UI reliability and Chinese copy
+
+- Silent-failure fixes: brief promote switches tab only on success with an inline error banner on failure; Brief/Outline save+confirm handlers surface API errors inline instead of unhandled rejections.
+- The post-freeze auto-generation chain is bounded (attempt cap + 15-minute wall clock) with a clear continue-from-Generation-tab error; previously it could hang the page forever.
+- Generation tab actions are disabled with an explanation until the blueprint is frozen, instead of earning a raw 403.
+- Workflow UI copy unified to Simplified Chinese (stage labels, tabs, blocker chips, banners, intake/brief/outline/generation views, freeze panel); projects-page branding corrected to "RenPy MCP Creator"; Playwright e2e selectors synced to the new copy.
+- Scene tab takeover now remembers the previous tab; header CTA no longer skips incomplete asset steps; project-create failure uses an inline dialog error instead of `alert()`; chat WebSocket auto-reconnects with backoff on unintentional drops; removed five unimported workspace panels and dead code.
+- Dashboard tests grew from 46 to 70 vitest cases (all green).
+
 ### 2026-07-19 — Reliability fixes and open-source readiness
 
 - Fixed a fresh-install blocker: `httpx` moved from dev extras to runtime dependencies (it is imported by `sdk_provisioner`, LLM providers, and the image service); `uv.lock` refreshed.
